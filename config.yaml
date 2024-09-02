@@ -1,0 +1,9 @@
+server:
+  address: 127.0.0.1:8642
+
+dns:
+  address: 127.0.0.53:53
+
+redis:
+  address: 127.0.0.1:6379
+  db: 2
