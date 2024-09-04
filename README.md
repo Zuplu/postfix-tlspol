@@ -8,8 +8,8 @@ A lightweight MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for P
   
 - **For DANE:**
   - Check each MX record (all servers in parallel), if it supports DANE. The DNS responses must be authorized (`ad` flag set), only then the `dane` policy (opportunistic DANE) will be returned.
-  - Postfix will then try to enforce DANE if the TLSA records are usable. If they are not (despite valid DNSSEC signatures, e. g. malformed record set by the legitimate domain administrator), it will fall back to opportunistic TLS.
-  - If they are usable but invalid (e. g. key fingerprint mismatch), the mail will be deferred, even if there is a valid MTA-STS policy (in conformance with [RFC 8461, 2](https://www.rfc-editor.org/rfc/rfc8461#section-2)).
+  - Postfix will then try to enforce DANE if the TLSA records are usable. If they are not (despite valid DNSSEC signatures, e. g. malformed record set by the legitimate domain administrator or unsupported parameters), it will fall back to *mandatory* but unauthenticated TLS (thus `encrypt` at worst)
+  - If they are usable but invalid (e. g. key fingerprint mismatch), the mail will be deferred (like `dane-only`), even if there is a valid MTA-STS policy (in conformance with [RFC 8461, 2](https://www.rfc-editor.org/rfc/rfc8461#section-2)).
     
 - **For MTA-STS:**
   - Check for an existing MTA-STS record over DNS, and if found, fetch the policy via HTTPS.
