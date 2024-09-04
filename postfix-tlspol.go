@@ -310,6 +310,9 @@ func getMxRecords(domain string) ([]string, uint32, error) {
 	if r.MsgHdr.AuthenticatedData {
 		for _, answer := range r.Answer {
 			if mx, ok := answer.(*dns.MX); ok {
+				if !govalidator.IsDNSName(mx.Mx) {
+					return nil, 0, fmt.Errorf("Invalid MX record")
+				}
 				mxRecords = append(mxRecords, mx.Mx)
 				ttls = append(ttls, mx.Hdr.Ttl)
 			}
@@ -415,31 +418,40 @@ func checkMtaSts(domain string) (string, uint32) {
 	var maxAge uint32 = 0
 	policy := ""
 	mxHosts := ""
+	existingKeys := make(map[string]bool)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
-		rawLine := strings.TrimSpace(scanner.Text())
-		line := govalidator.WhiteList(rawLine, "a-zA-Z0-9 .:*_-")
-		// If any non-whitelisted character is removed, the size will mismatch
-		if len(line) != len(rawLine) {
-			return "", 0 // Refuse to parse malformed MTA-STS policy
+		line := strings.TrimSpace(scanner.Text())
+		if !govalidator.IsPrintableASCII(line) && !govalidator.IsUTFLetterNumeric(line) {
+			return "", 0 // invalid policy
 		}
-		policy = policy + " { policy_string = " + line + " }"
-		if strings.HasPrefix(line, "mode:") {
-			mode = strings.TrimSpace(strings.Split(line, ":")[1])
+		keyValPair := strings.SplitN(line, ":", 2)
+		if len(keyValPair) != 2 {
+			return "", 0 // invalid policy
 		}
-		if strings.HasPrefix(line, "max_age:") {
-			age, err := strconv.ParseUint(strings.TrimSpace(strings.Split(line, ":")[1]), 10, 32)
+		key, val := strings.TrimSpace(keyValPair[0]), strings.TrimSpace(keyValPair[1])
+		if key != "mx" && existingKeys[key] {
+			continue // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
+		}
+		existingKeys[key] = true
+		policy = policy + " { policy_string = " + key + ": " + val + " }"
+		switch key {
+		case "mode":
+			mode = val
+		case "mx":
+			if !govalidator.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
+				return "", 0 // invalid policy
+			}
+			mxHosts = mxHosts + " mx_host_pattern=" + val
+			if strings.HasPrefix(val, "*.") {
+				val = val[1:]
+			}
+			mxServers = append(mxServers, val)
+		case "max_age":
+			age, err := strconv.ParseUint(val, 10, 32)
 			if err == nil {
 				maxAge = uint32(age)
 			}
-		}
-		if strings.HasPrefix(line, "mx:") {
-			mxServer := strings.TrimSpace(strings.Split(line, ":")[1])
-			mxHosts = mxHosts + " mx_host_pattern=" + mxServer
-			if strings.HasPrefix(mxServer, "*.") {
-				mxServer = mxServer[1:]
-			}
-			mxServers = append(mxServers, mxServer)
 		}
 	}
 	policy = " policy_type=sts policy_domain=" + domain + fmt.Sprintf(" policy_ttl=%d", maxAge) + policy + mxHosts
