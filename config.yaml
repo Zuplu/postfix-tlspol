@@ -7,6 +7,7 @@ dns:
   address: 127.0.0.53:53   # must support dnssec
 
 redis:
+  disable: no              # disables caching (default no)
   address: 127.0.0.1:6379  # redis compatible server:port to act as a cache
   db: 2                    # select redis db number
 

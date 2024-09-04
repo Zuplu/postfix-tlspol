@@ -39,6 +39,7 @@ type DNSConfig struct {
 }
 
 type RedisConfig struct {
+	Disable  bool   `yaml:"disable"`
 	Address  string `yaml:"address"`
 	Password string `yaml:"password"`
 	DB       int    `yaml:"db"`
@@ -94,12 +95,14 @@ func main() {
 		return
 	}
 
-	// Setup redis client for cache
-	client = redis.NewClient(&redis.Options{
-		Addr:     config.Redis.Address,
-		Password: config.Redis.Password,
-		DB:       config.Redis.DB,
-	})
+	if !config.Redis.Disable {
+		// Setup redis client for cache
+		client = redis.NewClient(&redis.Options{
+			Addr:     config.Redis.Address,
+			Password: config.Redis.Password,
+			DB:       config.Redis.DB,
+		})
+	}
 
 	// Start the socketmap server for Postfix
 	go startTcpServer()
@@ -167,23 +170,26 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	suffix := ""
-	if config.Server.TlsRpt {
-		suffix = "!TLSRPT" // configurable option needs unique cache key
-	}
-	hashedDomain := sha256.Sum256([]byte(domain + suffix))
-	cacheKey := CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashedDomain[:])
-	cachedResult, err := client.Get(ctx, cacheKey).Result()
-	if err == nil {
-		if cachedResult == "" {
-			fmt.Printf("No policy found for %s (from cache)\n", domain)
-			conn.Write([]byte("9:NOTFOUND ,"))
-
-		} else {
-			fmt.Printf("Evaluated policy for %s: %s (from cache)\n", domain, cachedResult)
-			conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(cachedResult)+3, cachedResult)))
+	var cacheKey string
+	if !config.Redis.Disable {
+		suffix := ""
+		if config.Server.TlsRpt {
+			suffix = "!TLSRPT" // configurable option needs unique cache key
 		}
-		return
+		hashedDomain := sha256.Sum256([]byte(domain + suffix))
+		cacheKey = CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashedDomain[:])
+		cachedResult, err := client.Get(ctx, cacheKey).Result()
+		if err == nil {
+			if cachedResult == "" {
+				fmt.Printf("No policy found for %s (from cache)\n", domain)
+				conn.Write([]byte("9:NOTFOUND ,"))
+
+			} else {
+				fmt.Printf("Evaluated policy for %s: %s (from cache)\n", domain, cachedResult)
+				conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(cachedResult)+3, cachedResult)))
+			}
+			return
+		}
 	}
 
 	result := ""
@@ -236,7 +242,9 @@ func handleConnection(conn net.Conn) {
 		conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(result)+3, result)))
 	}
 
-	client.Set(ctx, cacheKey, result, time.Duration(resultTtl)*time.Second).Err()
+	if !config.Redis.Disable {
+		client.Set(ctx, cacheKey, result, time.Duration(resultTtl)*time.Second).Err()
+	}
 }
 
 func loadConfig(filename string) (Config, error) {
@@ -423,7 +431,10 @@ func checkMtaSts(domain string) (string, uint32) {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !govalidator.IsPrintableASCII(line) && !govalidator.IsUTFLetterNumeric(line) {
-			return "", 0 // invalid policy
+			return "", 0 // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
+		}
+		if len(line) != len(govalidator.BlackList(line, "{}")) {
+			continue // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
 		}
 		keyValPair := strings.SplitN(line, ":", 2)
 		if len(keyValPair) != 2 {
@@ -454,7 +465,7 @@ func checkMtaSts(domain string) (string, uint32) {
 			}
 		}
 	}
-	policy = " policy_type=sts policy_domain=" + domain + fmt.Sprintf(" policy_ttl=%d", maxAge) + policy + mxHosts
+	policy = " policy_type=sts policy_domain=" + domain + fmt.Sprintf(" policy_ttl=%d", maxAge) + mxHosts + policy
 
 	if mode == "enforce" {
 		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"
