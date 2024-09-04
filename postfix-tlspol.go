@@ -27,10 +27,11 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const VERSION = "0.1.0"
+const VERSION = "0.1.1-dev"
 
 type ServerConfig struct {
 	Address string `yaml:"address"`
+	TlsRpt  bool   `yaml:"tlsrpt"`
 }
 
 type DNSConfig struct {
@@ -166,7 +167,11 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	hashedDomain := sha256.Sum256([]byte(domain))
+	suffix := ""
+	if config.Server.TlsRpt {
+		suffix = "!TLSRPT" // configurable option needs unique cache key
+	}
+	hashedDomain := sha256.Sum256([]byte(domain + suffix))
 	cacheKey := CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashedDomain[:])
 	cachedResult, err := client.Get(ctx, cacheKey).Result()
 	if err == nil {
@@ -405,17 +410,20 @@ func checkMtaSts(domain string) (string, uint32) {
 	}
 	defer resp.Body.Close()
 
-	scanner := bufio.NewScanner(resp.Body)
-	var policy strings.Builder
-	for scanner.Scan() {
-		policy.WriteString(scanner.Text() + "\n")
-	}
-
-	lines := strings.Split(strings.TrimSpace(policy.String()), "\n")
 	var mxServers []string
 	mode := ""
 	var maxAge uint32 = 0
-	for _, line := range lines {
+	policy := ""
+	mxHosts := ""
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		rawLine := strings.TrimSpace(scanner.Text())
+		line := govalidator.WhiteList(rawLine, "a-zA-Z0-9 .:*_-")
+		// If any non-whitelisted character is removed, the size will mismatch
+		if len(line) != len(rawLine) {
+			return "", 0 // Refuse to parse malformed MTA-STS policy
+		}
+		policy = policy + " { policy_string = " + line + " }"
 		if strings.HasPrefix(line, "mode:") {
 			mode = strings.TrimSpace(strings.Split(line, ":")[1])
 		}
@@ -427,15 +435,21 @@ func checkMtaSts(domain string) (string, uint32) {
 		}
 		if strings.HasPrefix(line, "mx:") {
 			mxServer := strings.TrimSpace(strings.Split(line, ":")[1])
+			mxHosts = mxHosts + " mx_host_pattern=" + mxServer
 			if strings.HasPrefix(mxServer, "*.") {
 				mxServer = mxServer[1:]
 			}
 			mxServers = append(mxServers, mxServer)
 		}
 	}
+	policy = " policy_type=sts policy_domain=" + domain + fmt.Sprintf(" policy_ttl=%d", maxAge) + policy + mxHosts
 
 	if mode == "enforce" {
-		return "secure match=" + strings.Join(mxServers, ":") + " servername=hostname", maxAge
+		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"
+		if config.Server.TlsRpt {
+			res = res + policy
+		}
+		return res, maxAge
 	}
 
 	return "", maxAge
