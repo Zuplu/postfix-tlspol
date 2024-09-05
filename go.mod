@@ -1,4 +1,4 @@
-module postfix-tlspol
+module github.com/Zuplu/postfix-tlspol
 
 go 1.19.0
 
