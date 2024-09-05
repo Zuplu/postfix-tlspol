@@ -22,7 +22,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const VERSION = "1.0.0"
+const VERSION = "1.0.1"
 
 type ServerConfig struct {
 	Address string `yaml:"address"`
@@ -161,7 +161,7 @@ func handleConnection(conn net.Conn) {
 
 	var cacheKey string
 	if !config.Redis.Disable {
-		suffix := ""
+		suffix := "!" + VERSION // resets cache after updates
 		if config.Server.TlsRpt {
 			suffix = "!TLSRPT" // configurable option needs unique cache key
 		}
