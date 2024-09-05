@@ -104,8 +104,6 @@ func checkMtaSts(domain string) (string, uint32) {
 		existingKeys[key] = true
 		policy = policy + " { policy_string = " + key + ": " + val + " }"
 		switch key {
-		case "mode":
-			mode = val
 		case "mx":
 			if !govalidator.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
 				return "", 0 // invalid policy
@@ -115,6 +113,8 @@ func checkMtaSts(domain string) (string, uint32) {
 				val = val[1:]
 			}
 			mxServers = append(mxServers, val)
+		case "mode":
+			mode = val
 		case "max_age":
 			age, err := strconv.ParseUint(val, 10, 32)
 			if err == nil {

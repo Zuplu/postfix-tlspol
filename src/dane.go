@@ -6,6 +6,8 @@
 package main
 
 import (
+	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"sync"
 
@@ -14,7 +16,7 @@ import (
 )
 
 type ResultWithTtl struct {
-	Result bool
+	Result string
 	Ttl    uint32
 	Err    error
 }
@@ -51,6 +53,40 @@ func getMxRecords(domain string) ([]string, uint32, error) {
 	return mxRecords, findMin(ttls), nil
 }
 
+func isTlsaUsable(r *dns.TLSA) bool {
+	if r.Usage != 3 && r.Usage != 2 {
+		return false
+	}
+
+	if r.Selector != 1 && r.Selector != 0 {
+		return false
+	}
+
+	switch r.MatchingType {
+	case 1: // SHA-256
+		if !govalidator.IsSHA256(r.Certificate) {
+			return false
+		}
+	case 2: // SHA-512
+		if !govalidator.IsSHA512(r.Certificate) {
+			return false
+		}
+	case 0: // Full certificate
+		cert, err := hex.DecodeString(r.Certificate)
+		if err != nil {
+			return false
+		}
+		_, err = x509.ParseCertificate(cert)
+		if err != nil {
+			return false
+		}
+	default:
+		return false
+	}
+
+	return true
+}
+
 func checkTlsa(mx string) ResultWithTtl {
 	tlsaName := "_25._tcp." + mx
 	client := &dns.Client{Timeout: REQUEST_TIMEOUT}
@@ -61,24 +97,30 @@ func checkTlsa(mx string) ResultWithTtl {
 
 	r, _, err := client.Exchange(m, config.DNS.Address)
 	if err != nil {
-		return ResultWithTtl{Result: false, Ttl: 0, Err: err}
+		return ResultWithTtl{Result: "", Ttl: 0, Err: err}
 	}
 	if len(r.Answer) == 0 {
-		return ResultWithTtl{Result: false, Ttl: 0}
+		return ResultWithTtl{Result: "", Ttl: 0}
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return ResultWithTtl{Result: false, Ttl: 0, Err: fmt.Errorf("DNS error")}
+		return ResultWithTtl{Result: "", Ttl: 0, Err: fmt.Errorf("DNS error")}
 	}
 
 	if r.MsgHdr.AuthenticatedData {
 		for _, answer := range r.Answer {
 			if tlsa, ok := answer.(*dns.TLSA); ok {
-				return ResultWithTtl{Result: true, Ttl: tlsa.Hdr.Ttl}
+				if isTlsaUsable(tlsa) {
+					// TLSA records are usable, enforce DANE
+					return ResultWithTtl{Result: "dane-only", Ttl: tlsa.Hdr.Ttl}
+				} else {
+					// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not
+					return ResultWithTtl{Result: "dane", Ttl: tlsa.Hdr.Ttl}
+				}
 			}
 		}
 	}
 
-	return ResultWithTtl{Result: false, Ttl: 0}
+	return ResultWithTtl{Result: "", Ttl: 0}
 }
 
 func checkDane(domain string) (string, uint32) {
@@ -102,7 +144,7 @@ func checkDane(domain string) (string, uint32) {
 	wg.Wait()
 	close(tlsaResults)
 
-	allHaveTLSA := true
+	canDane := false
 	var ttls []uint32
 	ttls = append(ttls, ttl)
 	for res := range tlsaResults {
@@ -110,13 +152,15 @@ func checkDane(domain string) (string, uint32) {
 			return "TEMP", 0
 		}
 		ttls = append(ttls, res.Ttl)
-		if !res.Result {
-			allHaveTLSA = false
+		if res.Result == "dane-only" {
+			return "dane-only", findMin(ttls) // at least one record is supported
+		} else if res.Result == "dane" {
+			canDane = true
 		}
 	}
 
-	if allHaveTLSA {
-		return "dane", findMin(ttls)
+	if canDane {
+		return "dane", findMin(ttls) // might be supported, Postfix has to decide
 	}
 
 	return "", findMin(ttls)
