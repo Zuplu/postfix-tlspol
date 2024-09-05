@@ -22,7 +22,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const VERSION = "0.1.1-dev"
+const VERSION = "1.0.0"
 
 type ServerConfig struct {
 	Address string `yaml:"address"`
