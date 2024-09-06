@@ -1,5 +1,7 @@
 # postfix-tlspol
 
+[![Codacy Badge](https://api.codacy.com/project/badge/Grade/01bc31ef15cd4cd8ad69c832bdebcabc)](https://app.codacy.com/gh/Zuplu/postfix-tlspol?utm_source=github.com&utm_medium=referral&utm_content=Zuplu/postfix-tlspol&utm_campaign=Badge_Grade)
+
 A lightweight MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for Postfix that complies to the standards and prioritizes DANE where possible.
 
 # Logic
