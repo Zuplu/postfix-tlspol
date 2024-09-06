@@ -64,7 +64,8 @@ func checkMtaSts(domain string) (string, uint32) {
 		},
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: false, // Ensure SSL certificate validation
+				InsecureSkipVerify: false,            // Ensure SSL certificate validation
+				MinVersion:         tls.VersionTLS12, // set minimum to TLSv1.2
 			},
 			DisableKeepAlives: true,
 		},
