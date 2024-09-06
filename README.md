@@ -28,10 +28,10 @@ It is recommended to still set the default TLS policy to `dane` (opportunistic D
 
 # Requirements
 
-- A redis compatible database
+- A Redis-compatible database
 - Postfix
-- Go 1.19+
-- DNSSEC-validating DNS server, preferably on localhost
+- Go 1.23+
+- DNSSEC-validating DNS server (preferably on localhost)
 
 # Install
 
