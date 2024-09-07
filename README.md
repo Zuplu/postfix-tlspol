@@ -78,6 +78,7 @@ server:
   tlsrpt: no               # set yes to enable Postfix 3.10+ TLSRPT support
                            # this is experimental, not backwards compatible
                            # and may result in delivery failures (default no)
+  prefetch: no             # prefetch when TTL is about to expire (default no)
 
 dns:
   address: 127.0.0.53:53   # must support dnssec
@@ -88,3 +89,19 @@ redis:
   db: 2                    # select redis db number
 
 ```
+
+# Prefetching
+
+If you enable prefetching via `config.yaml`, it is recommended to adjust your local DNS caching resolver to serve the original TTL response.
+
+For example, in Unbound, configure the following:
+```
+cache-min-ttl: 10
+cache-max-ttl: 300
+serve-original-ttl: yes
+```
+This will serve the original TTL, but still reload the cache after `300` seconds, when a new query is made.
+
+It ensures that when postfix-tlspol prefetches policies before the TTL actually expires, the DNS cache won't be used (otherwise it would only prefetch for the residual TTL time).
+
+Prefetching will work without these settings, but a little less efficiently.
