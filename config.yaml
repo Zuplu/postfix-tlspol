@@ -3,6 +3,8 @@ server:
   tlsrpt: no               # set yes to enable Postfix 3.10+ TLSRPT support
                            # this is experimental, not backwards compatible
                            # and may result in delivery failures (default no)
+  prefetch: no             # prefetch when TTL is about to expire (default no)
+
 dns:
   address: 127.0.0.53:53   # must support dnssec
 

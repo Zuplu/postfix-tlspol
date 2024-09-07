@@ -28,7 +28,7 @@ func getMxRecords(domain string) ([]string, uint32, error) {
 	m.RecursionDesired = true
 	m.SetEdns0(4096, true)
 
-	r, _, err := client.Exchange(m, config.DNS.Address)
+	r, _, err := client.Exchange(m, config.Dns.Address)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -95,7 +95,7 @@ func checkTlsa(mx string) ResultWithTtl {
 	m.RecursionDesired = true
 	m.SetEdns0(4096, true)
 
-	r, _, err := client.Exchange(m, config.DNS.Address)
+	r, _, err := client.Exchange(m, config.Dns.Address)
 	if err != nil {
 		return ResultWithTtl{Result: "", Ttl: 0, Err: err}
 	}
@@ -106,21 +106,24 @@ func checkTlsa(mx string) ResultWithTtl {
 		return ResultWithTtl{Result: "", Ttl: 0, Err: fmt.Errorf("DNS error")}
 	}
 
+	result := ""
+	var ttls []uint32
 	if r.MsgHdr.AuthenticatedData {
 		for _, answer := range r.Answer {
 			if tlsa, ok := answer.(*dns.TLSA); ok {
 				if isTlsaUsable(tlsa) {
-					// TLSA records are usable, enforce DANE
+					// TLSA records are usable, enforce DANE, return directly
 					return ResultWithTtl{Result: "dane-only", Ttl: tlsa.Hdr.Ttl}
 				} else {
-					// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not
-					return ResultWithTtl{Result: "dane", Ttl: tlsa.Hdr.Ttl}
+					// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not; continue searching
+					result = "dane"
+					ttls = append(ttls, tlsa.Hdr.Ttl)
 				}
 			}
 		}
 	}
 
-	return ResultWithTtl{Result: "", Ttl: 0}
+	return ResultWithTtl{Result: result, Ttl: findMin(ttls)}
 }
 
 func checkDane(domain string) (string, uint32) {

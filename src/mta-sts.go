@@ -24,7 +24,7 @@ func checkMtaStsRecord(domain string) (bool, error) {
 	m.RecursionDesired = true
 	m.SetEdns0(4096, true)
 
-	r, _, err := client.Exchange(m, config.DNS.Address)
+	r, _, err := client.Exchange(m, config.Dns.Address)
 	if err != nil {
 		return false, fmt.Errorf("DNS error")
 	}

@@ -9,8 +9,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"strings"
@@ -19,43 +19,27 @@ import (
 
 	"github.com/asaskevich/govalidator"
 	"github.com/go-redis/redis/v8"
-	"gopkg.in/yaml.v2"
 )
 
-const VERSION = "1.0.2"
+const VERSION = "1.1.0"
 
-type ServerConfig struct {
-	Address string `yaml:"address"`
-	TlsRpt  bool   `yaml:"tlsrpt"`
-}
-
-type DNSConfig struct {
-	Address string `yaml:"address"`
-}
-
-type RedisConfig struct {
-	Disable  bool   `yaml:"disable"`
-	Address  string `yaml:"address"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
-}
-
-type Config struct {
-	Server ServerConfig `yaml:"server"`
-	DNS    DNSConfig    `yaml:"dns"`
-	Redis  RedisConfig  `yaml:"redis"`
+type CacheStruct struct {
+	Domain string `json:"d"`
+	Result string `json:"r"`
+	Ttl    uint32 `json:"t"`
 }
 
 const (
-	CACHE_KEY_PREFIX = "TLSPOL-"
-	CACHE_MIN        = 300
-	REQUEST_TIMEOUT  = 5 * time.Second
+	CACHE_KEY_PREFIX   = "TLSPOL-"
+	CACHE_NOTFOUND_TTL = 180
+	CACHE_MIN_TTL      = 60
+	REQUEST_TIMEOUT    = 5 * time.Second
 )
 
 var (
-	ctx    = context.Background()
-	config Config
-	client *redis.Client
+	ctx         = context.Background()
+	config      Config
+	redisClient *redis.Client
 )
 
 func printVersion() {
@@ -86,7 +70,7 @@ func main() {
 
 	if !config.Redis.Disable {
 		// Setup redis client for cache
-		client = redis.NewClient(&redis.Options{
+		redisClient = redis.NewClient(&redis.Options{
 			Addr:     config.Redis.Address,
 			Password: config.Redis.Password,
 			DB:       config.Redis.DB,
@@ -95,6 +79,10 @@ func main() {
 
 	// Start the socketmap server for Postfix
 	go startTcpServer()
+
+	if config.Server.Prefetch {
+		go startPrefetching()
+	}
 
 	// Keep the main function alive
 	select {}
@@ -167,22 +155,38 @@ func handleConnection(conn net.Conn) {
 		}
 		hashedDomain := sha256.Sum256([]byte(domain + suffix))
 		cacheKey = CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashedDomain[:])
-		cachedResult, err := client.Get(ctx, cacheKey).Result()
+		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
 		if err == nil {
-			if cachedResult == "" {
-				fmt.Printf("No policy found for %s (from cache)\n", domain)
+			if cache.Result == "" {
+				fmt.Printf("No policy found for %s (from cache, %ds remaining)\n", domain, ttl)
 				conn.Write([]byte("9:NOTFOUND ,"))
 
 			} else {
-				fmt.Printf("Evaluated policy for %s: %s (from cache)\n", domain, cachedResult)
-				conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(cachedResult)+3, cachedResult)))
+				fmt.Printf("Evaluated policy for %s: %s (from cache, %ds remaining)\n", domain, cache.Result, ttl)
+				conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(cache.Result)+3, cache.Result)))
 			}
 			return
 		}
 	}
 
+	result, resultTtl := queryDomain(domain)
+
+	if result == "" {
+		conn.Write([]byte("9:NOTFOUND ,"))
+	} else if result == "TEMP" {
+		conn.Write([]byte("5:TEMP ,"))
+	} else {
+		conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(result)+3, result)))
+	}
+
+	if !config.Redis.Disable {
+		cacheJsonSet(redisClient, cacheKey, CacheStruct{Domain: domain, Result: result, Ttl: resultTtl})
+	}
+}
+
+func queryDomain(domain string) (string, uint32) {
 	result := ""
-	var resultTtl int32 = CACHE_MIN
+	var resultTtl uint32 = CACHE_NOTFOUND_TTL
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -196,7 +200,7 @@ func handleConnection(conn net.Conn) {
 		mutex.Lock()
 		if danePol != "" {
 			result = danePol
-			resultTtl = int32(daneTtl)
+			resultTtl = daneTtl
 		}
 		mutex.Unlock()
 	}()
@@ -210,7 +214,7 @@ func handleConnection(conn net.Conn) {
 		mutex.Lock()
 		if stsPol != "" && result == "" {
 			result = stsPol
-			resultTtl = int32(stsTtl)
+			resultTtl = stsTtl
 		}
 		mutex.Unlock()
 	}()
@@ -219,31 +223,58 @@ func handleConnection(conn net.Conn) {
 	wg.Wait()
 
 	if result == "" {
-		resultTtl = CACHE_MIN
+		resultTtl = CACHE_NOTFOUND_TTL
 		fmt.Printf("No policy found for %s (cached for %ds)\n", domain, resultTtl)
-		conn.Write([]byte("9:NOTFOUND ,"))
 	} else if result == "TEMP" {
-		resultTtl = 10
+		resultTtl = CACHE_MIN_TTL
 		fmt.Printf("Evaluating policy for %s failed temporarily (cached for %ds)\n", domain, resultTtl)
-		conn.Write([]byte("5:TEMP ,"))
 	} else {
+		resultTtl = findMax([]uint32{CACHE_MIN_TTL, resultTtl})
 		fmt.Printf("Evaluated policy for %s: %s (cached for %ds)\n", domain, result, resultTtl)
-		conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(result)+3, result)))
 	}
 
-	if !config.Redis.Disable {
-		client.Set(ctx, cacheKey, result, time.Duration(resultTtl)*time.Second).Err()
-	}
+	return result, resultTtl
 }
 
-func loadConfig(filename string) (Config, error) {
-	data, err := ioutil.ReadFile(filename)
+func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint32, error) {
+	var data CacheStruct
+	jsonData, err := redisClient.Get(ctx, cacheKey).Result()
 	if err != nil {
-		return Config{}, err
+		return data, 0, err
+	}
+	ttl, err := redisClient.TTL(ctx, cacheKey).Result()
+	if err != nil {
+		fmt.Println("Error getting TTL:", err)
+		return data, 0, err
+	}
+	err = json.Unmarshal([]byte(jsonData), &data)
+	return data, uint32(ttl.Seconds()), err
+}
+
+func cacheJsonSet(redisClient *redis.Client, cacheKey string, data CacheStruct) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("error marshaling JSON: %v", err)
+	}
+	err = redisClient.Set(ctx, cacheKey, jsonData, time.Duration(data.Ttl)*time.Second).Err()
+	if err != nil {
+		return fmt.Errorf("error setting cache: %v", err)
+	}
+	return nil
+}
+
+func findMax(arr []uint32) uint32 {
+	if len(arr) == 0 {
+		return 0
 	}
 
-	var config Config
-	return config, yaml.Unmarshal(data, &config)
+	max := arr[0]
+	for _, v := range arr {
+		if v > max {
+			max = v
+		}
+	}
+	return max
 }
 
 func findMin(arr []uint32) uint32 {
