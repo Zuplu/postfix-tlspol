@@ -1,8 +1,8 @@
 # postfix-tlspol
 
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/8fc8fa03ee7b49e4ad9375be46ccee47)](https://app.codacy.com/gh/Zuplu/postfix-tlspol/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![CodeQL Badge](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/8fc8fa03ee7b49e4ad9375be46ccee47)](https://app.codacy.com/gh/Zuplu/postfix-tlspol/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
-A lightweight MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for Postfix that complies to the standards and prioritizes DANE where possible.
+A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for Postfix that complies to the standards and prioritizes DANE where possible.
 
 # Logic
 
@@ -24,7 +24,7 @@ A lightweight MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for P
     
 - The result is cached by `minimum TTL of all queries` or `max_age` seconds, for DANE and MTA-STS respectively.
 
-It is recommended to still set the default TLS policy to `dane` (opportunistic DANE) in Postfix.
+It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix.
 
 # Requirements
 
