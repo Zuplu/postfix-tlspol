@@ -29,18 +29,24 @@ func prefetchCachedPolicies() {
 		return
 	}
 
+	semaphore := make(chan struct{}, 10)
 	for _, key := range keys {
+		if key == CACHE_KEY_PREFIX+"version" {
+			continue
+		}
+		semaphore <- struct{}{}
 		go func(key string) {
-			// Get the cached policy
+			defer func() { <-semaphore }()
 			cachedPolicy, ttl, err := cacheJsonGet(redisClient, key)
 			if err != nil || cachedPolicy.Result == "" {
 				return
 			}
-			// Check if the original TTL is greater than the margin and within the prefetching range (15% remaining)
-			if cachedPolicy.Ttl >= PREFETCH_MARGIN && ttl < uint32(float64(cachedPolicy.Ttl)*0.15) {
+			// Check if the original TTL is greater than the margin and within the prefetching range
+			if cachedPolicy.Ttl >= PREFETCH_MARGIN && ttl < uint32(float64(cachedPolicy.Ttl)*0.05+60) {
 				// Refresh the cached policy
-				refreshedResult, refreshedTtl := queryDomain(cachedPolicy.Domain)
-				if refreshedResult != "" {
+				refreshedResult, refreshedTtl := queryDomain(cachedPolicy.Domain, false)
+				if refreshedResult != "" && refreshedResult != "TEMP" {
+					fmt.Printf("Prefetched policy for %s: %s (cached for %ds)\n", cachedPolicy.Domain, refreshedResult, refreshedTtl)
 					cacheJsonSet(redisClient, key, CacheStruct{Domain: cachedPolicy.Domain, Result: refreshedResult, Ttl: refreshedTtl})
 				}
 			}
