@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	VERSION   = "1.1.1"
+	VERSION   = "1.1.2"
 	DB_SCHEMA = "2"
 )
 
@@ -165,7 +165,9 @@ func handleConnection(conn net.Conn) {
 			if cache.Result == "" {
 				fmt.Printf("No policy found for %s (from cache, %ds remaining)\n", domain, ttl)
 				conn.Write([]byte("9:NOTFOUND ,"))
-
+			} else if cache.Result == "TEMP" {
+				fmt.Printf("Evaluating policy for %s failed temporarily (from cache, %ds remaining)\n", domain, ttl)
+				conn.Write([]byte("5:TEMP ,"))
 			} else {
 				fmt.Printf("Evaluated policy for %s: %s (from cache, %ds remaining)\n", domain, cache.Result, ttl)
 				conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(cache.Result)+3, cache.Result)))

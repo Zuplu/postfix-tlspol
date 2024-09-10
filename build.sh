@@ -5,13 +5,17 @@ BASEDIR=$(dirname $(realpath "$0"))
 cd "$BASEDIR"/src
 
 # Build go executable
-go build -ldflags '-s -w' -o "$BASEDIR"/postfix-tlspol .
+go build -ldflags '-s -w' -o ../postfix-tlspol .
+
+cd ..
 
 # Build and (in case the file is already linked) reload systemd service unit
-sed -e "s!%%BASEDIR%%!${BASEDIR}!g" ../utils/postfix-tlspol.service.template > ../postfix-tlspol.service
-systemctl daemon-reload
+if which systemctl 2> /dev/null > /dev/null; then
+  sed -e "s!%%BASEDIR%%!${BASEDIR}!g" utils/postfix-tlspol.service.template > postfix-tlspol.service
+  systemctl daemon-reload
+fi
 
 # Create config.yaml if it does not exist
-if ! [ -f "$BASEDIR"/config.yaml ]; then
-    cp -a "$BASEDIR"/config.example.yaml "$BASEDIR"/config.yaml
+if ! [ -f config.yaml ]; then
+    cp -a config.example.yaml config.yaml
 fi
