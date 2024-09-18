@@ -28,23 +28,39 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
 
 It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix.
 
-# Requirements
+# Install via Docker
 
-- A Redis-compatible database
-- Postfix
-- Go 1.22.7+
-- DNSSEC-validating DNS server (preferably on localhost)
-
-# Install
+Installation with Docker simplifies setup, as it contains its own `Redis` database and a properly configured DNS resolver, `Unbound`.
 
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
 cd postfix-tlspol
-./build.sh
-systemctl enable --now ./postfix-tlspol.service
+./build.sh # press 'd' for Docker when prompted
 ```
 
-Edit `config.yaml` as needed.
+Jump to *Postfix configuration* to integrate the socketmap server.
+
+# Requirements (standalone/systemd)
+
+- A Redis-compatible database (optional if caching is disabled)
+- Postfix
+- Go 1.23+
+- DNSSEC-validating DNS server (preferably on localhost)
+
+# Install (standalone/systemd)
+
+```
+git clone https://github.com/Zuplu/postfix-tlspol
+cd postfix-tlspol
+./build.sh # press 's' for systemd when prompted
+```
+
+Edit `config.yaml` as needed. After any change, a restart is required:
+```
+service postfix-tlspol restart
+```
+
+# Postfix configuration
 
 In `/etc/postfix/main.cf`:
 
@@ -54,24 +70,22 @@ smtp_dns_support_level = dnssec
 smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:query
 ```
 
-Restart or reload as needed.
+After changing the Postfix configuration, do:
 ```
-# after editting Postfix configuration main.cf
 service postfix restart
-
-# after changing config.yaml
-service postfix-tlspol restart
 ```
 
 # Update
 
+You can update postfix-tlspol (for both the Docker app and the systemd service variant), by simply doing:
 ```
 git pull
 ./build.sh
-service postfix-tlspol restart
 ```
 
 # Configuration
+
+_*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is configured properly with prefetching enabled._
 
 Configuration example for `config.yaml`:
 ```
@@ -96,13 +110,13 @@ redis:
 
 If you enable prefetching via `config.yaml`, it is recommended to adjust your local DNS caching resolver to serve the original TTL response.
 
-For example, in Unbound, configure the following:
+For example, in `Unbound`, configure the following:
 ```
 cache-min-ttl: 10
-cache-max-ttl: 300
+cache-max-ttl: 240
 serve-original-ttl: yes
 ```
-This will serve the original TTL, but still reload the cache after `300` seconds, when a new query is made.
+This will serve the original TTL, but still skip the cache after `240` seconds, when a new query is made. (Note: Policies with TTL lower than 300 seconds are not elligible for prefetching.)
 
 It ensures that when postfix-tlspol prefetches policies before the TTL actually expires, the DNS cache won't be used (otherwise it would only prefetch for the residual TTL time).
 
