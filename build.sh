@@ -55,22 +55,25 @@ if [ "$1" = "build-only" ]; then
     exit 0
 fi
 
-while true; do
-    echo "Do you want to install a Docker app or a systemd service? (d/s)"
-    read -t 10 -r choice
+read_char() {
+    old=$(stty -g)
+    stty raw -echo min 0 time 100
+    eval "$1=\$(dd bs=1 count=1 2>/dev/null)"
+    stty $old
+}
 
-    case "$choice" in
-        d|D)
-            install_docker_app
-            break
-            ;;
-        s|S)
-            install_systemd_service
-            break
-            ;;
-        *)
-            echo "Invalid choice. Press 'd' for Docker or 's' for systemd service. Now building only..."
-            build_go
-            ;;
-    esac
-done
+echo "Do you want to install a Docker app or a systemd service? (d/s)"
+read_char choice
+
+case "$choice" in
+    d|D)
+        install_docker_app
+        ;;
+    s|S)
+        install_systemd_service
+        ;;
+    *)
+        echo "Invalid choice. Press 'd' for Docker or 's' for systemd service. Now building only..."
+        build_go
+        ;;
+esac
