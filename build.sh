@@ -57,7 +57,7 @@ fi
 
 while true; do
     echo "Do you want to install a Docker app or a systemd service? (d/s)"
-    read -r choice
+    read -t 10 -r choice
 
     case "$choice" in
         d|D)
@@ -69,7 +69,8 @@ while true; do
             break
             ;;
         *)
-            echo "Invalid choice. Please enter 'd' for Docker app or 's' for systemd service."
+            echo "Invalid choice. Press 'd' for Docker or 's' for systemd service. Now building only..."
+            build_go
             ;;
     esac
 done
