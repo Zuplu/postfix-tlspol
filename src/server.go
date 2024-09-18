@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	VERSION   = "1.1.2"
+	VERSION   = "1.1.3"
 	DB_SCHEMA = "2"
 )
 
