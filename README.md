@@ -44,7 +44,7 @@ Jump to *Postfix configuration* to integrate the socketmap server.
 
 - A Redis-compatible database (optional if caching is disabled)
 - Postfix
-- Go 1.23+
+- Go 1.23.1+
 - DNSSEC-validating DNS server (preferably on localhost)
 
 # Install (standalone/systemd)
