@@ -1,11 +1,10 @@
-#!/bin/bash
+#!/bin/sh
 
 # Get working directory relative to this shell script
 BASEDIR=$(dirname $(realpath "$0"))
 cd "$BASEDIR"
 
-install_systemd_service() {
-
+build_go() {
     if which go 2> /dev/null > /dev/null; then
         cd src
         echo "Building postfix-tlspol..."
@@ -21,6 +20,10 @@ install_systemd_service() {
         echo "Go toolchain not found, but is required when not installing as a Docker app"
         exit 1
     fi
+}
+
+install_systemd_service() {
+    build_go
 
     if which systemctl 2> /dev/null > /dev/null; then
         sed -e "s!%%BASEDIR%%!${BASEDIR}!g" utils/postfix-tlspol.service.template > postfix-tlspol.service
@@ -47,10 +50,15 @@ install_docker_app() {
     fi
 }
 
+if [ "$1" = "build-only" ]; then
+    build_go
+    exit 0
+fi
+
 while true; do
     echo "Do you want to install a Docker app or a systemd service? (d/s)"
-    read -n 1 choice
-    echo ""
+    read -r choice
+
     case "$choice" in
         d|D)
             install_docker_app

@@ -12,13 +12,11 @@ RUN apk add --no-cache wget \
   && apk del wget
 
 # Copy postfix-tlspol
-COPY ./ /postfix-tlspol/
+COPY . /postfix-tlspol
 
 # Build postfix-tlspol and remove Go toolchain
-RUN export PATH="$PATH:/usr/local/go/bin" \
-  && cd /postfix-tlspol \
-  && ./build.sh \
-  && go clean -cache -modcache \
+RUN PATH="$PATH:/usr/local/go/bin" /postfix-tlspol/build.sh build-only \
+  && /usr/local/go/bin/go clean -cache -modcache \
   && rm -rf /usr/local/go
 
 # Configure postfix-tlspol
