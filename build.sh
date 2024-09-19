@@ -44,7 +44,7 @@ install_systemd_service() {
 install_docker_app() {
     cd utils
     if which docker 2> /dev/null > /dev/null; then
-        docker compose up -d
+        docker compose up --build -d
     else
         echo "Docker not found"
     fi
@@ -59,7 +59,7 @@ read_char() {
     old=$(stty -g)
     stty raw -echo min 0 time 100
     eval "$1=\$(dd bs=1 count=1 2>/dev/null)"
-    stty $old
+    stty "$old"
 }
 
 echo "Do you want to install a Docker app or a systemd service? (d/s)"
