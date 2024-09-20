@@ -3,7 +3,8 @@ name: build-docker
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*
+  workflow_dispatch:
 
 env:
   REGISTRY_IMAGE: zuplu/postfix-tlspol
