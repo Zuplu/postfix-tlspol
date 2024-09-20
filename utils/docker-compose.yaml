@@ -1,6 +1,6 @@
 services:
   postfix-tlspol:
-    image: Zuplu/postfix-tlspol
+    image: zuplu/postfix-tlspol
     container_name: postfix-tlspol
     build:
       context: ..

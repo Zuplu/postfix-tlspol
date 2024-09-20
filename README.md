@@ -30,7 +30,19 @@ It is recommended to still set the default TLS policy to `dane` (Opportunistic D
 
 # Install via Docker
 
-Installation with Docker simplifies setup, as it contains its own `Redis` database and a properly configured DNS resolver, `Unbound`.
+Installation with Docker simplifies setup, as it contains its own `Redis` database and a properly configured DNS resolver, `Unbound`. The image itself is only about 25 MB.
+
+```
+docker run -d -p 127.0.0.1:8643:8642 --restart unless-stopped zuplu/postfix-tlspol:latest
+```
+
+Jump to *Postfix configuration* to integrate the socketmap server.
+
+To update the image, stop and remove the container, and run the above command again.
+
+# Build from source
+
+### Build a Docker container from source
 
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
@@ -38,16 +50,16 @@ cd postfix-tlspol
 ./build.sh # press 'd' for Docker when prompted
 ```
 
-Jump to *Postfix configuration* to integrate the socketmap server.
+### Requirements (standalone)
 
-# Requirements (standalone/systemd)
+These requirements only apply if you use the non-Docker variant for installation, i. e. as a systemd service unit.
 
 - A Redis-compatible database (optional if caching is disabled)
 - Postfix
 - Go 1.23.1+
 - DNSSEC-validating DNS server (preferably on localhost)
 
-# Install (standalone/systemd)
+### Install (standalone)
 
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
@@ -75,9 +87,9 @@ After changing the Postfix configuration, do:
 service postfix restart
 ```
 
-# Update
+# Update (from source)
 
-You can update postfix-tlspol (for both the Docker app and the systemd service variant), by simply doing:
+You can update postfix-tlspol (both the Docker container and the systemd service variant), by simply doing:
 ```
 git pull
 ./build.sh
