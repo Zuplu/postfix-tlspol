@@ -19,6 +19,9 @@ jobs:
           - linux/amd64
           - linux/arm64
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Prepare
         run: |
           platform=${{ matrix.platform }}
@@ -50,7 +53,7 @@ jobs:
         with:
           platforms: ${{ matrix.platform }}
           context: .
-          file: ./utils/Dockerfile
+          file: utils/Dockerfile
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ steps.meta.outputs.tags }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
