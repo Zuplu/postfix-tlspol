@@ -1,22 +1,14 @@
-FROM alpine:3.20 AS workspace
+FROM golang:1.23.1-alpine3.20 AS workspace
 
 # Install unbound and redis
 RUN apk add --no-cache unbound redis
-
-# Download and unpack Go toolchain
-RUN apk add --no-cache wget \
-  && export ARCH=$(arch | sed -e 's/aarch64/arm64/' -e 's/x86_64/amd64/') \
-  && wget https://go.dev/dl/go1.23.1.linux-$ARCH.tar.gz -O /go.tar.gz \
-  && tar -C /usr/local -xzf /go.tar.gz \
-  && rm -f /go.tar.gz \
-  && apk del wget
 
 # Copy postfix-tlspol
 COPY . /postfix-tlspol
 
 # Build postfix-tlspol and remove Go toolchain
-RUN PATH="$PATH:/usr/local/go/bin" /postfix-tlspol/build.sh build-only \
-  && /usr/local/go/bin/go clean -cache -modcache \
+RUN /postfix-tlspol/build.sh build-only \
+  && go clean -cache -modcache \
   && rm -rf /usr/local/go
 
 # Configure postfix-tlspol
