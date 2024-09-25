@@ -9,6 +9,3 @@ services:
       - "127.0.0.1:8642:8642"
     restart: unless-stopped
     network_mode: bridge
-    security_opt:
-      - apparmor=docker-default
-      - no-new-privileges:true
