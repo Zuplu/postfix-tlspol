@@ -48,13 +48,13 @@ func checkMtaStsRecord(domain string) (bool, error) {
 	return false, nil
 }
 
-func checkMtaSts(domain string) (string, uint32) {
+func checkMtaSts(domain string) (string, string, uint32) {
 	hasRecord, err := checkMtaStsRecord(domain)
 	if err != nil {
-		return "TEMP", 0
+		return "TEMP", "", 0
 	}
 	if !hasRecord {
-		return "", 0
+		return "", "", 0
 	}
 
 	client := &http.Client{
@@ -75,39 +75,39 @@ func checkMtaSts(domain string) (string, uint32) {
 	mtaSTSURL := "https://mta-sts." + domain + "/.well-known/mta-sts.txt"
 	resp, err := client.Get(mtaSTSURL)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		return "", 0
+		return "", "", 0
 	}
 	defer resp.Body.Close()
 
 	var mxServers []string
 	mode := ""
 	var maxAge uint32 = 0
-	policy := ""
+	report := ""
 	mxHosts := ""
 	existingKeys := make(map[string]bool)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !govalidator.IsPrintableASCII(line) && !govalidator.IsUTFLetterNumeric(line) {
-			return "", 0 // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
+			return "", "", 0 // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
 		}
 		if len(line) != len(govalidator.BlackList(line, "{}")) {
 			continue // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
 		}
 		keyValPair := strings.SplitN(line, ":", 2)
 		if len(keyValPair) != 2 {
-			return "", 0 // invalid policy
+			return "", "", 0 // invalid policy
 		}
 		key, val := strings.TrimSpace(keyValPair[0]), strings.TrimSpace(keyValPair[1])
 		if key != "mx" && existingKeys[key] {
 			continue // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
 		}
 		existingKeys[key] = true
-		policy = policy + " { policy_string = " + key + ": " + val + " }"
+		report = report + " { policy_string = " + key + ": " + val + " }"
 		switch key {
 		case "mx":
 			if !govalidator.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
-				return "", 0 // invalid policy
+				return "", "", 0 // invalid policy
 			}
 			mxHosts = mxHosts + " mx_host_pattern=" + val
 			if strings.HasPrefix(val, "*.") {
@@ -123,15 +123,12 @@ func checkMtaSts(domain string) (string, uint32) {
 			}
 		}
 	}
-	policy = " policy_type=sts policy_domain=" + domain + fmt.Sprintf(" policy_ttl=%d", maxAge) + mxHosts + policy
+	report = "policy_type=sts policy_domain=" + domain + fmt.Sprintf(" policy_ttl=%d", maxAge) + mxHosts + report
 
 	if mode == "enforce" {
 		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"
-		if config.Server.TlsRpt {
-			res = res + policy
-		}
-		return res, maxAge
+		return res, report, maxAge
 	}
 
-	return "", maxAge
+	return "", "", maxAge
 }
