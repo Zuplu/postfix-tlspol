@@ -22,13 +22,14 @@ import (
 )
 
 const (
-	VERSION   = "1.1.4"
-	DB_SCHEMA = "2"
+	VERSION   = "1.2.0"
+	DB_SCHEMA = "3"
 )
 
 type CacheStruct struct {
 	Domain string `json:"d"`
 	Result string `json:"r"`
+	Report string `json:"p"`
 	Ttl    uint32 `json:"t"`
 }
 
@@ -69,6 +70,15 @@ func main() {
 	if err != nil {
 		fmt.Println("Error loading config:", err)
 		return
+	}
+
+	envPrefetch, envExists := os.LookupEnv("TLSPOL_PREFETCH")
+	if envExists {
+		config.Server.Prefetch = envPrefetch == "1"
+	}
+	envTlsRpt, envExists := os.LookupEnv("TLSPOL_TLSRPT")
+	if envExists {
+		config.Server.TlsRpt = envTlsRpt == "1"
 	}
 
 	if !config.Redis.Disable {
@@ -170,13 +180,16 @@ func handleConnection(conn net.Conn) {
 				conn.Write([]byte("5:TEMP ,"))
 			} else {
 				fmt.Printf("Evaluated policy for %s: %s (from cache, %ds remaining)\n", domain, cache.Result, ttl)
+				if config.Server.TlsRpt {
+					cache.Result = cache.Result + " " + cache.Report
+				}
 				conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(cache.Result)+3, cache.Result)))
 			}
 			return
 		}
 	}
 
-	result, resultTtl := queryDomain(domain, true)
+	result, resultRpt, resultTtl := queryDomain(domain, true)
 
 	if result == "" {
 		fmt.Printf("No policy found for %s (cached for %ds)\n", domain, resultTtl)
@@ -186,30 +199,34 @@ func handleConnection(conn net.Conn) {
 		conn.Write([]byte("5:TEMP ,"))
 	} else {
 		fmt.Printf("Evaluated policy for %s: %s (cached for %ds)\n", domain, result, resultTtl)
-		conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(result)+3, result)))
+		res := result
+		if config.Server.TlsRpt {
+			res = res + " " + resultRpt
+		}
+		conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(res)+3, res)))
 	}
 
 	if !config.Redis.Disable {
-		cacheJsonSet(redisClient, cacheKey, CacheStruct{Domain: domain, Result: result, Ttl: resultTtl})
+		cacheJsonSet(redisClient, cacheKey, CacheStruct{Domain: domain, Result: result, Report: resultRpt, Ttl: resultTtl})
 	}
 }
 
-func queryDomain(domain string, parallelize bool) (string, uint32) {
+func queryDomain(domain string, parallelize bool) (string, string, uint32) {
 	result := ""
+	resultRpt := ""
 	var resultTtl uint32 = CACHE_NOTFOUND_TTL
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
 
 	// DANE query
-	var daneTtl uint32 = 0
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		var danePol string
-		danePol, daneTtl = checkDane(domain)
+		danePol, daneTtl := checkDane(domain)
 		mutex.Lock()
 		if danePol != "" {
 			result = danePol
+			resultRpt = ""
 			resultTtl = daneTtl
 		}
 		mutex.Unlock()
@@ -220,7 +237,6 @@ func queryDomain(domain string, parallelize bool) (string, uint32) {
 	}
 
 	// MTA-STS query
-	var stsTtl uint32 = 0
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -228,10 +244,11 @@ func queryDomain(domain string, parallelize bool) (string, uint32) {
 			return
 		}
 		var stsPol string
-		stsPol, stsTtl = checkMtaSts(domain)
+		stsPol, stsRpt, stsTtl := checkMtaSts(domain)
 		mutex.Lock()
 		if stsPol != "" && result == "" {
 			result = stsPol
+			resultRpt = stsRpt
 			resultTtl = stsTtl
 		}
 		mutex.Unlock()
@@ -246,7 +263,7 @@ func queryDomain(domain string, parallelize bool) (string, uint32) {
 		resultTtl = CACHE_MIN_TTL
 	}
 
-	return result, resultTtl
+	return result, resultRpt, resultTtl
 }
 
 func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint32, error) {

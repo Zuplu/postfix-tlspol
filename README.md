@@ -40,6 +40,9 @@ Jump to *Postfix configuration* to integrate the socketmap server.
 
 To update the image, stop and remove the container, and run the above command again.
 
+To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
+To enable Postfix 3.10+ TLSRPT support, set `-e TLSPOL_TLSRPT=1`.
+
 # Build from source
 
 ### Build a Docker container from source
