@@ -59,7 +59,7 @@ These requirements only apply if you use the non-Docker variant for installation
 
 - A Redis-compatible database (optional if caching is disabled)
 - Postfix
-- Go 1.23.1+
+- Go (latest)
 - DNSSEC-validating DNS server (preferably on localhost)
 
 ### Install (standalone)
