@@ -8,7 +8,8 @@ build_go() {
     if which go 2> /dev/null > /dev/null; then
         cd src
         echo "Building postfix-tlspol..."
-        go build -ldflags '-s -w' -o ../postfix-tlspol .
+        VERSION="$(git describe --tags --abbrev=7 --always --dirty --long)"
+        go build -ldflags "-s -w -X 'main.VERSION=$VERSION'" -o ../postfix-tlspol .
         cd ..
         echo "------------------------"
         if ! [ -f config.yaml ]; then
@@ -17,7 +18,7 @@ build_go() {
             echo "------------------------"
         fi
     else
-        echo "Go toolchain not found, but is required when not installing as a Docker app"
+        echo "Go toolchain not found, but is required when not installing as a Docker container"
         exit 1
     fi
 }
