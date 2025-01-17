@@ -18,12 +18,7 @@ import (
 	"time"
 
 	"github.com/asaskevich/govalidator"
-	"github.com/go-redis/redis/v8"
-)
-
-const (
-	VERSION   = "1.2.2"
-	DB_SCHEMA = "3"
+	"github.com/redis/go-redis/v9"
 )
 
 type CacheStruct struct {
@@ -34,6 +29,7 @@ type CacheStruct struct {
 }
 
 const (
+	DB_SCHEMA          = "3"
 	CACHE_KEY_PREFIX   = "TLSPOL-"
 	CACHE_NOTFOUND_TTL = 900
 	CACHE_MIN_TTL      = 60
@@ -41,13 +37,15 @@ const (
 )
 
 var (
+	VERSION     = "undefined"
 	ctx         = context.Background()
 	config      Config
 	redisClient *redis.Client
 )
 
 func printVersion() {
-	fmt.Println("postfix-tlspol (c) 2024 Zuplu — v" + VERSION + "\nThis program is licensed under the MIT License.")
+	curYear, _, _ := time.Now().Date()
+	fmt.Printf("postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n", curYear, VERSION)
 }
 
 func main() {
