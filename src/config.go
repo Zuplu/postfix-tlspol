@@ -8,7 +8,7 @@ package main
 import (
 	"io/ioutil"
 
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 type ServerConfig struct {
@@ -21,7 +21,7 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	// Set default values
 	c.Address = "127.0.0.1:8642"
 	c.TlsRpt = false
-	c.Prefetch = false
+	c.Prefetch = true
 	type plain ServerConfig
 	if err := unmarshal((*plain)(c)); err != nil {
 		return err
