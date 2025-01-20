@@ -6,12 +6,14 @@ import (
 )
 
 const (
-	PREFETCH_INTERVAL = 45 * time.Second
+	PREFETCH_INTERVAL = 30
 	PREFETCH_MARGIN   = 300 // seconds
+
+	PREFETCH_FACTOR = (PREFETCH_INTERVAL + 1) / PREFETCH_MARGIN
 )
 
 func startPrefetching() {
-	ticker := time.NewTicker(PREFETCH_INTERVAL)
+	ticker := time.NewTicker(PREFETCH_INTERVAL * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -29,7 +31,7 @@ func prefetchCachedPolicies() {
 		return
 	}
 
-	semaphore := make(chan struct{}, 10)
+	semaphore := make(chan struct{}, 20)
 	for _, key := range keys {
 		if key == CACHE_KEY_PREFIX+"version" {
 			continue
@@ -42,7 +44,7 @@ func prefetchCachedPolicies() {
 				return
 			}
 			// Check if the original TTL is greater than the margin and within the prefetching range
-			if cachedPolicy.Ttl >= PREFETCH_MARGIN && ttl < uint32(float64(cachedPolicy.Ttl)*0.05+PREFETCH_INTERVAL.Seconds()) {
+			if cachedPolicy.Ttl >= PREFETCH_MARGIN && ttl-PREFETCH_MARGIN < uint32(float64(cachedPolicy.Ttl)*PREFETCH_FACTOR+PREFETCH_INTERVAL) {
 				// Refresh the cached policy
 				refreshedResult, refreshedRpt, refreshedTtl := queryDomain(cachedPolicy.Domain, false)
 				if refreshedResult != "" && refreshedResult != "TEMP" {

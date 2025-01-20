@@ -1,34 +1,41 @@
 #!/bin/sh
 
-# Get working directory relative to this shell script
-BASEDIR=$(dirname $(realpath "$0"))
+# Define color codes
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+yellow=$(tput setaf 3)
+cyanbg=$(tput setaf 0)$(tput setab 6)
+rst=$(tput sgr0)
+
+# Get working directory relative to this script
+BASEDIR=$(dirname "$(readlink -f "$0")")
 cd "$BASEDIR"
 
 build_go() {
-    if which go 2> /dev/null > /dev/null; then
-        cd src
-        echo "Building postfix-tlspol..."
-        VERSION="$(git describe --tags --abbrev=7 --always --dirty --long)"
-        go build -ldflags "-s -w -X 'main.VERSION=$VERSION'" -o ../postfix-tlspol .
-        cd ..
-        echo "------------------------"
-        if ! [ -f config.yaml ]; then
-            echo "Copying config.yaml..."
-            cp -a config.example.yaml config.yaml
-            echo "------------------------"
+    if command -v go >/dev/null 2>&1; then
+        cd src || exit
+        echo "${green}Building postfix-tlspol...${rst}"
+        VERSION=$(git describe --tags --always --long --abbrev=7 --dirty=-modified)
+        echo "${cyanbg}Version: ${VERSION}${rst}"
+        if go build -ldflags "-s -w -X 'main.VERSION=${VERSION}'" -o ../postfix-tlspol .; then
+            echo "${green}Build succeeded!${rst}"
+        else
+            echo "${red}Build failed!${rst}"
+            exit 1
         fi
+        cd ..
+        [ ! -f config.yaml ] && cp -a config.example.yaml config.yaml
     else
-        echo "Go toolchain not found, but is required when not installing as a Docker container"
+        echo "${red}Go toolchain not found. Required unless installing as a Docker container.${rst}"
         exit 1
     fi
 }
 
 install_systemd_service() {
     build_go
-
-    if which systemctl 2> /dev/null > /dev/null; then
-        sed -e "s!%%BASEDIR%%!${BASEDIR}!g" utils/postfix-tlspol.service.template > postfix-tlspol.service
-        if [ "$(systemctl is-enabled postfix-tlspol.service)" = "enabled" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        sed "s!%%BASEDIR%%!${BASEDIR}!g" utils/postfix-tlspol.service.template > postfix-tlspol.service
+        if systemctl is-enabled postfix-tlspol.service >/dev/null 2>&1; then
             echo "Restarting service unit..."
             systemctl daemon-reload
             systemctl restart postfix-tlspol.service
@@ -38,43 +45,41 @@ install_systemd_service() {
         fi
         systemctl status --no-pager --full postfix-tlspol.service
     else
-        echo "systemctl not found"
+        echo "${red}systemctl not found.${rst}"
     fi
 }
 
 install_docker_app() {
-    cd utils
-    if which docker 2> /dev/null > /dev/null; then
+    cd utils || exit
+    if command -v docker >/dev/null 2>&1; then
         docker compose up --build -d
     else
-        echo "Docker not found"
+        echo "${red}Docker not found.${rst}"
     fi
 }
 
-if [ "$1" = "build-only" ]; then
-    build_go
-    exit 0
-fi
+# Handle "build-only" argument
+[ "$1" = "build-only" ] && { build_go; exit 0; }
 
 read_char() {
-    old=$(stty -g)
+    old_stty=$(stty -g)
     stty raw -echo min 0 time 100
-    eval "$1=\$(dd bs=1 count=1 2>/dev/null)"
-    stty "$old"
+    eval "$1=$(dd bs=1 count=1 2>/dev/null)"
+    stty "$old_stty"
 }
 
 echo "Do you want to install a Docker app or a systemd service? (d/s)"
 read_char choice
 
-case "$choice" in
-    d|D)
+case "${choice}" in
+    [dD])
         install_docker_app
         ;;
-    s|S)
+    [sS])
         install_systemd_service
         ;;
     *)
-        echo "Invalid choice. Press 'd' for Docker or 's' for systemd service. Now building only..."
+        echo "${yellow}Invalid choice. Press 'd' for Docker or 's' for systemd service. Now building only...${rst}"
         build_go
         ;;
 esac

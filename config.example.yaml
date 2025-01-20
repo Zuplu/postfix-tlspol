@@ -1,15 +1,15 @@
 server:
   address: 127.0.0.1:8642  # server:port to listen as a socketmap server
-  tlsrpt: no               # set yes to enable Postfix 3.10+ TLSRPT support
+  tlsrpt: false            # set true to enable Postfix 3.10+ TLSRPT support
                            # this is experimental, not backwards compatible
-                           # and may result in delivery failures (default no)
-  prefetch: no             # prefetch when TTL is about to expire (default no)
+                           # and may result in delivery failures (default false)
+  prefetch: true           # prefetch when TTL is about to expire (default true)
 
 dns:
   address: 127.0.0.53:53   # must support dnssec
 
 redis:
-  disable: no              # disables caching (default no)
+  disable: false           # disables caching (default false)
   address: 127.0.0.1:6379  # redis compatible server:port to act as a cache
   db: 2                    # select redis db number
 

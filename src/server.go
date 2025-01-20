@@ -169,7 +169,7 @@ func handleConnection(conn net.Conn) {
 		hashedDomain := sha256.Sum256([]byte(domain))
 		cacheKey = CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashedDomain[:])
 		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
-		if err == nil {
+		if err == nil && ttl > PREFETCH_MARGIN {
 			if cache.Result == "" {
 				fmt.Printf("No policy found for %s (from cache, %ds remaining)\n", domain, ttl)
 				conn.Write([]byte("9:NOTFOUND ,"))
@@ -278,7 +278,7 @@ func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint
 		return data, 0, err
 	}
 
-	return data, uint32(ttl.Seconds()), json.Unmarshal([]byte(jsonData), &data)
+	return data, uint32(ttl.Seconds() - PREFETCH_MARGIN), json.Unmarshal([]byte(jsonData), &data)
 }
 
 func cacheJsonSet(redisClient *redis.Client, cacheKey string, data CacheStruct) error {
@@ -287,7 +287,7 @@ func cacheJsonSet(redisClient *redis.Client, cacheKey string, data CacheStruct) 
 		return fmt.Errorf("error marshaling JSON: %v", err)
 	}
 
-	return redisClient.Set(ctx, cacheKey, jsonData, time.Duration(data.Ttl+5)*time.Second).Err()
+	return redisClient.Set(ctx, cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN)*time.Second).Err()
 }
 
 func updateDatabase() error {
