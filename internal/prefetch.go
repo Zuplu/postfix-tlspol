@@ -33,7 +33,7 @@ func startPrefetching() {
 func prefetchCachedPolicies() {
 	keys, err := redisClient.Keys(ctx, CACHE_KEY_PREFIX+"*").Result()
 	if err != nil {
-		log.Error("Error fetching keys from Redis:", err)
+		log.Errorf("Error fetching keys from Redis: %v", err)
 		return
 	}
 

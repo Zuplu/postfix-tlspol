@@ -67,7 +67,7 @@ func main() {
 	var err error
 	config, err = loadConfig(param)
 	if err != nil {
-		log.Error("Error loading config:", err)
+		log.Errorf("Error loading config: %v", err)
 		return
 	}
 
@@ -109,7 +109,7 @@ func main() {
 func startTcpServer() {
 	listener, err := net.Listen("tcp", config.Server.Address)
 	if err != nil {
-		log.Error("Error starting TCP server:", err)
+		log.Errorf("Error starting TCP server: %v", err)
 		return
 	}
 	defer listener.Close()
@@ -119,7 +119,7 @@ func startTcpServer() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Error("Error accepting connection:", err)
+			log.Errorf("Error accepting connection: %v", err)
 			continue
 		}
 		go handleConnection(conn)
@@ -133,7 +133,7 @@ func handleConnection(conn net.Conn) {
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
-		log.Error("Error reading from connection:", err)
+		log.Errorf("Error reading from connection: %v", err)
 		return
 	}
 	query := strings.TrimSpace(string(buffer[:n]))
@@ -275,7 +275,7 @@ func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint
 
 	ttl, err := redisClient.TTL(ctx, cacheKey).Result()
 	if err != nil {
-		log.Warn("Error getting TTL:", err)
+		log.Warnf("Error getting TTL: %v", err)
 		return data, 0, err
 	}
 

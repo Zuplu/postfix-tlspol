@@ -34,7 +34,7 @@ func getMxRecords(domain string) ([]string, uint32, error) {
 		return nil, 0, err
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return nil, 0, fmt.Errorf("DNS error: ", r.Rcode)
+		return nil, 0, fmt.Errorf("DNS error: %v", r.Rcode)
 	}
 
 	var mxRecords []string
@@ -104,7 +104,7 @@ func checkTlsa(mx string) ResultWithTtl {
 		return ResultWithTtl{Result: "", Ttl: 0}
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return ResultWithTtl{Result: "", Ttl: 0, Err: fmt.Errorf("DNS error: ", r.Rcode)}
+		return ResultWithTtl{Result: "", Ttl: 0, Err: fmt.Errorf("DNS error: %v", r.Rcode)}
 	}
 
 	result := ""
@@ -130,7 +130,7 @@ func checkTlsa(mx string) ResultWithTtl {
 func checkDane(domain string) (string, uint32) {
 	mxRecords, ttl, err := getMxRecords(domain)
 	if err != nil {
-		log.Warn("DNS error (MX): ", err)
+		log.Warnf("DNS error (MX): %v", err)
 		return "TEMP", 0
 	}
 	if len(mxRecords) == 0 {
@@ -154,7 +154,7 @@ func checkDane(domain string) (string, uint32) {
 	ttls = append(ttls, ttl)
 	for res := range tlsaResults {
 		if res.Err != nil {
-			log.Warn("DNS error (TLSA): ", res.Err)
+			log.Warnf("DNS error (TLSA): %v", res.Err)
 			return "TEMP", 0
 		}
 		ttls = append(ttls, res.Ttl)
