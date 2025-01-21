@@ -1,11 +1,11 @@
 #!/bin/sh
 
 # Define color codes
-red=$(tput setaf 1)
-green=$(tput setaf 2)
-yellow=$(tput setaf 3)
-cyanbg=$(tput setaf 0)$(tput setab 6)
-rst=$(tput sgr0)
+red="\033[31m"
+green="\033[32m"
+yellow="\033[33m"
+cyanbg="\033[30m\033[46m"
+rst="\033[0m"
 
 # Get working directory relative to this script
 BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")
