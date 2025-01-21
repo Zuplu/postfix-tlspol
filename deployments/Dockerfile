@@ -11,7 +11,7 @@ RUN apk add --no-cache unbound redis
 COPY --chown=default:default . /build
 
 # Build postfix-tlspol and remove Go toolchain
-RUN /build/build.sh build-only \
+RUN /build/scripts/build.sh build-only \
   && go clean -cache -modcache \
   && rm -rf /usr/local/go \
   && rm -rf /go
@@ -21,10 +21,10 @@ RUN mkdir -p /data \
   && chown default:default /data
 
 # Setup postfix-tlspol
-RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/prefetch: no/prefetch: yes/" /build/config.yaml \
+RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/prefetch: no/prefetch: yes/" /build/configs/config.yaml \
   && chown -R default:default /build \
-  && mv /build/postfix-tlspol / \
-  && mv /build/config.yaml /data/ \
+  && mv /build/build/postfix-tlspol / \
+  && mv /build/configs/config.yaml /data/ \
   && rm -rf /build
 
 # Setup unbound

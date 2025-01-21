@@ -5,7 +5,7 @@ Wants=nss-lookup.target
 
 [Service]
 WorkingDirectory=%%BASEDIR%%
-ExecStart=%%BASEDIR%%/postfix-tlspol %%BASEDIR%%/config.yaml
+ExecStart=%%BASEDIR%%/build/postfix-tlspol %%BASEDIR%%/configs/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 DynamicUser=yes
 Restart=always

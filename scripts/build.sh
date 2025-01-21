@@ -8,23 +8,23 @@ cyanbg=$(tput setaf 0)$(tput setab 6)
 rst=$(tput sgr0)
 
 # Get working directory relative to this script
-BASEDIR=$(dirname "$(readlink -f "$0")")
+BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")
 cd "$BASEDIR"
 
 build_go() {
+    mkdir -p build
     if command -v go >/dev/null 2>&1; then
-        cd src || exit
         echo "${green}Building postfix-tlspol...${rst}"
         VERSION=$(git describe --tags --always --long --abbrev=7 --dirty=-modified)
         echo "${cyanbg}Version: ${VERSION}${rst}"
-        if go build -ldflags "-s -w -X 'main.VERSION=${VERSION}'" -o ../postfix-tlspol .; then
+        if go build -ldflags "-s -w -X 'main.VERSION=${VERSION}'" -o build/postfix-tlspol ./internal; then
             echo "${green}Build succeeded!${rst}"
         else
             echo "${red}Build failed!${rst}"
             exit 1
         fi
-        cd ..
-        [ ! -f config.yaml ] && cp -a config.example.yaml config.yaml
+        [ -f config.yaml ] && mv config.yaml configs/config.yaml
+        [ ! -f configs/config.yaml ] && cp -a configs/config.example.yaml configs/config.yaml
     else
         echo "${red}Go toolchain not found. Required unless installing as a Docker container.${rst}"
         exit 1
@@ -34,15 +34,21 @@ build_go() {
 install_systemd_service() {
     build_go
     if command -v systemctl >/dev/null 2>&1; then
-        sed "s!%%BASEDIR%%!${BASEDIR}!g" utils/postfix-tlspol.service.template > postfix-tlspol.service
+        [ -f postfix-tlspol.service ] && rm postfix-tlspol.service
+        sed "s!%%BASEDIR%%!${BASEDIR}!g" init/postfix-tlspol.service.template > init/postfix-tlspol.service
         if systemctl is-enabled postfix-tlspol.service >/dev/null 2>&1; then
-            echo "Restarting service unit..."
             systemctl daemon-reload
-            systemctl restart postfix-tlspol.service
+            echo "Restarting service unit..."
+            if systemctl is-active --quiet postfix-tlspol.service >/dev/null 2>&1; then
+                systemctl stop postfix-tlspol.service
+            fi
+            systemctl disable postfix-tlspol.service
         else
             echo "Enabling and starting service unit..."
-            systemctl enable --now ./postfix-tlspol.service
         fi
+        systemctl enable init/postfix-tlspol.service
+        systemctl daemon-reload
+        systemctl start postfix-tlspol.service
         systemctl status --no-pager --full postfix-tlspol.service
     else
         echo "${red}systemctl not found.${rst}"
@@ -50,7 +56,7 @@ install_systemd_service() {
 }
 
 install_docker_app() {
-    cd utils || exit
+    cd deployments || exit
     if command -v docker >/dev/null 2>&1; then
         docker compose up --build -d
     else

@@ -1,6 +1,6 @@
 /*
  * MIT License
- * Copyright (c) 2024 Zuplu
+ * Copyright (c) 2024-2025 Zuplu
  */
 
 package main
@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"fmt"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,10 +27,10 @@ func checkMtaStsRecord(domain string) (bool, error) {
 
 	r, _, err := client.Exchange(m, config.Dns.Address)
 	if err != nil {
-		return false, fmt.Errorf("DNS error")
+		return false, err
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return false, fmt.Errorf("DNS error")
+		return false, fmt.Errorf("DNS error: ", r.Rcode)
 	}
 	if len(r.Answer) == 0 {
 		return false, nil
@@ -51,6 +52,7 @@ func checkMtaStsRecord(domain string) (bool, error) {
 func checkMtaSts(domain string) (string, string, uint32) {
 	hasRecord, err := checkMtaStsRecord(domain)
 	if err != nil {
+		log.Warn("DNS error (MTA-STS): ", err)
 		return "TEMP", "", 0
 	}
 	if !hasRecord {

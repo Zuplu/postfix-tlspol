@@ -4,7 +4,7 @@ services:
     container_name: postfix-tlspol
     build:
       context: ..
-      dockerfile: ./utils/Dockerfile
+      dockerfile: ./deployments/Dockerfile
     ports:
       - "127.0.0.1:8642:8642"
     restart: unless-stopped

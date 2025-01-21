@@ -1,6 +1,6 @@
 /*
  * MIT License
- * Copyright (c) 2024 Zuplu
+ * Copyright (c) 2024-2025 Zuplu
  */
 
 package main
@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"sync"
 
 	"github.com/asaskevich/govalidator"
@@ -33,7 +34,7 @@ func getMxRecords(domain string) ([]string, uint32, error) {
 		return nil, 0, err
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return nil, 0, fmt.Errorf("DNS error")
+		return nil, 0, fmt.Errorf("DNS error: ", r.Rcode)
 	}
 
 	var mxRecords []string
@@ -103,7 +104,7 @@ func checkTlsa(mx string) ResultWithTtl {
 		return ResultWithTtl{Result: "", Ttl: 0}
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return ResultWithTtl{Result: "", Ttl: 0, Err: fmt.Errorf("DNS error")}
+		return ResultWithTtl{Result: "", Ttl: 0, Err: fmt.Errorf("DNS error: ", r.Rcode)}
 	}
 
 	result := ""
@@ -129,6 +130,7 @@ func checkTlsa(mx string) ResultWithTtl {
 func checkDane(domain string) (string, uint32) {
 	mxRecords, ttl, err := getMxRecords(domain)
 	if err != nil {
+		log.Warn("DNS error (MX): ", err)
 		return "TEMP", 0
 	}
 	if len(mxRecords) == 0 {
@@ -152,6 +154,7 @@ func checkDane(domain string) (string, uint32) {
 	ttls = append(ttls, ttl)
 	for res := range tlsaResults {
 		if res.Err != nil {
+			log.Warn("DNS error (TLSA): ", res.Err)
 			return "TEMP", 0
 		}
 		ttls = append(ttls, res.Ttl)
