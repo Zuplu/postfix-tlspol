@@ -1,3 +1,3 @@
-postfix-tlspol
-postfix-tlspol.service
-config.yaml
+build/
+init/postfix-tlspol.service
+configs/config.yaml

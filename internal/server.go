@@ -1,6 +1,6 @@
 /*
  * MIT License
- * Copyright (c) 2024 Zuplu
+ * Copyright (c) 2024-2025 Zuplu
  */
 
 package main
@@ -11,6 +11,7 @@ import (
 	"encoding/base32"
 	"encoding/json"
 	"fmt"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"net"
 	"os"
 	"strings"
@@ -45,7 +46,7 @@ var (
 
 func printVersion() {
 	curYear, _, _ := time.Now().Date()
-	fmt.Printf("postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n", curYear, VERSION)
+	log.Infof("postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.", curYear, VERSION)
 }
 
 func main() {
@@ -53,7 +54,7 @@ func main() {
 	printVersion()
 
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: postfix-tlspol <config.yaml>")
+		log.Info("Usage: postfix-tlspol <config.yaml>")
 		return
 	}
 
@@ -66,7 +67,7 @@ func main() {
 	var err error
 	config, err = loadConfig(param)
 	if err != nil {
-		fmt.Println("Error loading config:", err)
+		log.Error("Error loading config:", err)
 		return
 	}
 
@@ -94,9 +95,9 @@ func main() {
 
 	if config.Server.Prefetch {
 		if config.Redis.Disable {
-			fmt.Println("Cannot prefetch with Redis disabled!")
+			log.Error("Cannot prefetch with Redis disabled!")
 		} else {
-			fmt.Println("Prefetching enabled!")
+			log.Info("Prefetching enabled!")
 			go startPrefetching()
 		}
 	}
@@ -108,17 +109,17 @@ func main() {
 func startTcpServer() {
 	listener, err := net.Listen("tcp", config.Server.Address)
 	if err != nil {
-		fmt.Println("Error starting TCP server:", err)
+		log.Error("Error starting TCP server:", err)
 		return
 	}
 	defer listener.Close()
 
-	fmt.Printf("Listening on %s...\n", config.Server.Address)
+	log.Debugf("Listening on %s...", config.Server.Address)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection:", err)
+			log.Error("Error accepting connection:", err)
 			continue
 		}
 		go handleConnection(conn)
@@ -132,7 +133,7 @@ func handleConnection(conn net.Conn) {
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
-		fmt.Println("Error reading from connection:", err)
+		log.Error("Error reading from connection:", err)
 		return
 	}
 	query := strings.TrimSpace(string(buffer[:n]))
@@ -146,7 +147,7 @@ func handleConnection(conn net.Conn) {
 	}
 	parts = strings.SplitN(query, " ", 2)
 	if len(parts) != 2 || strings.ToLower(parts[0]) != "query" {
-		fmt.Printf("Malformed query: %s\n", query)
+		log.Warnf("Malformed query: %s", query)
 		conn.Write([]byte("5:PERM ,"))
 		return
 	}
@@ -154,12 +155,12 @@ func handleConnection(conn net.Conn) {
 	// Parse domain from query and validate
 	domain := strings.ToLower(strings.TrimSpace(parts[1]))
 	if govalidator.IsIPv4(domain) || govalidator.IsIPv6(domain) {
-		fmt.Printf("Skipping policy for non-domain %s\n", domain)
+		log.Debugf("Skipping policy for non-domain %s", domain)
 		conn.Write([]byte("9:NOTFOUND ,"))
 		return
 	}
 	if strings.HasPrefix(domain, ".") {
-		fmt.Printf("Skipping policy for parent domain %s\n", domain)
+		log.Debugf("Skipping policy for parent domain %s", domain)
 		conn.Write([]byte("9:NOTFOUND ,"))
 		return
 	}
@@ -171,13 +172,13 @@ func handleConnection(conn net.Conn) {
 		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
 			if cache.Result == "" {
-				fmt.Printf("No policy found for %s (from cache, %ds remaining)\n", domain, ttl)
+				log.Infof("No policy found for %s (from cache, %ds remaining)", domain, ttl)
 				conn.Write([]byte("9:NOTFOUND ,"))
 			} else if cache.Result == "TEMP" {
-				fmt.Printf("Evaluating policy for %s failed temporarily (from cache, %ds remaining)\n", domain, ttl)
+				log.Warnf("Evaluating policy for %s failed temporarily (from cache, %ds remaining)", domain, ttl)
 				conn.Write([]byte("5:TEMP ,"))
 			} else {
-				fmt.Printf("Evaluated policy for %s: %s (from cache, %ds remaining)\n", domain, cache.Result, ttl)
+				log.Infof("Evaluated policy for %s: %s (from cache, %ds remaining)", domain, cache.Result, ttl)
 				if config.Server.TlsRpt {
 					cache.Result = cache.Result + " " + cache.Report
 				}
@@ -190,13 +191,13 @@ func handleConnection(conn net.Conn) {
 	result, resultRpt, resultTtl := queryDomain(domain, true)
 
 	if result == "" {
-		fmt.Printf("No policy found for %s (cached for %ds)\n", domain, resultTtl)
+		log.Infof("No policy found for %s (cached for %ds)", domain, resultTtl)
 		conn.Write([]byte("9:NOTFOUND ,"))
 	} else if result == "TEMP" {
-		fmt.Printf("Evaluating policy for %s failed temporarily (cached for %ds)\n", domain, resultTtl)
+		log.Warnf("Evaluating policy for %s failed temporarily (cached for %ds)", domain, resultTtl)
 		conn.Write([]byte("5:TEMP ,"))
 	} else {
-		fmt.Printf("Evaluated policy for %s: %s (cached for %ds)\n", domain, result, resultTtl)
+		log.Infof("Evaluated policy for %s: %s (cached for %ds)", domain, result, resultTtl)
 		res := result
 		if config.Server.TlsRpt {
 			res = res + " " + resultRpt
@@ -274,7 +275,7 @@ func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint
 
 	ttl, err := redisClient.TTL(ctx, cacheKey).Result()
 	if err != nil {
-		fmt.Println("Error getting TTL:", err)
+		log.Warn("Error getting TTL:", err)
 		return data, 0, err
 	}
 

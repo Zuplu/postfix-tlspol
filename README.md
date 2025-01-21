@@ -50,7 +50,7 @@ To enable Postfix 3.10+ TLSRPT support, set `-e TLSPOL_TLSRPT=1`.
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
 cd postfix-tlspol
-./build.sh # press 'd' for Docker when prompted
+scripts/build.sh # press 'd' for Docker when prompted
 ```
 
 ### Requirements (standalone)
@@ -67,10 +67,10 @@ These requirements only apply if you use the non-Docker variant for installation
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
 cd postfix-tlspol
-./build.sh # press 's' for systemd when prompted
+scripts/build.sh # press 's' for systemd when prompted
 ```
 
-Edit `config.yaml` as needed. After any change, a restart is required:
+Edit `configs/config.yaml` as needed. After any change, a restart is required:
 ```
 service postfix-tlspol restart
 ```
@@ -95,27 +95,27 @@ service postfix restart
 You can update postfix-tlspol (both the Docker container and the systemd service variant), by simply doing:
 ```
 git pull
-./build.sh
+scripts/build.sh
 ```
 
 # Configuration
 
 _*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is configured properly with prefetching enabled._
 
-Configuration example for `config.yaml`:
+Configuration example for `configs/config.yaml`:
 ```
 server:
   address: 127.0.0.1:8642  # server:port to listen as a socketmap server
-  tlsrpt: no               # set yes to enable Postfix 3.10+ TLSRPT support
+  tlsrpt: false            # set true to enable Postfix 3.10+ TLSRPT support
                            # this is experimental, not backwards compatible
-                           # and may result in delivery failures (default no)
-  prefetch: no             # prefetch when TTL is about to expire (default no)
+                           # and may result in delivery failures (default false)
+  prefetch: true           # prefetch when TTL is about to expire (default true)
 
 dns:
-  address: 127.0.0.53:53   # must support dnssec
+  address: 127.0.0.53:53   # must support DNSSEC
 
 redis:
-  disable: no              # disables caching (default no)
+  disable: false           # disables caching (default false)
   address: 127.0.0.1:6379  # redis compatible server:port to act as a cache
   db: 2                    # select redis db number
 
@@ -123,7 +123,7 @@ redis:
 
 # Prefetching
 
-If you enable prefetching via `config.yaml`, it is recommended to adjust your local DNS caching resolver to serve the original TTL response.
+If you enable prefetching via `configs/config.yaml`, it is recommended to adjust your local DNS caching resolver to serve the original TTL response.
 
 For example, in `Unbound`, configure the following:
 ```
