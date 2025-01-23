@@ -17,7 +17,7 @@ build_go() {
         echo "${green}Building postfix-tlspol...${rst}"
         VERSION=$(git describe --tags --always --long --abbrev=7 --dirty=-modified)
         echo "${cyanbg}Version: ${VERSION}${rst}"
-        if go build -ldflags "-s -w -X 'main.VERSION=${VERSION}'" -o build/postfix-tlspol ./internal; then
+        if go build -tags netgo -ldflags "-d -extldflags '-static' -s -w -X 'main.VERSION=${VERSION}'" -o build/postfix-tlspol ./internal; then
             echo "${green}Build succeeded!${rst}"
         else
             echo "${red}Build failed!${rst}"
