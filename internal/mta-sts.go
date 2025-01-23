@@ -7,7 +7,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"net/http"
@@ -18,19 +20,17 @@ import (
 	"github.com/miekg/dns"
 )
 
-func checkMtaStsRecord(domain string) (bool, error) {
-	client := &dns.Client{Timeout: REQUEST_TIMEOUT}
+func checkMtaStsRecord(ctx context.Context, domain string) (bool, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn("_mta-sts."+domain), dns.TypeTXT)
-	m.RecursionDesired = true
-	m.SetEdns0(4096, true)
+	m.SetEdns0(1232, true)
 
-	r, _, err := client.Exchange(m, config.Dns.Address)
+	r, _, err := client.ExchangeContext(ctx, m, config.Dns.Address)
 	if err != nil {
 		return false, err
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return false, fmt.Errorf("DNS error: %v", r.Rcode)
+		return false, fmt.Errorf("DNS error: %v", dns.RcodeToString[r.Rcode])
 	}
 	if len(r.Answer) == 0 {
 		return false, nil
@@ -49,17 +49,19 @@ func checkMtaStsRecord(domain string) (bool, error) {
 	return false, nil
 }
 
-func checkMtaSts(domain string) (string, string, uint32) {
-	hasRecord, err := checkMtaStsRecord(domain)
+func checkMtaSts(ctx context.Context, domain string) (string, string, uint32) {
+	hasRecord, err := checkMtaStsRecord(ctx, domain)
 	if err != nil {
-		log.Warnf("DNS error (MTA-STS): %v", err)
+		if !errors.Is(err, context.Canceled) {
+			log.Warnf("DNS error (MTA-STS): %v", err)
+		}
 		return "TEMP", "", 0
 	}
 	if !hasRecord {
 		return "", "", 0
 	}
 
-	client := &http.Client{
+	c := &http.Client{
 		// Disable following redirects (see [RFC 8461, 3.3])
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -75,7 +77,11 @@ func checkMtaSts(domain string) (string, string, uint32) {
 	}
 
 	mtaSTSURL := "https://mta-sts." + domain + "/.well-known/mta-sts.txt"
-	resp, err := client.Get(mtaSTSURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mtaSTSURL, nil)
+	if err != nil {
+		return "", "", 0
+	}
+	resp, err := c.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return "", "", 0
 	}

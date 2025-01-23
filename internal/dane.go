@@ -6,11 +6,12 @@
 package main
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
-	"sync"
 
 	"github.com/asaskevich/govalidator"
 	"github.com/miekg/dns"
@@ -22,19 +23,17 @@ type ResultWithTtl struct {
 	Err    error
 }
 
-func getMxRecords(domain string) ([]string, uint32, error) {
-	client := &dns.Client{Timeout: REQUEST_TIMEOUT}
+func getMxRecords(ctx context.Context, domain string) ([]string, uint32, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeMX)
-	m.RecursionDesired = true
-	m.SetEdns0(4096, true)
+	m.SetEdns0(1232, true)
 
-	r, _, err := client.Exchange(m, config.Dns.Address)
+	r, _, err := client.ExchangeContext(ctx, m, config.Dns.Address)
 	if err != nil {
 		return nil, 0, err
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return nil, 0, fmt.Errorf("DNS error: %v", r.Rcode)
+		return nil, 0, fmt.Errorf("DNS error: %v", dns.RcodeToString[r.Rcode])
 	}
 
 	var mxRecords []string
@@ -88,15 +87,13 @@ func isTlsaUsable(r *dns.TLSA) bool {
 	return true
 }
 
-func checkTlsa(mx string) ResultWithTtl {
+func checkTlsa(ctx context.Context, mx string) ResultWithTtl {
 	tlsaName := "_25._tcp." + mx
-	client := &dns.Client{Timeout: REQUEST_TIMEOUT}
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(tlsaName), dns.TypeTLSA)
-	m.RecursionDesired = true
-	m.SetEdns0(4096, true)
+	m.SetEdns0(1232, true)
 
-	r, _, err := client.Exchange(m, config.Dns.Address)
+	r, _, err := client.ExchangeContext(ctx, m, config.Dns.Address)
 	if err != nil {
 		return ResultWithTtl{Result: "", Ttl: 0, Err: err}
 	}
@@ -127,35 +124,35 @@ func checkTlsa(mx string) ResultWithTtl {
 	return ResultWithTtl{Result: result, Ttl: findMin(ttls)}
 }
 
-func checkDane(domain string) (string, uint32) {
-	mxRecords, ttl, err := getMxRecords(domain)
+func checkDane(ctx context.Context, domain string) (string, uint32) {
+	mxRecords, ttl, err := getMxRecords(ctx, domain)
 	if err != nil {
-		log.Warnf("DNS error (MX): %v", err)
+		if !errors.Is(err, context.Canceled) {
+			log.Warnf("DNS error (MX): %v", err)
+		}
 		return "TEMP", 0
 	}
 	if len(mxRecords) == 0 {
 		return "", 0
 	}
 
-	var wg sync.WaitGroup
 	tlsaResults := make(chan ResultWithTtl, len(mxRecords))
 	for _, mx := range mxRecords {
-		wg.Add(1)
 		go func(mx string) {
-			defer wg.Done()
-			tlsaResults <- checkTlsa(mx)
+			tlsaResults <- checkTlsa(ctx, mx)
 		}(mx)
 	}
-	wg.Wait()
-	close(tlsaResults)
 
-	canDane := false
+	canDane, hasError := false, false
 	var ttls []uint32
 	ttls = append(ttls, ttl)
 	for res := range tlsaResults {
 		if res.Err != nil {
-			log.Warnf("DNS error (TLSA): %v", res.Err)
-			return "TEMP", 0
+			if !errors.Is(err, context.Canceled) {
+				log.Warnf("DNS error (TLSA): %v", res.Err)
+			}
+			hasError = true
+			continue
 		}
 		ttls = append(ttls, res.Ttl)
 		if res.Result == "dane-only" {
@@ -167,6 +164,10 @@ func checkDane(domain string) (string, uint32) {
 
 	if canDane {
 		return "dane", findMin(ttls) // might be supported, Postfix has to decide
+	}
+
+	if hasError {
+		return "TEMP", 0
 	}
 
 	return "", findMin(ttls)
