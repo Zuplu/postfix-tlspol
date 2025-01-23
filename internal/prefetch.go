@@ -53,7 +53,7 @@ func prefetchCachedPolicies() {
 			// Check if the original TTL is greater than the margin and within the prefetching range
 			if cachedPolicy.Ttl >= PREFETCH_MARGIN && float64(ttl-PREFETCH_MARGIN) < float64(cachedPolicy.Ttl)*PREFETCH_FACTOR+float64(PREFETCH_INTERVAL) {
 				// Refresh the cached policy
-				refreshedResult, refreshedRpt, refreshedTtl := queryDomain(cachedPolicy.Domain, false)
+				refreshedResult, refreshedRpt, refreshedTtl := queryDomain(cachedPolicy.Domain)
 				if refreshedResult != "" && refreshedResult != "TEMP" {
 					log.Debugf("Prefetched policy for %s: %s (cached for %ds)", cachedPolicy.Domain, refreshedResult, refreshedTtl)
 					cacheJsonSet(redisClient, key, CacheStruct{Domain: cachedPolicy.Domain, Result: refreshedResult, Report: refreshedRpt, Ttl: refreshedTtl})

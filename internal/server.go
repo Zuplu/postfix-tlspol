@@ -15,7 +15,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/asaskevich/govalidator"
@@ -33,8 +32,8 @@ const (
 	DB_SCHEMA          = "3"
 	CACHE_KEY_PREFIX   = "TLSPOL-"
 	CACHE_NOTFOUND_TTL = 900
-	CACHE_MIN_TTL      = 60
-	REQUEST_TIMEOUT    = 5 * time.Second
+	CACHE_MIN_TTL      = 180
+	REQUEST_TIMEOUT    = 10 * time.Second
 )
 
 var (
@@ -87,23 +86,19 @@ func main() {
 			Password: config.Redis.Password,
 			DB:       config.Redis.DB,
 		})
-		go updateDatabase()
+		go func() {
+			updateDatabase()
+			if config.Server.Prefetch {
+				log.Info("Prefetching enabled!")
+				startPrefetching()
+			}
+		}()
+	} else if config.Server.Prefetch {
+		log.Error("Cannot prefetch with Redis disabled!")
 	}
 
 	// Start the socketmap server for Postfix
-	go startTcpServer()
-
-	if config.Server.Prefetch {
-		if config.Redis.Disable {
-			log.Error("Cannot prefetch with Redis disabled!")
-		} else {
-			log.Info("Prefetching enabled!")
-			go startPrefetching()
-		}
-	}
-
-	// Keep the main function alive
-	select {}
+	startTcpServer()
 }
 
 func startTcpServer() {
@@ -155,12 +150,12 @@ func handleConnection(conn net.Conn) {
 	// Parse domain from query and validate
 	domain := strings.ToLower(strings.TrimSpace(parts[1]))
 	if govalidator.IsIPv4(domain) || govalidator.IsIPv6(domain) {
-		log.Debugf("Skipping policy for non-domain %s", domain)
+		log.Debugf("Skipping policy for non-domain: %s", domain)
 		conn.Write([]byte("9:NOTFOUND ,"))
 		return
 	}
 	if strings.HasPrefix(domain, ".") {
-		log.Debugf("Skipping policy for parent domain %s", domain)
+		log.Debugf("Skipping policy for parent domain: %s", domain)
 		conn.Write([]byte("9:NOTFOUND ,"))
 		return
 	}
@@ -171,6 +166,7 @@ func handleConnection(conn net.Conn) {
 		cacheKey = CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashedDomain[:])
 		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
+			ttl := ttl - PREFETCH_MARGIN
 			if cache.Result == "" {
 				log.Infof("No policy found for %s (from cache, %ds remaining)", domain, ttl)
 				conn.Write([]byte("9:NOTFOUND ,"))
@@ -188,7 +184,7 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 
-	result, resultRpt, resultTtl := queryDomain(domain, true)
+	result, resultRpt, resultTtl := queryDomain(domain)
 
 	if result == "" {
 		log.Infof("No policy found for %s (cached for %ds)", domain, resultTtl)
@@ -210,51 +206,38 @@ func handleConnection(conn net.Conn) {
 	}
 }
 
-func queryDomain(domain string, parallelize bool) (string, string, uint32) {
-	result := ""
-	resultRpt := ""
-	var resultTtl uint32 = CACHE_NOTFOUND_TTL
-	var mutex sync.Mutex
-	var wg sync.WaitGroup
+type PolicyResult struct {
+	IsDane bool
+	Policy string
+	Rpt    string
+	Ttl    uint32
+}
+
+func queryDomain(domain string) (string, string, uint32) {
+	results := make(chan PolicyResult, 2)
 
 	// DANE query
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		danePol, daneTtl := checkDane(domain)
-		mutex.Lock()
-		if danePol != "" {
-			result = danePol
-			resultRpt = ""
-			resultTtl = daneTtl
-		}
-		mutex.Unlock()
+		policy, ttl := checkDane(domain)
+		results <- PolicyResult{IsDane: true, Policy: policy, Rpt: "", Ttl: ttl}
 	}()
-
-	if !parallelize {
-		wg.Wait()
-	}
 
 	// MTA-STS query
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		if result != "" {
-			return
-		}
-		var stsPol string
-		stsPol, stsRpt, stsTtl := checkMtaSts(domain)
-		mutex.Lock()
-		if stsPol != "" && result == "" {
-			result = stsPol
-			resultRpt = stsRpt
-			resultTtl = stsTtl
-		}
-		mutex.Unlock()
+		policy, rpt, ttl := checkMtaSts(domain)
+		results <- PolicyResult{IsDane: false, Policy: policy, Rpt: rpt, Ttl: ttl}
 	}()
 
-	// Wait for completion
-	wg.Wait()
+	result, resultRpt := "", ""
+	var resultTtl uint32 = CACHE_NOTFOUND_TTL
+	for r := range results {
+		result = r.Policy
+		resultRpt = r.Rpt
+		resultTtl = r.Ttl
+		if r.IsDane {
+			break
+		}
+	}
 
 	if result == "" {
 		resultTtl = CACHE_NOTFOUND_TTL
@@ -279,7 +262,7 @@ func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint
 		return data, 0, err
 	}
 
-	return data, uint32(ttl.Seconds() - PREFETCH_MARGIN), json.Unmarshal([]byte(jsonData), &data)
+	return data, uint32(ttl.Seconds()), json.Unmarshal([]byte(jsonData), &data)
 }
 
 func cacheJsonSet(redisClient *redis.Client, cacheKey string, data CacheStruct) error {
