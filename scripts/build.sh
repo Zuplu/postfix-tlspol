@@ -1,11 +1,19 @@
 #!/bin/sh
 
-# Define color codes
-red="\033[31m"
-green="\033[32m"
-yellow="\033[33m"
-cyanbg="\033[30m\033[46m"
-rst="\033[0m"
+# Define color codes if output is terminal
+if [ -t 1 ]; then
+    red="\033[31m"
+    green="\033[32m"
+    yellow="\033[33m"
+    cyanbg="\033[30m\033[46m"
+    rst="\033[0m"
+else
+    red=""
+    green=""
+    yellow=""
+    cyanbg=""
+    rst=""
+fi
 
 # Get working directory relative to this script
 BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")

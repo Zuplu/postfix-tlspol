@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/asaskevich/govalidator"
+	"github.com/miekg/dns"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -38,7 +39,8 @@ const (
 
 var (
 	VERSION     = "undefined"
-	ctx         = context.Background()
+	bgCtx       = context.Background()
+	client      = new(dns.Client)
 	config      Config
 	redisClient *redis.Client
 )
@@ -216,15 +218,17 @@ type PolicyResult struct {
 func queryDomain(domain string) (string, string, uint32) {
 	results := make(chan PolicyResult, 2)
 
+	ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
+	defer cancel()
 	// DANE query
 	go func() {
-		policy, ttl := checkDane(domain)
+		policy, ttl := checkDane(ctx, domain)
 		results <- PolicyResult{IsDane: true, Policy: policy, Rpt: "", Ttl: ttl}
 	}()
 
 	// MTA-STS query
 	go func() {
-		policy, rpt, ttl := checkMtaSts(domain)
+		policy, rpt, ttl := checkMtaSts(ctx, domain)
 		results <- PolicyResult{IsDane: false, Policy: policy, Rpt: rpt, Ttl: ttl}
 	}()
 
@@ -251,12 +255,12 @@ func queryDomain(domain string) (string, string, uint32) {
 func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint32, error) {
 	var data CacheStruct
 
-	jsonData, err := redisClient.Get(ctx, cacheKey).Result()
+	jsonData, err := redisClient.Get(bgCtx, cacheKey).Result()
 	if err != nil {
 		return data, 0, err
 	}
 
-	ttl, err := redisClient.TTL(ctx, cacheKey).Result()
+	ttl, err := redisClient.TTL(bgCtx, cacheKey).Result()
 	if err != nil {
 		log.Warnf("Error getting TTL: %v", err)
 		return data, 0, err
@@ -271,27 +275,27 @@ func cacheJsonSet(redisClient *redis.Client, cacheKey string, data CacheStruct) 
 		return fmt.Errorf("error marshaling JSON: %v", err)
 	}
 
-	return redisClient.Set(ctx, cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN)*time.Second).Err()
+	return redisClient.Set(bgCtx, cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN)*time.Second).Err()
 }
 
 func updateDatabase() error {
 	schemaKey := CACHE_KEY_PREFIX + "schema"
 
-	currentSchema, err := redisClient.Get(ctx, schemaKey).Result()
+	currentSchema, err := redisClient.Get(bgCtx, schemaKey).Result()
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("error getting schema from Redis: %v", err)
 	}
 
 	// Check if the schema matches, else clear the database
 	if currentSchema != DB_SCHEMA {
-		keys, err := redisClient.Keys(ctx, CACHE_KEY_PREFIX+"*").Result()
+		keys, err := redisClient.Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
 		if err != nil {
 			return fmt.Errorf("error fetching keys: %v", err)
 		}
 		for _, key := range keys {
-			redisClient.Del(ctx, key).Err()
+			redisClient.Del(bgCtx, key).Err()
 		}
-		return redisClient.Set(ctx, schemaKey, DB_SCHEMA, 0).Err()
+		return redisClient.Set(bgCtx, schemaKey, DB_SCHEMA, 0).Err()
 	}
 
 	return nil

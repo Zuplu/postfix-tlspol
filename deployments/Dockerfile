@@ -5,24 +5,24 @@ RUN addgroup -g 1000 default \
   && adduser -G default -u 1000 default -D
 
 # Install unbound and redis
-RUN apk add --no-cache unbound redis
+RUN apk add --no-cache unbound redis git
 
 # Copy postfix-tlspol
 COPY --chown=default:default . /build
 
 # Build postfix-tlspol and remove Go toolchain
-RUN /build/scripts/build.sh build-only \
-  && go clean -cache -modcache \
+RUN su default -c "/build/scripts/build.sh build-only ; go clean -cache -modcache" \
   && rm -rf /usr/local/go \
-  && rm -rf /go
+  && rm -rf /go \
+  && rm -rf /home \
+  && apk --purge del git apk-tools
 
 # Create data dir
 RUN mkdir -p /data \
   && chown default:default /data
 
 # Setup postfix-tlspol
-RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/prefetch: no/prefetch: yes/" /build/configs/config.yaml \
-  && chown -R default:default /build \
+RUN su default -c 'sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/prefetch: no/prefetch: yes/" /build/configs/config.yaml' \
   && mv /build/build/postfix-tlspol / \
   && mv /build/configs/config.yaml /data/ \
   && rm -rf /build
@@ -37,7 +37,7 @@ RUN chown -R default:default /usr/share/dnssec-root \
 RUN echo -e "bind 127.0.0.1 -::1\nport 6379\ndaemonize no\nlogfile \"\"\nloglevel notice\ndbfilename cache.rdb\ndir /data" > /etc/redis.conf
 
 # Setup entrypoint
-RUN echo -e "#!/bin/sh\necho 1 > /proc/sys/vm/overcommit_memory\n( cd /data ; /usr/bin/redis-server /etc/redis.conf ) &\n( cd /etc/unbound ; /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &\nexec /postfix-tlspol /data/config.yaml" > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN echo -e "#!/bin/sh\n( cd /data ; /usr/bin/redis-server /etc/redis.conf ) &\n( cd /etc/unbound ; /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &\nexec /postfix-tlspol /data/config.yaml" > /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Squash layers
 FROM scratch
