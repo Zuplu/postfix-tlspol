@@ -132,11 +132,12 @@ func checkDane(ctx context.Context, domain string) (string, uint32) {
 		}
 		return "TEMP", 0
 	}
-	if len(mxRecords) == 0 {
+	numRecords := len(mxRecords)
+	if numRecords == 0 {
 		return "", 0
 	}
 
-	tlsaResults := make(chan ResultWithTtl, len(mxRecords))
+	tlsaResults := make(chan ResultWithTtl)
 	for _, mx := range mxRecords {
 		go func(mx string) {
 			tlsaResults <- checkTlsa(ctx, mx)
@@ -146,7 +147,12 @@ func checkDane(ctx context.Context, domain string) (string, uint32) {
 	canDane, hasError := false, false
 	var ttls []uint32
 	ttls = append(ttls, ttl)
+	var i int = 0
 	for res := range tlsaResults {
+	    i++
+	    if i >= numRecords {
+	        close(tlsaResults)
+	    }
 		if res.Err != nil {
 			if !errors.Is(err, context.Canceled) {
 				log.Warnf("DNS error (TLSA): %v", res.Err)

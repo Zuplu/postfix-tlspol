@@ -123,17 +123,8 @@ func startTcpServer() {
 	}
 }
 
-func handleConnection(conn net.Conn) {
-	defer conn.Close()
-
-	// Read the incoming query
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		log.Errorf("Error reading from connection: %v", err)
-		return
-	}
-	query := strings.TrimSpace(string(buffer[:n]))
+func parseQuery(rawQuery []byte) string {
+	query := strings.TrimSpace(string(rawQuery))
 	parts := strings.Split(query, ",")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -142,7 +133,26 @@ func handleConnection(conn net.Conn) {
 			query = strings.TrimSpace(subParts[1])
 		}
 	}
-	parts = strings.SplitN(query, " ", 2)
+	return query
+}
+
+func getCacheKey(domain string) string {
+	k := sha256.Sum256([]byte(domain))
+	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(k[:])
+}
+
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	// Read the incoming query
+	buffer := make([]byte, 512)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		log.Errorf("Error reading from connection: %v", err)
+		return
+	}
+	query := parseQuery(buffer[:n])
+	parts := strings.SplitN(query, " ", 2)
 	if len(parts) != 2 || strings.ToLower(parts[0]) != "query" {
 		log.Warnf("Malformed query: %s", query)
 		conn.Write([]byte("5:PERM ,"))
@@ -162,20 +172,19 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	var cacheKey string
+	cacheKey := getCacheKey(domain)
 	if !config.Redis.Disable {
-		hashedDomain := sha256.Sum256([]byte(domain))
-		cacheKey = CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashedDomain[:])
 		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
 			ttl := ttl - PREFETCH_MARGIN
-			if cache.Result == "" {
+			switch cache.Result {
+			case "":
 				log.Infof("No policy found for %s (from cache, %ds remaining)", domain, ttl)
 				conn.Write([]byte("9:NOTFOUND ,"))
-			} else if cache.Result == "TEMP" {
+			case "TEMP":
 				log.Warnf("Evaluating policy for %s failed temporarily (from cache, %ds remaining)", domain, ttl)
 				conn.Write([]byte("5:TEMP ,"))
-			} else {
+			default:
 				log.Infof("Evaluated policy for %s: %s (from cache, %ds remaining)", domain, cache.Result, ttl)
 				if config.Server.TlsRpt {
 					cache.Result = cache.Result + " " + cache.Report
@@ -188,13 +197,14 @@ func handleConnection(conn net.Conn) {
 
 	result, resultRpt, resultTtl := queryDomain(domain)
 
-	if result == "" {
+	switch result {
+	case "":
 		log.Infof("No policy found for %s (cached for %ds)", domain, resultTtl)
 		conn.Write([]byte("9:NOTFOUND ,"))
-	} else if result == "TEMP" {
+	case "TEMP":
 		log.Warnf("Evaluating policy for %s failed temporarily (cached for %ds)", domain, resultTtl)
 		conn.Write([]byte("5:TEMP ,"))
-	} else {
+	default:
 		log.Infof("Evaluated policy for %s: %s (cached for %ds)", domain, result, resultTtl)
 		res := result
 		if config.Server.TlsRpt {
@@ -216,10 +226,10 @@ type PolicyResult struct {
 }
 
 func queryDomain(domain string) (string, string, uint32) {
-	results := make(chan PolicyResult, 2)
-
+	results := make(chan PolicyResult)
 	ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
 	defer cancel()
+
 	// DANE query
 	go func() {
 		policy, ttl := checkDane(ctx, domain)
@@ -234,11 +244,16 @@ func queryDomain(domain string) (string, string, uint32) {
 
 	result, resultRpt := "", ""
 	var resultTtl uint32 = CACHE_NOTFOUND_TTL
+	var i uint8 = 0
 	for r := range results {
+	    i++
+	    if i >= 2 {
+	        close(results)
+	    }
 		result = r.Policy
 		resultRpt = r.Rpt
 		resultTtl = r.Ttl
-		if r.IsDane {
+		if r.IsDane && r.Policy != "" {
 			break
 		}
 	}
