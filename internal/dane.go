@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 
 	"github.com/asaskevich/govalidator"
@@ -23,31 +22,37 @@ type ResultWithTtl struct {
 	Err    error
 }
 
-func getMxRecords(ctx context.Context, domain string) ([]string, uint32, error) {
+func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error) {
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeMX)
+	m.SetQuestion(dns.Fqdn(*domain), dns.TypeMX)
 	m.SetEdns0(1232, true)
 
-	r, _, err := client.ExchangeContext(ctx, m, config.Dns.Address)
+	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {
 		return nil, 0, err
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return nil, 0, fmt.Errorf("DNS error: %v", dns.RcodeToString[r.Rcode])
+		return nil, 0, errors.New(dns.RcodeToString[r.Rcode])
 	}
 
 	var mxRecords []string
 	var ttls []uint32
+	hasError := false
 	if r.MsgHdr.AuthenticatedData {
 		for _, answer := range r.Answer {
 			if mx, ok := answer.(*dns.MX); ok {
 				if !govalidator.IsDNSName(mx.Mx) {
-					return nil, 0, fmt.Errorf("Invalid MX record")
+					hasError = true
+					continue
 				}
 				mxRecords = append(mxRecords, mx.Mx)
 				ttls = append(ttls, mx.Hdr.Ttl)
 			}
 		}
+	}
+
+	if hasError && len(mxRecords) == 0 {
+		return nil, 0, errors.New("invalid MX record")
 	}
 
 	return mxRecords, findMin(ttls), nil
@@ -87,13 +92,12 @@ func isTlsaUsable(r *dns.TLSA) bool {
 	return true
 }
 
-func checkTlsa(ctx context.Context, mx string) ResultWithTtl {
-	tlsaName := "_25._tcp." + mx
+func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(tlsaName), dns.TypeTLSA)
+	m.SetQuestion(dns.Fqdn("_25._tcp."+(*mx)), dns.TypeTLSA)
 	m.SetEdns0(1232, true)
 
-	r, _, err := client.ExchangeContext(ctx, m, config.Dns.Address)
+	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {
 		return ResultWithTtl{Result: "", Ttl: 0, Err: err}
 	}
@@ -101,7 +105,7 @@ func checkTlsa(ctx context.Context, mx string) ResultWithTtl {
 		return ResultWithTtl{Result: "", Ttl: 0}
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return ResultWithTtl{Result: "", Ttl: 0, Err: fmt.Errorf("DNS error: %v", r.Rcode)}
+		return ResultWithTtl{Result: "", Ttl: 0, Err: errors.New(dns.RcodeToString[r.Rcode])}
 	}
 
 	result := ""
@@ -124,11 +128,11 @@ func checkTlsa(ctx context.Context, mx string) ResultWithTtl {
 	return ResultWithTtl{Result: result, Ttl: findMin(ttls)}
 }
 
-func checkDane(ctx context.Context, domain string) (string, uint32) {
+func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 	mxRecords, ttl, err := getMxRecords(ctx, domain)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			log.Warnf("DNS error (MX): %v", err)
+			log.Warnf("DNS error during MX lookup for %q: %v", *domain, err)
 		}
 		return "TEMP", 0
 	}
@@ -140,7 +144,7 @@ func checkDane(ctx context.Context, domain string) (string, uint32) {
 	tlsaResults := make(chan ResultWithTtl)
 	for _, mx := range mxRecords {
 		go func(mx string) {
-			tlsaResults <- checkTlsa(ctx, mx)
+			tlsaResults <- checkTlsa(ctx, &mx)
 		}(mx)
 	}
 
@@ -149,13 +153,13 @@ func checkDane(ctx context.Context, domain string) (string, uint32) {
 	ttls = append(ttls, ttl)
 	var i int = 0
 	for res := range tlsaResults {
-	    i++
-	    if i >= numRecords {
-	        close(tlsaResults)
-	    }
+		i++
+		if i >= numRecords {
+			close(tlsaResults)
+		}
 		if res.Err != nil {
 			if !errors.Is(err, context.Canceled) {
-				log.Warnf("DNS error (TLSA): %v", res.Err)
+				log.Warnf("DNS error during TLSA lookup for %q: %v", *domain, res.Err)
 			}
 			hasError = true
 			continue
