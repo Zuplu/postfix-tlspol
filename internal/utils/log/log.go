@@ -7,9 +7,9 @@ package log
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 // LogLevel represents the severity of the log message.
@@ -39,7 +39,7 @@ const (
 var logMutex sync.Mutex
 
 // output is the writer where logs are written. Defaults to os.Stderr
-var output io.Writer = os.Stderr
+var output = os.Stderr
 
 // logMessage formats and outputs the log message with the appropriate color
 func logMessage(level LogLevel, message string) {
@@ -51,23 +51,23 @@ func logMessage(level LogLevel, message string) {
 
 	switch level {
 	case DEBUG:
-		levelStr = "DBG"
+		levelStr = "DEBUG "
 		color = colorGrey
 	case INFO:
-		levelStr = "INF"
+		levelStr = "INFO  "
 		color = colorGreen
 	case WARN:
-		levelStr = "WRN"
+		levelStr = "WARN  "
 		color = colorYellow
 	case ERROR:
-		levelStr = "ERR"
+		levelStr = "ERROR "
 		color = colorRed
 	default:
-		levelStr = "NIL"
+		levelStr = ""
 		color = colorReset
 	}
 
-	coloredMsg := color + "[" + levelStr + "] " + message + colorReset
+	coloredMsg := time.Now().Format(time.StampMilli) + " " + color + levelStr + message + colorReset
 	fmt.Fprintln(output, coloredMsg)
 }
 

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"math/rand/v2"
 	"net"
 	"os"
 	"strings"
@@ -34,7 +35,7 @@ const (
 	CACHE_KEY_PREFIX   = "TLSPOL-"
 	CACHE_NOTFOUND_TTL = 900
 	CACHE_MIN_TTL      = 180
-	REQUEST_TIMEOUT    = 10 * time.Second
+	REQUEST_TIMEOUT    = 5 * time.Second
 )
 
 var (
@@ -47,7 +48,7 @@ var (
 
 func printVersion() {
 	curYear, _, _ := time.Now().Date()
-	log.Infof("postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.", curYear, VERSION)
+	log.Infof("postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n", curYear, VERSION)
 }
 
 func main() {
@@ -96,7 +97,7 @@ func main() {
 			}
 		}()
 	} else if config.Server.Prefetch {
-		log.Error("Cannot prefetch with Redis disabled!")
+		log.Warn("Cannot prefetch with Redis disabled!")
 	}
 
 	// Start the socketmap server for Postfix
@@ -136,9 +137,34 @@ func parseQuery(rawQuery []byte) string {
 	return query
 }
 
-func getCacheKey(domain string) string {
-	k := sha256.Sum256([]byte(domain))
-	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(k[:])
+func getCacheKey(domain *string) string {
+	hash := sha256.Sum256([]byte(*domain))
+	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
+}
+
+func tryCachedPolicy(domain *string, cacheKey *string, conn *net.Conn) bool {
+	if !config.Redis.Disable {
+		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
+		if err == nil && ttl > PREFETCH_MARGIN {
+			ttl := ttl - PREFETCH_MARGIN
+			switch cache.Result {
+			case "":
+				log.Infof("No policy found for %q (from cache, %ds remaining)", *domain, ttl)
+				(*conn).Write([]byte("9:NOTFOUND ,"))
+			case "TEMP":
+				log.Warnf("Evaluating policy for %q failed temporarily (from cache, %ds remaining)", *domain, ttl)
+				(*conn).Write([]byte("5:TEMP ,"))
+			default:
+				log.Infof("Evaluated policy for %q: %s (from cache, %ds remaining)", *domain, cache.Result, ttl)
+				if config.Server.TlsRpt {
+					cache.Result = cache.Result + " " + cache.Report
+				}
+				(*conn).Write([]byte(fmt.Sprintf("%d:OK %s,", len(cache.Result)+3, cache.Result)))
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func handleConnection(conn net.Conn) {
@@ -154,7 +180,7 @@ func handleConnection(conn net.Conn) {
 	query := parseQuery(buffer[:n])
 	parts := strings.SplitN(query, " ", 2)
 	if len(parts) != 2 || strings.ToLower(parts[0]) != "query" {
-		log.Warnf("Malformed query: %s", query)
+		log.Warnf("Malformed query: %q", query)
 		conn.Write([]byte("5:PERM ,"))
 		return
 	}
@@ -162,50 +188,32 @@ func handleConnection(conn net.Conn) {
 	// Parse domain from query and validate
 	domain := strings.ToLower(strings.TrimSpace(parts[1]))
 	if govalidator.IsIPv4(domain) || govalidator.IsIPv6(domain) {
-		log.Debugf("Skipping policy for non-domain: %s", domain)
+		log.Debugf("Skipping policy for non-domain: %q", domain)
 		conn.Write([]byte("9:NOTFOUND ,"))
 		return
 	}
 	if strings.HasPrefix(domain, ".") {
-		log.Debugf("Skipping policy for parent domain: %s", domain)
+		log.Debugf("Skipping policy for parent domain: %q", domain)
 		conn.Write([]byte("9:NOTFOUND ,"))
 		return
 	}
 
-	cacheKey := getCacheKey(domain)
-	if !config.Redis.Disable {
-		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
-		if err == nil && ttl > PREFETCH_MARGIN {
-			ttl := ttl - PREFETCH_MARGIN
-			switch cache.Result {
-			case "":
-				log.Infof("No policy found for %s (from cache, %ds remaining)", domain, ttl)
-				conn.Write([]byte("9:NOTFOUND ,"))
-			case "TEMP":
-				log.Warnf("Evaluating policy for %s failed temporarily (from cache, %ds remaining)", domain, ttl)
-				conn.Write([]byte("5:TEMP ,"))
-			default:
-				log.Infof("Evaluated policy for %s: %s (from cache, %ds remaining)", domain, cache.Result, ttl)
-				if config.Server.TlsRpt {
-					cache.Result = cache.Result + " " + cache.Report
-				}
-				conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(cache.Result)+3, cache.Result)))
-			}
-			return
-		}
+	cacheKey := getCacheKey(&domain)
+	if tryCachedPolicy(&domain, &cacheKey, &conn) {
+		return
 	}
 
-	result, resultRpt, resultTtl := queryDomain(domain)
+	result, resultRpt, resultTtl := queryDomain(&domain)
 
 	switch result {
 	case "":
-		log.Infof("No policy found for %s (cached for %ds)", domain, resultTtl)
+		log.Infof("No policy found for %q (cached for %ds)", domain, resultTtl)
 		conn.Write([]byte("9:NOTFOUND ,"))
 	case "TEMP":
-		log.Warnf("Evaluating policy for %s failed temporarily (cached for %ds)", domain, resultTtl)
+		log.Warnf("Evaluating policy for %q failed temporarily (cached for %ds)", domain, resultTtl)
 		conn.Write([]byte("5:TEMP ,"))
 	default:
-		log.Infof("Evaluated policy for %s: %s (cached for %ds)", domain, result, resultTtl)
+		log.Infof("Evaluated policy for %q: %s (cached for %ds)", domain, result, resultTtl)
 		res := result
 		if config.Server.TlsRpt {
 			res = res + " " + resultRpt
@@ -214,7 +222,7 @@ func handleConnection(conn net.Conn) {
 	}
 
 	if !config.Redis.Disable {
-		cacheJsonSet(redisClient, cacheKey, CacheStruct{Domain: domain, Result: result, Report: resultRpt, Ttl: resultTtl})
+		cacheJsonSet(redisClient, &cacheKey, &CacheStruct{Domain: domain, Result: result, Report: resultRpt, Ttl: resultTtl})
 	}
 }
 
@@ -225,20 +233,20 @@ type PolicyResult struct {
 	Ttl    uint32
 }
 
-func queryDomain(domain string) (string, string, uint32) {
+func queryDomain(domain *string) (string, string, uint32) {
 	results := make(chan PolicyResult)
 	ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
 	defer cancel()
 
 	// DANE query
 	go func() {
-		policy, ttl := checkDane(ctx, domain)
+		policy, ttl := checkDane(&ctx, domain)
 		results <- PolicyResult{IsDane: true, Policy: policy, Rpt: "", Ttl: ttl}
 	}()
 
 	// MTA-STS query
 	go func() {
-		policy, rpt, ttl := checkMtaSts(ctx, domain)
+		policy, rpt, ttl := checkMtaSts(&ctx, domain)
 		results <- PolicyResult{IsDane: false, Policy: policy, Rpt: rpt, Ttl: ttl}
 	}()
 
@@ -246,10 +254,10 @@ func queryDomain(domain string) (string, string, uint32) {
 	var resultTtl uint32 = CACHE_NOTFOUND_TTL
 	var i uint8 = 0
 	for r := range results {
-	    i++
-	    if i >= 2 {
-	        close(results)
-	    }
+		i++
+		if i >= 2 {
+			close(results)
+		}
 		result = r.Policy
 		resultRpt = r.Rpt
 		resultTtl = r.Ttl
@@ -267,15 +275,15 @@ func queryDomain(domain string) (string, string, uint32) {
 	return result, resultRpt, resultTtl
 }
 
-func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint32, error) {
+func cacheJsonGet(redisClient *redis.Client, cacheKey *string) (CacheStruct, uint32, error) {
 	var data CacheStruct
 
-	jsonData, err := redisClient.Get(bgCtx, cacheKey).Result()
+	jsonData, err := redisClient.Get(bgCtx, *cacheKey).Result()
 	if err != nil {
 		return data, 0, err
 	}
 
-	ttl, err := redisClient.TTL(bgCtx, cacheKey).Result()
+	ttl, err := redisClient.TTL(bgCtx, *cacheKey).Result()
 	if err != nil {
 		log.Warnf("Error getting TTL: %v", err)
 		return data, 0, err
@@ -284,13 +292,13 @@ func cacheJsonGet(redisClient *redis.Client, cacheKey string) (CacheStruct, uint
 	return data, uint32(ttl.Seconds()), json.Unmarshal([]byte(jsonData), &data)
 }
 
-func cacheJsonSet(redisClient *redis.Client, cacheKey string, data CacheStruct) error {
-	jsonData, err := json.Marshal(data)
+func cacheJsonSet(redisClient *redis.Client, cacheKey *string, data *CacheStruct) error {
+	jsonData, err := json.Marshal(*data)
 	if err != nil {
-		return fmt.Errorf("error marshaling JSON: %v", err)
+		return fmt.Errorf("Error marshaling JSON: %v", err)
 	}
 
-	return redisClient.Set(bgCtx, cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN)*time.Second).Err()
+	return redisClient.Set(bgCtx, *cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN-rand.Uint32N(60))*time.Second).Err()
 }
 
 func updateDatabase() error {

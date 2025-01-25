@@ -20,17 +20,17 @@ import (
 	"github.com/miekg/dns"
 )
 
-func checkMtaStsRecord(ctx context.Context, domain string) (bool, error) {
+func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn("_mta-sts."+domain), dns.TypeTXT)
+	m.SetQuestion(dns.Fqdn("_mta-sts."+(*domain)), dns.TypeTXT)
 	m.SetEdns0(1232, true)
 
-	r, _, err := client.ExchangeContext(ctx, m, config.Dns.Address)
+	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {
 		return false, err
 	}
 	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return false, fmt.Errorf("DNS error: %v", dns.RcodeToString[r.Rcode])
+		return false, errors.New(dns.RcodeToString[r.Rcode])
 	}
 	if len(r.Answer) == 0 {
 		return false, nil
@@ -49,11 +49,65 @@ func checkMtaStsRecord(ctx context.Context, domain string) (bool, error) {
 	return false, nil
 }
 
-func checkMtaSts(ctx context.Context, domain string) (string, string, uint32) {
+var httpClient = &http.Client{
+	// Disable following redirects (see [RFC 8461, 3.3])
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: false,            // Ensure SSL certificate validation
+			MinVersion:         tls.VersionTLS12, // set minimum to TLSv1.2
+		},
+		DisableKeepAlives: true,
+	},
+	Timeout: REQUEST_TIMEOUT, // Set a timeout for the request
+}
+
+func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string, mxHosts *string, existingKeys *map[string]bool, line string) bool {
+	line = strings.TrimSpace(line)
+	if !govalidator.IsPrintableASCII(line) && !govalidator.IsUTFLetterNumeric(line) {
+		return false // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
+	}
+	if len(line) != len(govalidator.BlackList(line, "{}")) {
+		return true // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
+	}
+	keyValPair := strings.SplitN(line, ":", 2)
+	if len(keyValPair) != 2 {
+		return false // invalid policy
+	}
+	key, val := strings.TrimSpace(keyValPair[0]), strings.TrimSpace(keyValPair[1])
+	if key != "mx" && (*existingKeys)[key] {
+		return true // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
+	}
+	(*existingKeys)[key] = true
+	*report = (*report) + " { policy_string = " + key + ": " + val + " }"
+	switch key {
+	case "mx":
+		if !govalidator.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
+			return false // invalid policy
+		}
+		*mxHosts = (*mxHosts) + " mx_host_pattern=" + val
+		if strings.HasPrefix(val, "*.") {
+			val = val[1:]
+		}
+		*mxServers = append(*mxServers, val)
+	case "mode":
+		*mode = val
+	case "max_age":
+		age, err := strconv.ParseUint(val, 10, 32)
+		if err == nil {
+			*maxAge = uint32(age)
+		}
+	}
+	return true
+}
+
+func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) {
 	hasRecord, err := checkMtaStsRecord(ctx, domain)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			log.Warnf("DNS error (MTA-STS): %v", err)
+			log.Warnf("DNS error during MTA-STS lookup for %q: %v", *domain, err)
 		}
 		return "TEMP", "", 0
 	}
@@ -61,27 +115,13 @@ func checkMtaSts(ctx context.Context, domain string) (string, string, uint32) {
 		return "", "", 0
 	}
 
-	c := &http.Client{
-		// Disable following redirects (see [RFC 8461, 3.3])
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: false,            // Ensure SSL certificate validation
-				MinVersion:         tls.VersionTLS12, // set minimum to TLSv1.2
-			},
-			DisableKeepAlives: true,
-		},
-		Timeout: REQUEST_TIMEOUT, // Set a timeout for the request
-	}
-
-	mtaSTSURL := "https://mta-sts." + domain + "/.well-known/mta-sts.txt"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mtaSTSURL, nil)
+	mtaSTSURL := "https://mta-sts." + (*domain) + "/.well-known/mta-sts.txt"
+	req, err := http.NewRequestWithContext(*ctx, http.MethodGet, mtaSTSURL, nil)
 	if err != nil {
 		return "", "", 0
 	}
-	resp, err := c.Do(req)
+	req.Header.Set("User-Agent", "postfix-tlspol/"+VERSION)
+	resp, err := httpClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return "", "", 0
 	}
@@ -95,43 +135,11 @@ func checkMtaSts(ctx context.Context, domain string) (string, string, uint32) {
 	existingKeys := make(map[string]bool)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !govalidator.IsPrintableASCII(line) && !govalidator.IsUTFLetterNumeric(line) {
-			return "", "", 0 // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
-		}
-		if len(line) != len(govalidator.BlackList(line, "{}")) {
-			continue // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
-		}
-		keyValPair := strings.SplitN(line, ":", 2)
-		if len(keyValPair) != 2 {
-			return "", "", 0 // invalid policy
-		}
-		key, val := strings.TrimSpace(keyValPair[0]), strings.TrimSpace(keyValPair[1])
-		if key != "mx" && existingKeys[key] {
-			continue // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
-		}
-		existingKeys[key] = true
-		report = report + " { policy_string = " + key + ": " + val + " }"
-		switch key {
-		case "mx":
-			if !govalidator.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
-				return "", "", 0 // invalid policy
-			}
-			mxHosts = mxHosts + " mx_host_pattern=" + val
-			if strings.HasPrefix(val, "*.") {
-				val = val[1:]
-			}
-			mxServers = append(mxServers, val)
-		case "mode":
-			mode = val
-		case "max_age":
-			age, err := strconv.ParseUint(val, 10, 32)
-			if err == nil {
-				maxAge = uint32(age)
-			}
+		if !parseLine(&mxServers, &mode, &maxAge, &report, &mxHosts, &existingKeys, scanner.Text()) {
+			return "", "", 0
 		}
 	}
-	report = "policy_type=sts policy_domain=" + domain + fmt.Sprintf(" policy_ttl=%d", maxAge) + mxHosts + report
+	report = "policy_type=sts policy_domain=" + (*domain) + fmt.Sprintf(" policy_ttl=%d", maxAge) + mxHosts + report
 
 	if mode == "enforce" {
 		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"
