@@ -22,7 +22,7 @@ RUN mkdir -p /data \
   && chown default:default /data
 
 # Setup postfix-tlspol
-RUN su default -c 'sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/prefetch: no/prefetch: yes/" /build/configs/config.yaml' \
+RUN su default -c 'sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" /build/configs/config.yaml' \
   && mv /build/build/postfix-tlspol / \
   && mv /build/configs/config.yaml /data/ \
   && rm -rf /build

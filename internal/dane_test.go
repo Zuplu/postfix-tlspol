@@ -19,16 +19,25 @@ func init() {
 
 func TestDane(t *testing.T) {
 	domains := []string{"ietf.org", "ripe.net", "nlnet.nl", "denic.de", "bund.de", "zuplu.com", "mailbox.org", "protonmail.com"}
+
+	passedOnce := false
 	for _, domain := range domains {
 		func(domain string) {
-			if t.Run(fmt.Sprintf("Domain=%q", domain), func(t *testing.T) {
+			t.Run(fmt.Sprintf("Domain=%q", domain), func(t *testing.T) {
+				if passedOnce && testing.Short() {
+					t.SkipNow()
+					return
+				}
 				policy, _ := checkDane(&bgCtx, &domain)
 				if policy != "dane-only" {
-					t.Errorf("Expected DANE for %q, but not detected", domain)
+					t.Skipf("Expected DANE for %q, but not detected", domain)
+				} else if !passedOnce {
+					passedOnce = true
 				}
-			}) && testing.Short() {
-				t.Skip("At least one test passed!")
-			}
+			})
 		}(domain)
+	}
+	if !passedOnce {
+		t.Error("All tests failed.")
 	}
 }

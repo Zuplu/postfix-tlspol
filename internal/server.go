@@ -167,6 +167,40 @@ func tryCachedPolicy(domain *string, cacheKey *string, conn *net.Conn) bool {
 	return false
 }
 
+func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
+	type DanePolicy struct {
+		Policy string `json:"policy"`
+		Ttl    uint32 `json:"ttl"`
+	}
+	type MtaStsPolicy struct {
+		Policy string `json:"policy"`
+		Ttl    uint32 `json:"ttl"`
+		Report string `json:"report"`
+	}
+	type Result struct {
+		Dane   DanePolicy   `json:"dane"`
+		MtaSts MtaStsPolicy `json:"mta-sts"`
+	}
+	dPol, dTtl := checkDane(ctx, domain)
+	msPol, msRpt, msTtl := checkMtaSts(ctx, domain)
+	r := Result{
+		Dane: DanePolicy{
+			Policy: dPol,
+			Ttl:    dTtl,
+		},
+		MtaSts: MtaStsPolicy{
+			Policy: msPol,
+			Ttl:    msTtl,
+			Report: msRpt,
+		},
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return
+	}
+	(*conn).Write(b)
+}
+
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
@@ -179,14 +213,29 @@ func handleConnection(conn net.Conn) {
 	}
 	query := parseQuery(buffer[:n])
 	parts := strings.SplitN(query, " ", 2)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "query" {
+	if len(parts) != 2 {
 		log.Warnf("Malformed query: %q", query)
 		conn.Write([]byte("5:PERM ,"))
 		return
 	}
+	cmd := strings.ToLower(parts[0])
+	if cmd != "query" && cmd != "json" {
+		log.Warnf("Unknown command: %q", query)
+		conn.Write([]byte("5:PERM ,"))
+		return
+	}
 
-	// Parse domain from query and validate
+	// Parse domain from query
 	domain := strings.ToLower(strings.TrimSpace(parts[1]))
+
+	if cmd == "json" {
+		ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
+		defer cancel()
+		replyJson(&ctx, &conn, &domain)
+		return
+	}
+
+	// Validate domain
 	if govalidator.IsIPv4(domain) || govalidator.IsIPv6(domain) {
 		log.Debugf("Skipping policy for non-domain: %q", domain)
 		conn.Write([]byte("9:NOTFOUND ,"))
