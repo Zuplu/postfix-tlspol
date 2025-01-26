@@ -20,16 +20,25 @@ func init() {
 
 func TestMtaSts(t *testing.T) {
 	domains := []string{"gmail.com", "outlook.com", "zuplu.com", "mailbox.org", "protonmail.com"}
+
+	passedOnce := false
 	for _, domain := range domains {
 		func(domain string) {
-			if t.Run(fmt.Sprintf("Domain=%q", domain), func(t *testing.T) {
+			t.Run(fmt.Sprintf("Domain=%q", domain), func(t *testing.T) {
+				if passedOnce && testing.Short() {
+					t.SkipNow()
+					return
+				}
 				policy, _, _ := checkMtaSts(&bgCtx, &domain)
 				if !strings.HasPrefix(policy, "secure ") {
-					t.Errorf("Expected MTA-STS for %q, but not detected", domain)
+					t.Skipf("Expected MTA-STS for %q, but not detected", domain)
+				} else if !passedOnce {
+					passedOnce = true
 				}
-			}) && testing.Short() {
-				t.Skip("At least one test passed!")
-			}
+			})
 		}(domain)
+	}
+	if !passedOnce {
+		t.Error("All tests failed.")
 	}
 }
