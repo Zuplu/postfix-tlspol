@@ -34,11 +34,11 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
-		break
 	case dns.RcodeServerFailure:
 		if !config.Server.Strict {
 			break
 		}
+		fallthrough
 	default:
 		return nil, 0, errors.New(dns.RcodeToString[r.Rcode])
 	}
@@ -111,11 +111,11 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
-		break
 	case dns.RcodeServerFailure:
 		if !config.Server.Strict {
 			break
 		}
+		fallthrough
 	default:
 		return ResultWithTtl{Result: "", Ttl: 0, Err: errors.New(dns.RcodeToString[r.Rcode])}
 	}

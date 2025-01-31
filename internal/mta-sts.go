@@ -30,12 +30,7 @@ func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
 		return false, err
 	}
 	switch r.Rcode {
-	case dns.RcodeSuccess, dns.RcodeNameError:
-		break
-	case dns.RcodeServerFailure:
-		if !config.Server.Strict {
-			break
-		}
+	case dns.RcodeSuccess, dns.RcodeNameError, dns.RcodeServerFailure:
 	default:
 		return false, errors.New(dns.RcodeToString[r.Rcode])
 	}
