@@ -11,8 +11,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"slices"
 
-	"github.com/asaskevich/govalidator"
+	"github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
 )
 
@@ -31,7 +32,14 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	if err != nil {
 		return nil, 0, err
 	}
-	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
+	switch r.Rcode {
+	case dns.RcodeSuccess, dns.RcodeNameError:
+		break
+	case dns.RcodeServerFailure:
+		if !config.Server.Strict {
+			break
+		}
+	default:
 		return nil, 0, errors.New(dns.RcodeToString[r.Rcode])
 	}
 
@@ -101,11 +109,18 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 	if err != nil {
 		return ResultWithTtl{Result: "", Ttl: 0, Err: err}
 	}
+	switch r.Rcode {
+	case dns.RcodeSuccess, dns.RcodeNameError:
+		break
+	case dns.RcodeServerFailure:
+		if !config.Server.Strict {
+			break
+		}
+	default:
+		return ResultWithTtl{Result: "", Ttl: 0, Err: errors.New(dns.RcodeToString[r.Rcode])}
+	}
 	if len(r.Answer) == 0 {
 		return ResultWithTtl{Result: "", Ttl: 0}
-	}
-	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
-		return ResultWithTtl{Result: "", Ttl: 0, Err: errors.New(dns.RcodeToString[r.Rcode])}
 	}
 
 	result := ""
@@ -181,4 +196,11 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 	}
 
 	return "", findMin(ttls)
+}
+
+func findMin(s []uint32) uint32 {
+	if len(s) == 0 {
+		return 0
+	}
+	return slices.Min(s)
 }

@@ -15,6 +15,7 @@ type ServerConfig struct {
 	Address  string `yaml:"address"`
 	TlsRpt   bool   `yaml:"tlsrpt"`
 	Prefetch bool   `yaml:"prefetch"`
+	Strict   bool   `yaml:"strict"`
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
@@ -22,6 +23,7 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	c.Address = "127.0.0.1:8642"
 	c.TlsRpt = false
 	c.Prefetch = true
+	c.Strict = false
 	type alias ServerConfig
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err

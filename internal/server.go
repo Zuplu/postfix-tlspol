@@ -6,20 +6,26 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"math"
 	"math/rand/v2"
 	"net"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/asaskevich/govalidator"
+	"github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
+	"github.com/neilotoole/jsoncolor"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -46,30 +52,102 @@ var (
 	redisClient *redis.Client
 )
 
-func printVersion() {
-	curYear, _, _ := time.Now().Date()
-	log.Infof("postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n", curYear, VERSION)
+var showVersion = false
+var configFile string
+var queryMode = false
+
+func init() {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "."
+	}
+	exePath := filepath.Dir(exe)
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "."
+	}
+	configFileDefault, err := filepath.Abs(path.Join(exePath, "../configs/config.yaml"))
+	if err != nil {
+		configFileDefault = "configs/config.yaml"
+	}
+	configFileDefault, err = filepath.Rel(wd, configFileDefault)
+	if err != nil {
+		configFileDefault = "configs/config.yaml"
+	}
+
+	flag.BoolVar(&showVersion, "version", false, "Show version")
+	flag.StringVar(&configFile, "config", configFileDefault, "Path to the config.yaml")
+	flag.String("query", "", "Query a domain")
+}
+
+func flagQueryFunc(f *flag.Flag) {
+	if (*f).Name != "query" {
+		return
+	}
+	queryMode = true
+	domain := (*f).Value
+	conn, err := net.Dial("tcp", config.Server.Address)
+	if err != nil {
+		log.Errorf("Could not query domain %q. Is postfix-tlspol running? (%v)", domain, err)
+		return
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, ":json %s", domain)
+	raw, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		log.Errorf("Could not query domain %q. (%v)", domain, err)
+		return
+	}
+	result := new(Result)
+	err = json.Unmarshal(raw, &result)
+	if err != nil {
+		log.Errorf("Could not query domain %q. (%v)", domain, err)
+		return
+	}
+	o, err := os.Stdout.Stat()
+	if err == nil && (o.Mode()&os.ModeCharDevice) != 0 {
+		enc := jsoncolor.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.SetColors(jsoncolor.DefaultColors())
+		err = enc.Encode(result)
+	} else {
+		enc := json.NewEncoder(os.Stdout)
+		err = enc.Encode(result)
+	}
+	if err != nil {
+		log.Errorf("Could not query domain %q. (%v)", domain, err)
+		return
+	}
+	return
 }
 
 func main() {
-	// Print version at start
-	printVersion()
+	curYear, _, _ := time.Now().Date()
+	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n\n", curYear, VERSION)
 
-	if len(os.Args) < 2 {
-		log.Info("Usage: postfix-tlspol <config.yaml>")
-		return
-	}
+	flag.Parse()
 
-	param := os.Args[1]
-	if strings.ToLower(param) == "version" {
+	if showVersion {
+		fmt.Printf("Version: %s\n\n", VERSION)
 		return
 	}
 
 	// Read config.yaml
 	var err error
-	config, err = loadConfig(param)
+	config, err = loadConfig(configFile)
 	if err != nil {
 		log.Errorf("Error loading config: %v", err)
+		return
+	}
+
+	flag.Visit(flagQueryFunc)
+
+	if queryMode {
+		return
+	}
+
+	if len(os.Args) < 2 {
+		flag.PrintDefaults()
 		return
 	}
 
@@ -142,7 +220,7 @@ func getCacheKey(domain *string) string {
 	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
 }
 
-func tryCachedPolicy(domain *string, cacheKey *string, conn *net.Conn) bool {
+func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
 	if !config.Redis.Disable {
 		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
@@ -167,38 +245,71 @@ func tryCachedPolicy(domain *string, cacheKey *string, conn *net.Conn) bool {
 	return false
 }
 
+type DanePolicy struct {
+	Policy string  `json:"policy"`
+	Ttl    uint32  `json:"ttl"`
+	Time   float64 `json:"time"`
+}
+type MtaStsPolicy struct {
+	Policy string  `json:"policy"`
+	Ttl    uint32  `json:"ttl"`
+	Report string  `json:"report"`
+	Time   float64 `json:"time"`
+}
+type Result struct {
+	Domain string       `json:"domain"`
+	Dane   DanePolicy   `json:"dane"`
+	MtaSts MtaStsPolicy `json:"mta-sts"`
+}
+
 func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
-	type DanePolicy struct {
-		Policy string `json:"policy"`
-		Ttl    uint32 `json:"ttl"`
-	}
-	type MtaStsPolicy struct {
-		Policy string `json:"policy"`
-		Ttl    uint32 `json:"ttl"`
-		Report string `json:"report"`
-	}
-	type Result struct {
-		Dane   DanePolicy   `json:"dane"`
-		MtaSts MtaStsPolicy `json:"mta-sts"`
-	}
+	ta := float64(time.Now().UnixNano()) / float64(time.Second)
 	dPol, dTtl := checkDane(ctx, domain)
+	tb := float64(time.Now().UnixNano()) / float64(time.Second)
 	msPol, msRpt, msTtl := checkMtaSts(ctx, domain)
+	tc := float64(time.Now().UnixNano()) / float64(time.Second)
+
 	r := Result{
+		Domain: *domain,
 		Dane: DanePolicy{
 			Policy: dPol,
 			Ttl:    dTtl,
+			Time:   math.Round((tb-ta)*1000) / 1000,
 		},
 		MtaSts: MtaStsPolicy{
 			Policy: msPol,
 			Ttl:    msTtl,
 			Report: msRpt,
+			Time:   math.Round((tc-tb)*1000) / 1000,
 		},
 	}
+
 	b, err := json.Marshal(r)
 	if err != nil {
+		log.Errorf("Could not marshal JSON: %v", err)
 		return
 	}
+
 	(*conn).Write(b)
+	(*conn).Write([]byte("\n"))
+}
+
+func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32) {
+	switch *policy {
+	case "":
+		log.Infof("No policy found for %q (cached for %ds)", *domain, *ttl)
+		(*conn).Write([]byte("9:NOTFOUND ,"))
+	case "TEMP":
+		log.Warnf("Evaluating policy for %q failed temporarily (cached for %ds)", *domain, *ttl)
+		(*conn).Write([]byte("5:TEMP ,"))
+	default:
+		log.Infof("Evaluated policy for %q: %s (cached for %ds)", *domain, *policy, *ttl)
+		res := *policy
+		if config.Server.TlsRpt {
+			res = res + " " + (*report)
+		}
+		(*conn).Write([]byte(fmt.Sprintf("%d:OK %s,", len(res)+3, res)))
+	}
 }
 
 func handleConnection(conn net.Conn) {
@@ -248,30 +359,16 @@ func handleConnection(conn net.Conn) {
 	}
 
 	cacheKey := getCacheKey(&domain)
-	if tryCachedPolicy(&domain, &cacheKey, &conn) {
+	if tryCachedPolicy(&conn, &domain, &cacheKey) {
 		return
 	}
 
-	result, resultRpt, resultTtl := queryDomain(&domain)
+	policy, report, ttl := queryDomain(&domain)
 
-	switch result {
-	case "":
-		log.Infof("No policy found for %q (cached for %ds)", domain, resultTtl)
-		conn.Write([]byte("9:NOTFOUND ,"))
-	case "TEMP":
-		log.Warnf("Evaluating policy for %q failed temporarily (cached for %ds)", domain, resultTtl)
-		conn.Write([]byte("5:TEMP ,"))
-	default:
-		log.Infof("Evaluated policy for %q: %s (cached for %ds)", domain, result, resultTtl)
-		res := result
-		if config.Server.TlsRpt {
-			res = res + " " + resultRpt
-		}
-		conn.Write([]byte(fmt.Sprintf("%d:OK %s,", len(res)+3, res)))
-	}
+	replySocketmap(&conn, &domain, &policy, &report, &ttl)
 
 	if !config.Redis.Disable {
-		cacheJsonSet(redisClient, &cacheKey, &CacheStruct{Domain: domain, Result: result, Report: resultRpt, Ttl: resultTtl})
+		cacheJsonSet(redisClient, &cacheKey, &CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl})
 	}
 }
 
@@ -299,29 +396,29 @@ func queryDomain(domain *string) (string, string, uint32) {
 		results <- PolicyResult{IsDane: false, Policy: policy, Rpt: rpt, Ttl: ttl}
 	}()
 
-	result, resultRpt := "", ""
-	var resultTtl uint32 = CACHE_NOTFOUND_TTL
+	policy, report := "", ""
+	var ttl uint32 = CACHE_NOTFOUND_TTL
 	var i uint8 = 0
 	for r := range results {
 		i++
 		if i >= 2 {
 			close(results)
 		}
-		result = r.Policy
-		resultRpt = r.Rpt
-		resultTtl = r.Ttl
+		policy = r.Policy
+		report = r.Rpt
+		ttl = r.Ttl
 		if r.IsDane && r.Policy != "" {
 			break
 		}
 	}
 
-	if result == "" {
-		resultTtl = CACHE_NOTFOUND_TTL
-	} else if result == "TEMP" || resultTtl < CACHE_MIN_TTL {
-		resultTtl = CACHE_MIN_TTL
+	if policy == "" {
+		ttl = CACHE_NOTFOUND_TTL
+	} else if policy == "TEMP" || ttl < CACHE_MIN_TTL {
+		ttl = CACHE_MIN_TTL
 	}
 
-	return result, resultRpt, resultTtl
+	return policy, report, ttl
 }
 
 func cacheJsonGet(redisClient *redis.Client, cacheKey *string) (CacheStruct, uint32, error) {
@@ -371,30 +468,4 @@ func updateDatabase() error {
 	}
 
 	return nil
-}
-
-func findMax(arr []uint32) uint32 {
-	if len(arr) == 0 {
-		return 0
-	}
-	max := arr[0]
-	for _, v := range arr {
-		if v > max {
-			max = v
-		}
-	}
-	return max
-}
-
-func findMin(arr []uint32) uint32 {
-	if len(arr) == 0 {
-		return 0
-	}
-	min := arr[0]
-	for _, v := range arr {
-		if v < min {
-			min = v
-		}
-	}
-	return min
 }

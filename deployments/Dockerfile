@@ -37,7 +37,7 @@ RUN chown -R default:default /usr/share/dnssec-root \
 RUN echo -e "bind 127.0.0.1 -::1\nport 6379\ndaemonize no\nlogfile \"\"\nloglevel notice\ndbfilename cache.rdb\ndir /data" > /etc/redis.conf
 
 # Setup entrypoint
-RUN echo -e "#!/bin/sh\n( cd /data ; /usr/bin/redis-server /etc/redis.conf ) &\n( cd /etc/unbound ; /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &\nexec /postfix-tlspol /data/config.yaml" > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN echo -e "#!/bin/sh\n( cd /data ; /usr/bin/redis-server /etc/redis.conf ) &\n( cd /etc/unbound ; /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &\nexec /postfix-tlspol -config /data/config.yaml" > /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Squash layers
 FROM scratch
