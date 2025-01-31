@@ -64,7 +64,7 @@ install_systemd_service() {
             systemctl enable --now init/postfix-tlspol.service
         fi
         echo "$rst"
-        sleep 1
+        sleep 0.2
         systemctl status -ocat --no-pager postfix-tlspol.service
     else
         echo "${red}systemctl not found.$rst"

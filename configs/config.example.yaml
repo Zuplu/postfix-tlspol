@@ -4,6 +4,7 @@ server:
                            # this is experimental, not backwards compatible
                            # and may result in delivery failures (default false)
   prefetch: true           # prefetch when TTL is about to expire (default true)
+  strict: false            # defer mails when DNS errors on DANE are encountered (default false)
 
 dns:
   address: 127.0.0.53:53   # must support dnssec

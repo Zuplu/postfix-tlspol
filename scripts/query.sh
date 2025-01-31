@@ -1,11 +1,17 @@
 #!/bin/sh
-if command -v nc >/dev/null 2>&1; then
-  echo ":json $1" | nc 127.0.0.1 8642 | python -m json.tool
-  exit 0
-else
-  echo "Install netcat for detailed evaluation.\n"
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 [domain]"
+    exit 1
 fi
 
-if ! postmap -q "$1" socketmap:inet:127.0.0.1:8642:query ; then
-  echo "Not found"
+# Get working directory relative to this script
+BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")
+EXEPATH="$BASEDIR/build/postfix-tlspol"
+
+if [ ! -f "$EXEPATH" ]; then
+    echo "Build and start postfix-tlspol first."
+    exit 1
 fi
+
+exec "$EXEPATH" -query "$1"

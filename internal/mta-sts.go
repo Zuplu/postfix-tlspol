@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/asaskevich/govalidator"
+	"github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
 )
 
@@ -29,7 +29,14 @@ func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if r.Rcode != dns.RcodeSuccess && r.Rcode != dns.RcodeNameError {
+	switch r.Rcode {
+	case dns.RcodeSuccess, dns.RcodeNameError:
+		break
+	case dns.RcodeServerFailure:
+		if !config.Server.Strict {
+			break
+		}
+	default:
 		return false, errors.New(dns.RcodeToString[r.Rcode])
 	}
 	if len(r.Answer) == 0 {
@@ -109,7 +116,7 @@ func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) 
 		if !errors.Is(err, context.Canceled) {
 			log.Warnf("DNS error during MTA-STS lookup for %q: %v", *domain, err)
 		}
-		return "TEMP", "", 0
+		return "", "", 0
 	}
 	if !hasRecord {
 		return "", "", 0
