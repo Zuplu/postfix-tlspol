@@ -15,15 +15,13 @@ type ServerConfig struct {
 	Address  string `yaml:"address"`
 	TlsRpt   bool   `yaml:"tlsrpt"`
 	Prefetch bool   `yaml:"prefetch"`
-	Strict   bool   `yaml:"strict"`
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	// Set default values
-	c.Address = "127.0.0.1:8642"
-	c.TlsRpt = false
-	c.Prefetch = true
-	c.Strict = false
+	c.Address = defaultConfig.Server.Address
+	c.TlsRpt = defaultConfig.Server.TlsRpt
+	c.Prefetch = defaultConfig.Server.Prefetch
 	type alias ServerConfig
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
@@ -37,7 +35,7 @@ type DnsConfig struct {
 
 func (c *DnsConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	// Set default values
-	c.Address = "127.0.0.53:53"
+	c.Address = defaultConfig.Dns.Address
 	type alias DnsConfig
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
@@ -54,10 +52,10 @@ type RedisConfig struct {
 
 func (c *RedisConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	// Set default values
-	c.Disable = false
-	c.Address = "127.0.0.1:6379"
-	c.Password = ""
-	c.DB = 2
+	c.Disable = defaultConfig.Redis.Disable
+	c.Address = defaultConfig.Redis.Address
+	c.Password = defaultConfig.Redis.Password
+	c.DB = defaultConfig.Redis.DB
 	type alias RedisConfig
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
@@ -71,10 +69,28 @@ type Config struct {
 	Redis  RedisConfig  `yaml:"redis"`
 }
 
+var defaultConfig = Config{
+	Server: ServerConfig{
+		Address:  "127.0.0.1:8642",
+		TlsRpt:   false,
+		Prefetch: true,
+	},
+	Dns: DnsConfig{
+		Address: "127.0.0.53:53",
+	},
+	Redis: RedisConfig{
+		Disable:  false,
+		Address:  "127.0.0.1:6379",
+		Password: "",
+		DB:       2,
+	},
+}
+
 func loadConfig(filename string) (Config, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return Config{}, err
+		config := defaultConfig
+		return config, err
 	}
 
 	var config Config

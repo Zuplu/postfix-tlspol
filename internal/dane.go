@@ -34,11 +34,6 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
-	case dns.RcodeServerFailure:
-		if !config.Server.Strict {
-			break
-		}
-		fallthrough
 	default:
 		return nil, 0, errors.New(dns.RcodeToString[r.Rcode])
 	}
@@ -46,16 +41,13 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	var mxRecords []string
 	var ttls []uint32
 	hasError := false
-	if r.MsgHdr.AuthenticatedData {
-		for _, answer := range r.Answer {
-			if mx, ok := answer.(*dns.MX); ok {
-				if !govalidator.IsDNSName(mx.Mx) {
-					hasError = true
-					continue
-				}
-				mxRecords = append(mxRecords, mx.Mx)
-				ttls = append(ttls, mx.Hdr.Ttl)
+	for _, answer := range r.Answer {
+		if mx, ok := answer.(*dns.MX); ok {
+			if checkMx(ctx, &mx.Mx) != 0 {
+				continue
 			}
+			mxRecords = append(mxRecords, mx.Mx)
+			ttls = append(ttls, mx.Hdr.Ttl)
 		}
 	}
 
@@ -64,6 +56,40 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	}
 
 	return mxRecords, findMin(ttls), nil
+}
+
+// Checks whether a specific MX record has DNSSEC-signed A/AAAA records
+func checkMx(ctx *context.Context, mx *string) uint8 {
+	if !govalidator.IsDNSName(*mx) {
+		return 1
+	}
+	types := []uint16{dns.TypeA, dns.TypeAAAA}
+	hasRecord := false
+ipCheck:
+	for _, t := range types {
+		m := new(dns.Msg)
+		m.SetQuestion(dns.Fqdn(*mx), t)
+		m.SetEdns0(1232, true)
+
+		r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
+		if err != nil {
+			continue
+		}
+		switch r.Rcode {
+		case dns.RcodeSuccess:
+			if r.MsgHdr.AuthenticatedData {
+				hasRecord = true
+				break ipCheck
+			}
+			fallthrough
+		default:
+			continue ipCheck
+		}
+	}
+	if hasRecord {
+		return 0
+	}
+	return 2
 }
 
 func isTlsaUsable(r *dns.TLSA) bool {
@@ -111,11 +137,9 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
-	case dns.RcodeServerFailure:
-		if !config.Server.Strict {
-			break
+		if !r.MsgHdr.AuthenticatedData {
+			return ResultWithTtl{Result: "", Ttl: 0}
 		}
-		fallthrough
 	default:
 		return ResultWithTtl{Result: "", Ttl: 0, Err: errors.New(dns.RcodeToString[r.Rcode])}
 	}
@@ -125,17 +149,15 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 
 	result := ""
 	var ttls []uint32
-	if r.MsgHdr.AuthenticatedData {
-		for _, answer := range r.Answer {
-			if tlsa, ok := answer.(*dns.TLSA); ok {
-				if isTlsaUsable(tlsa) {
-					// TLSA records are usable, enforce DANE, return directly
-					return ResultWithTtl{Result: "dane-only", Ttl: tlsa.Hdr.Ttl}
-				} else {
-					// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not; continue searching
-					result = "dane"
-					ttls = append(ttls, tlsa.Hdr.Ttl)
-				}
+	for _, answer := range r.Answer {
+		if tlsa, ok := answer.(*dns.TLSA); ok {
+			if isTlsaUsable(tlsa) {
+				// TLSA records are usable, enforce DANE, return directly
+				return ResultWithTtl{Result: "dane-only", Ttl: tlsa.Hdr.Ttl}
+			} else {
+				// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not; continue searching
+				result = "dane"
+				ttls = append(ttls, tlsa.Hdr.Ttl)
 			}
 		}
 	}

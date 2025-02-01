@@ -14,12 +14,9 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
-	"math"
 	"math/rand/v2"
 	"net"
 	"os"
-	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,26 +54,8 @@ var configFile string
 var queryMode = false
 
 func init() {
-	exe, err := os.Executable()
-	if err != nil {
-		exe = "."
-	}
-	exePath := filepath.Dir(exe)
-	wd, err := os.Getwd()
-	if err != nil {
-		wd = "."
-	}
-	configFileDefault, err := filepath.Abs(path.Join(exePath, "../configs/config.yaml"))
-	if err != nil {
-		configFileDefault = "configs/config.yaml"
-	}
-	configFileDefault, err = filepath.Rel(wd, configFileDefault)
-	if err != nil {
-		configFileDefault = "configs/config.yaml"
-	}
-
 	flag.BoolVar(&showVersion, "version", false, "Show version")
-	flag.StringVar(&configFile, "config", configFileDefault, "Path to the config.yaml")
+	flag.StringVar(&configFile, "config", "configs/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
 }
 
@@ -135,10 +114,6 @@ func main() {
 	// Read config.yaml
 	var err error
 	config, err = loadConfig(configFile)
-	if err != nil {
-		log.Errorf("Error loading config: %v", err)
-		return
-	}
 
 	flag.Visit(flagQueryFunc)
 
@@ -148,6 +123,11 @@ func main() {
 
 	if len(os.Args) < 2 {
 		flag.PrintDefaults()
+		return
+	}
+
+	if err != nil {
+		log.Errorf("Error loading config: %v", err)
 		return
 	}
 
@@ -246,15 +226,15 @@ func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
 }
 
 type DanePolicy struct {
-	Policy string  `json:"policy"`
-	Ttl    uint32  `json:"ttl"`
-	Time   float64 `json:"time"`
+	Policy string `json:"policy"`
+	Ttl    uint32 `json:"ttl"`
+	Time   string `json:"time"`
 }
 type MtaStsPolicy struct {
-	Policy string  `json:"policy"`
-	Ttl    uint32  `json:"ttl"`
-	Report string  `json:"report"`
-	Time   float64 `json:"time"`
+	Policy string `json:"policy"`
+	Ttl    uint32 `json:"ttl"`
+	Report string `json:"report"`
+	Time   string `json:"time"`
 }
 type Result struct {
 	Domain string       `json:"domain"`
@@ -263,24 +243,24 @@ type Result struct {
 }
 
 func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
-	ta := float64(time.Now().UnixNano()) / float64(time.Second)
+	ta := time.Now()
 	dPol, dTtl := checkDane(ctx, domain)
-	tb := float64(time.Now().UnixNano()) / float64(time.Second)
+	tb := time.Now()
 	msPol, msRpt, msTtl := checkMtaSts(ctx, domain)
-	tc := float64(time.Now().UnixNano()) / float64(time.Second)
+	tc := time.Now()
 
 	r := Result{
 		Domain: *domain,
 		Dane: DanePolicy{
 			Policy: dPol,
 			Ttl:    dTtl,
-			Time:   math.Round((tb-ta)*1000) / 1000,
+			Time:   tb.Sub(ta).Truncate(time.Millisecond).String(),
 		},
 		MtaSts: MtaStsPolicy{
 			Policy: msPol,
 			Ttl:    msTtl,
 			Report: msRpt,
-			Time:   math.Round((tc-tb)*1000) / 1000,
+			Time:   tc.Sub(tb).Truncate(time.Millisecond).String(),
 		},
 	}
 
