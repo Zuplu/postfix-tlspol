@@ -3,7 +3,7 @@
  * Copyright (c) 2024-2025 Zuplu
  */
 
-package main
+package tlspol
 
 import (
 	"bufio"
@@ -42,7 +42,7 @@ const (
 )
 
 var (
-	VERSION     = "undefined"
+	Version     = "undefined"
 	bgCtx       = context.Background()
 	client      = new(dns.Client)
 	config      Config
@@ -50,11 +50,13 @@ var (
 )
 
 var showVersion = false
+var showLicense = false
 var configFile string
 var queryMode = false
 
 func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
+	flag.BoolVar(&showLicense, "license", false, "Show LICENSE")
 	flag.StringVar(&configFile, "config", "configs/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
 }
@@ -100,14 +102,21 @@ func flagQueryFunc(f *flag.Flag) {
 	return
 }
 
-func main() {
+func StartDaemon(v *string, licenseText *string) {
+	Version = *v
 	curYear, _, _ := time.Now().Date()
-	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n\n", curYear, VERSION)
 
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("Version: %s\n\n", VERSION)
+		fmt.Printf("%s\n", Version)
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n\n", curYear, Version)
+
+	if showLicense {
+		fmt.Printf("%s\n", *licenseText)
 		return
 	}
 

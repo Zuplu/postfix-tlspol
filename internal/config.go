@@ -3,13 +3,16 @@
  * Copyright (c) 2024-2025 Zuplu
  */
 
-package main
+package tlspol
 
 import (
 	"os"
 
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"gopkg.in/yaml.v3"
 )
+
+var defaultConfig = Config{}
 
 type ServerConfig struct {
 	Address  string `yaml:"address"`
@@ -69,21 +72,10 @@ type Config struct {
 	Redis  RedisConfig  `yaml:"redis"`
 }
 
-var defaultConfig = Config{
-	Server: ServerConfig{
-		Address:  "127.0.0.1:8642",
-		TlsRpt:   false,
-		Prefetch: true,
-	},
-	Dns: DnsConfig{
-		Address: "127.0.0.53:53",
-	},
-	Redis: RedisConfig{
-		Disable:  false,
-		Address:  "127.0.0.1:6379",
-		Password: "",
-		DB:       2,
-	},
+func SetDefaultConfig(data *[]byte) {
+	if err := yaml.Unmarshal(*data, &defaultConfig); err != nil {
+		log.Errorf("Could not initialize default configuration: %v", err)
+	}
 }
 
 func loadConfig(filename string) (Config, error) {
