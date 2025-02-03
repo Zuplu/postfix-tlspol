@@ -24,7 +24,7 @@ build_go() {
     if command -v go >/dev/null 2>&1; then
         echo "${green}Testing basic functionality...$rst"
         # We are only doing a short test here, run scripts/test.sh for a detailed test
-        if go test -short ./internal; then
+        if [ -n "$GITHUB_ACTIONS" ] || go test -short ./...; then
             echo "${green}Test succeeded.$rst"
         else
             echo "${red}Test failed.$rst"
@@ -33,7 +33,7 @@ build_go() {
         echo "${green}Building postfix-tlspol...$rst"
         VERSION=$(git describe --tags --always --long --abbrev=7 --dirty=-modified)
         echo "${cyanbg}Version: ${VERSION}$rst"
-        if go build -tags netgo -ldflags "-d -extldflags '-static' -s -w -X 'main.VERSION=${VERSION}'" -o build/postfix-tlspol ./internal; then
+        if CGO_ENABLED=0 go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=${VERSION}'" -o build/postfix-tlspol .; then
             echo "${green}Build succeeded!$rst"
         else
             echo "${red}Build failed!$rst"
@@ -42,7 +42,7 @@ build_go() {
         # Migrate config.yaml to new directory structure
         [ -f config.yaml ] && mv config.yaml configs/config.yaml
         # Create scripts/config.yaml from blueprint if it does not exist
-        [ ! -f configs/config.yaml ] && cp -a configs/config.example.yaml configs/config.yaml
+        [ ! -f configs/config.yaml ] && cp -a configs/config.default.yaml configs/config.yaml
     else
         echo "${red}Go toolchain not found. Required unless installing as a Docker container.$rst"
         exit 1

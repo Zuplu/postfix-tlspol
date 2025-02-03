@@ -3,7 +3,7 @@
  * Copyright (c) 2024-2025 Zuplu
  */
 
-package main
+package tlspol
 
 import (
 	"bufio"
@@ -122,7 +122,7 @@ func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) 
 	if err != nil {
 		return "", "", 0
 	}
-	req.Header.Set("User-Agent", "postfix-tlspol/"+VERSION)
+	req.Header.Set("User-Agent", "postfix-tlspol/"+Version)
 	resp, err := httpClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return "", "", 0

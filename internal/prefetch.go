@@ -3,7 +3,7 @@
  * Copyright (c) 2024-2025 Zuplu
  */
 
-package main
+package tlspol
 
 import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"

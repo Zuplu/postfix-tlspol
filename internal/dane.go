@@ -3,7 +3,7 @@
  * Copyright (c) 2024-2025 Zuplu
  */
 
-package main
+package tlspol
 
 import (
 	"context"
@@ -34,6 +34,9 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
+		if !r.MsgHdr.AuthenticatedData {
+			return nil, 0, nil
+		}
 	default:
 		return nil, 0, errors.New(dns.RcodeToString[r.Rcode])
 	}
@@ -81,9 +84,7 @@ ipCheck:
 				hasRecord = true
 				break ipCheck
 			}
-			fallthrough
 		default:
-			continue ipCheck
 		}
 	}
 	if hasRecord {
