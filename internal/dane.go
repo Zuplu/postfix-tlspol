@@ -211,17 +211,17 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 		}
 	}
 
-	if hasError {
-		return "TEMP", 0
-	}
-
 	pol := ""
 	if findMax(pols) == 1 {
-		if findMin(pols) == 0 {
+		if findMin(pols) == 0 || hasError {
 			pol = "dane"
 		} else {
 			pol = "dane-only"
 		}
+	}
+
+	if hasError && pol == "" {
+		return "TEMP", 0
 	}
 
 	return pol, findMin(ttls)
