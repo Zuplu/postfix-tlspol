@@ -46,7 +46,7 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	var ttls []uint32
 	for _, answer := range r.Answer {
 		if mx, ok := answer.(*dns.MX); ok {
-			if checkMx(ctx, &mx.Mx) != 0 {
+			if checkMx(ctx, &mx.Mx) != MxOk {
 				incompl = true
 				continue
 			}
@@ -58,10 +58,16 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	return mxRecords, findMin(&ttls), nil, incompl
 }
 
+const (
+	MxOk uint8 = iota
+	MxFail
+	MxNotSec
+)
+
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
 func checkMx(ctx *context.Context, mx *string) uint8 {
 	if !govalidator.IsDNSName(*mx) {
-		return 1
+		return MxFail
 	}
 	types := []uint16{dns.TypeA, dns.TypeAAAA}
 	hasRecord := false
@@ -73,7 +79,7 @@ ipCheck:
 
 		r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 		if err != nil {
-			continue
+			return MxFail
 		}
 		switch r.Rcode {
 		case dns.RcodeSuccess:
@@ -85,9 +91,9 @@ ipCheck:
 		}
 	}
 	if hasRecord {
-		return 0
+		return MxOk
 	}
-	return 2
+	return MxNotSec
 }
 
 func isTlsaUsable(r *dns.TLSA) bool {
@@ -163,6 +169,12 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 	return ResultWithTtl{Result: result, Ttl: findMin(&ttls)}
 }
 
+const (
+	NoDane uint8 = iota
+	Dane
+	DaneOnly
+)
+
 func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain)
 	if err != nil {
@@ -188,7 +200,7 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 	var i int = 0
 	var pols []uint8
 	if incompl {
-		pols = append(pols, 1)
+		pols = append(pols, NoDane)
 	}
 	for res := range tlsaResults {
 		i++
@@ -204,17 +216,17 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 		ttls = append(ttls, res.Ttl)
 		switch res.Result {
 		case "dane-only":
-			pols = append(pols, 2)
+			pols = append(pols, DaneOnly)
 		case "dane":
-			pols = append(pols, 1)
+			pols = append(pols, Dane)
 		default:
-			pols = append(pols, 0)
+			pols = append(pols, NoDane)
 		}
 	}
 
 	pol := ""
-	if findMax(&pols) > 0 {
-		if findMin(&pols) < 2 {
+	if findMax(&pols) >= Dane {
+		if findMin(&pols) <= Dane {
 			pol = "dane"
 		} else {
 			pol = "dane-only"
