@@ -32,10 +32,11 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	if err != nil {
 		return nil, 0, err, false
 	}
+	incompl := false
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
 		if !r.MsgHdr.AuthenticatedData {
-			return nil, 0, nil, false
+			incompl = true
 		}
 	default:
 		return nil, 0, errors.New(dns.RcodeToString[r.Rcode]), false
@@ -43,7 +44,6 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 
 	var mxRecords []string
 	var ttls []uint32
-	incompl := false
 	for _, answer := range r.Answer {
 		if mx, ok := answer.(*dns.MX); ok {
 			if checkMx(ctx, &mx.Mx) != 0 {
@@ -55,7 +55,7 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 		}
 	}
 
-	return mxRecords, findMin(ttls), nil, incompl
+	return mxRecords, findMin(&ttls), nil, incompl
 }
 
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
@@ -160,7 +160,7 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 		}
 	}
 
-	return ResultWithTtl{Result: result, Ttl: findMin(ttls)}
+	return ResultWithTtl{Result: result, Ttl: findMin(&ttls)}
 }
 
 func checkDane(ctx *context.Context, domain *string) (string, uint32) {
@@ -183,13 +183,12 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 		}(mx)
 	}
 
-	hasError := false
 	var ttls []uint32
 	ttls = append(ttls, ttl)
 	var i int = 0
 	var pols []uint8
 	if incompl {
-		pols = append(pols, 0)
+		pols = append(pols, 1)
 	}
 	for res := range tlsaResults {
 		i++
@@ -200,43 +199,41 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 			if !errors.Is(err, context.Canceled) {
 				log.Warnf("DNS error during TLSA lookup for %q: %v", *domain, res.Err)
 			}
-			hasError = true
-			continue
+			return "TEMP", 0
 		}
 		ttls = append(ttls, res.Ttl)
-		if res.Result == "dane-only" {
+		switch res.Result {
+		case "dane-only":
+			pols = append(pols, 2)
+		case "dane":
 			pols = append(pols, 1)
-		} else if res.Result == "dane" {
+		default:
 			pols = append(pols, 0)
 		}
 	}
 
 	pol := ""
-	if findMax(pols) == 1 {
-		if findMin(pols) == 0 || hasError {
+	if findMax(&pols) > 0 {
+		if findMin(&pols) < 2 {
 			pol = "dane"
 		} else {
 			pol = "dane-only"
 		}
 	}
 
-	if hasError && pol == "" {
-		return "TEMP", 0
-	}
-
-	return pol, findMin(ttls)
+	return pol, findMin(&ttls)
 }
 
-func findMin[T uint8 | uint32](s []T) T {
-	if len(s) == 0 {
+func findMin[T uint8 | uint32](s *[]T) T {
+	if len(*s) == 0 {
 		return 0
 	}
-	return slices.Min(s)
+	return slices.Min(*s)
 }
 
-func findMax[T uint8 | uint32](s []T) T {
-	if len(s) == 0 {
+func findMax[T uint8 | uint32](s *[]T) T {
+	if len(*s) == 0 {
 		return 0
 	}
-	return slices.Max(s)
+	return slices.Max(*s)
 }
