@@ -23,30 +23,31 @@ type ResultWithTtl struct {
 	Err    error
 }
 
-func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error) {
+func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error, bool) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(*domain), dns.TypeMX)
 	m.SetEdns0(1232, true)
 
 	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, err, false
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
 		if !r.MsgHdr.AuthenticatedData {
-			return nil, 0, nil
+			return nil, 0, nil, false
 		}
 	default:
-		return nil, 0, errors.New(dns.RcodeToString[r.Rcode])
+		return nil, 0, errors.New(dns.RcodeToString[r.Rcode]), false
 	}
 
 	var mxRecords []string
 	var ttls []uint32
-	hasError := false
+	incompl := false
 	for _, answer := range r.Answer {
 		if mx, ok := answer.(*dns.MX); ok {
 			if checkMx(ctx, &mx.Mx) != 0 {
+				incompl = true
 				continue
 			}
 			mxRecords = append(mxRecords, mx.Mx)
@@ -54,11 +55,7 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 		}
 	}
 
-	if hasError && len(mxRecords) == 0 {
-		return nil, 0, errors.New("invalid MX record")
-	}
-
-	return mxRecords, findMin(ttls), nil
+	return mxRecords, findMin(ttls), nil, incompl
 }
 
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
@@ -167,7 +164,7 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 }
 
 func checkDane(ctx *context.Context, domain *string) (string, uint32) {
-	mxRecords, ttl, err := getMxRecords(ctx, domain)
+	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			log.Warnf("DNS error during MX lookup for %q: %v", *domain, err)
@@ -186,10 +183,14 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 		}(mx)
 	}
 
-	canDane, hasError := false, false
+	hasError := false
 	var ttls []uint32
 	ttls = append(ttls, ttl)
 	var i int = 0
+	var pols []uint8
+	if incompl {
+		pols = append(pols, 0)
+	}
 	for res := range tlsaResults {
 		i++
 		if i >= numRecords {
@@ -204,26 +205,38 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 		}
 		ttls = append(ttls, res.Ttl)
 		if res.Result == "dane-only" {
-			return "dane-only", findMin(ttls) // at least one record is supported
+			pols = append(pols, 1)
 		} else if res.Result == "dane" {
-			canDane = true
+			pols = append(pols, 0)
 		}
-	}
-
-	if canDane {
-		return "dane", findMin(ttls) // might be supported, Postfix has to decide
 	}
 
 	if hasError {
 		return "TEMP", 0
 	}
 
-	return "", findMin(ttls)
+	pol := ""
+	if findMax(pols) == 1 {
+		if findMin(pols) == 0 {
+			pol = "dane"
+		} else {
+			pol = "dane-only"
+		}
+	}
+
+	return pol, findMin(ttls)
 }
 
-func findMin(s []uint32) uint32 {
+func findMin[T uint8 | uint32](s []T) T {
 	if len(s) == 0 {
 		return 0
 	}
 	return slices.Min(s)
+}
+
+func findMax[T uint8 | uint32](s []T) T {
+	if len(s) == 0 {
+		return 0
+	}
+	return slices.Max(s)
 }
