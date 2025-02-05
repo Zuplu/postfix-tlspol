@@ -68,10 +68,14 @@ var httpClient = &http.Client{
 
 func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string, mxHosts *string, existingKeys *map[string]bool, line string) bool {
 	line = strings.TrimSpace(line)
+	lineLen := len(line)
+	if lineLen == 0 {
+		return true
+	}
 	if !govalidator.IsPrintableASCII(line) && !govalidator.IsUTFLetterNumeric(line) {
 		return false // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
 	}
-	if len(line) != len(govalidator.BlackList(line, "{}")) {
+	if lineLen != len(govalidator.BlackList(line, "{}")) {
 		return true // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
 	}
 	keyValPair := strings.SplitN(line, ":", 2)
@@ -101,6 +105,7 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 		if err == nil {
 			*maxAge = uint32(age)
 		}
+	default:
 	}
 	return true
 }
