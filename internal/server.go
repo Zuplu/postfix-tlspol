@@ -322,14 +322,14 @@ func handleConnection(conn *net.TCPConn) {
 		parts := strings.SplitN(query, " ", 2)
 		if len(parts) != 2 {
 			log.Warnf("Malformed query: %q", query)
-			(*conn).Write([]byte("5:PERM ,"))
+			(*conn).Write([]byte("5:TEMP ,"))
 			continue
 		}
 		cmd := strings.ToLower(parts[0])
 		if cmd != "query" && cmd != "json" {
 			log.Warnf("Unknown command: %q", query)
 			(*conn).Write([]byte("5:PERM ,"))
-			continue
+			break
 		}
 
 		domain := strings.ToLower(strings.TrimSpace(parts[1]))
