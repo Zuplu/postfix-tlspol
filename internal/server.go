@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -38,7 +39,7 @@ const (
 	CACHE_KEY_PREFIX   = "TLSPOL-"
 	CACHE_NOTFOUND_TTL = 900
 	CACHE_MIN_TTL      = 180
-	REQUEST_TIMEOUT    = 5 * time.Second
+	REQUEST_TIMEOUT    = 3 * time.Second
 )
 
 var (
@@ -66,14 +67,19 @@ func flagQueryFunc(f *flag.Flag) {
 		return
 	}
 	queryMode = true
-	domain := (*f).Value
-	conn, err := net.Dial("tcp", config.Server.Address)
+	domain := (*f).Value.String()
+	raddr, err := net.ResolveTCPAddr("tcp", config.Server.Address)
+	if err != nil {
+		log.Errorf("Cannot find postfix-tlspol server address: %v", err)
+		return
+	}
+	conn, err := net.DialTCP("tcp", nil, raddr)
 	if err != nil {
 		log.Errorf("Could not query domain %q. Is postfix-tlspol running? (%v)", domain, err)
 		return
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, ":json %s", domain)
+	fmt.Fprintf(conn, "%d:json %s,", len(domain)+5, domain)
 	raw, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
 		log.Errorf("Could not query domain %q. (%v)", domain, err)
@@ -172,7 +178,12 @@ func StartDaemon(v *string, licenseText *string) {
 }
 
 func startTcpServer() {
-	listener, err := net.Listen("tcp", config.Server.Address)
+	laddr, err := net.ResolveTCPAddr("tcp", config.Server.Address)
+	if err != nil {
+		log.Errorf("Error starting TCP server: %v", err)
+		return
+	}
+	listener, err := net.ListenTCP("tcp", laddr)
 	if err != nil {
 		log.Errorf("Error starting TCP server: %v", err)
 		return
@@ -182,17 +193,18 @@ func startTcpServer() {
 	log.Debugf("Listening on %s...", config.Server.Address)
 
 	for {
-		conn, err := listener.Accept()
+		conn, err := listener.AcceptTCP()
 		if err != nil {
 			log.Errorf("Error accepting connection: %v", err)
 			continue
 		}
+		conn.SetLinger(1)
 		go handleConnection(conn)
 	}
 }
 
-func parseQuery(rawQuery []byte) string {
-	query := strings.TrimSpace(string(rawQuery))
+func parseQuery(query string) string {
+	query = strings.TrimSpace(query)
 	parts := strings.Split(query, ",")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -209,7 +221,7 @@ func getCacheKey(domain *string) string {
 	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
 }
 
-func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
+func tryCachedPolicy(conn *net.TCPConn, domain *string, cacheKey *string) bool {
 	if !config.Redis.Disable {
 		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
@@ -251,7 +263,7 @@ type Result struct {
 	MtaSts MtaStsPolicy `json:"mta-sts"`
 }
 
-func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
+func replyJson(ctx *context.Context, conn *net.TCPConn, domain *string) {
 	ta := time.Now()
 	dPol, dTtl := checkDane(ctx, domain)
 	tb := time.Now()
@@ -279,11 +291,10 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 		return
 	}
 
-	(*conn).Write(b)
-	(*conn).Write([]byte("\n"))
+	(*conn).Write(append(b, '\n'))
 }
 
-func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32) {
+func replySocketmap(conn *net.TCPConn, domain *string, policy *string, report *string, ttl *uint32) {
 	switch *policy {
 	case "":
 		log.Infof("No policy found for %q (cached for %ds)", *domain, *ttl)
@@ -301,63 +312,58 @@ func replySocketmap(conn *net.Conn, domain *string, policy *string, report *stri
 	}
 }
 
-func handleConnection(conn net.Conn) {
-	defer conn.Close()
+func handleConnection(conn *net.TCPConn) {
+	defer (*conn).Close()
 
-	// Read the incoming query
-	buffer := make([]byte, 512)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		log.Errorf("Error reading from connection: %v", err)
-		return
-	}
-	query := parseQuery(buffer[:n])
-	parts := strings.SplitN(query, " ", 2)
-	if len(parts) != 2 {
-		log.Warnf("Malformed query: %q", query)
-		conn.Write([]byte("5:PERM ,"))
-		return
-	}
-	cmd := strings.ToLower(parts[0])
-	if cmd != "query" && cmd != "json" {
-		log.Warnf("Unknown command: %q", query)
-		conn.Write([]byte("5:PERM ,"))
-		return
-	}
+	ns := netstring.NewScanner(conn)
 
-	// Parse domain from query
-	domain := strings.ToLower(strings.TrimSpace(parts[1]))
+	for ns.Scan() {
+		query := parseQuery(ns.Text())
+		parts := strings.SplitN(query, " ", 2)
+		if len(parts) != 2 {
+			log.Warnf("Malformed query: %q", query)
+			(*conn).Write([]byte("5:PERM ,"))
+			continue
+		}
+		cmd := strings.ToLower(parts[0])
+		if cmd != "query" && cmd != "json" {
+			log.Warnf("Unknown command: %q", query)
+			(*conn).Write([]byte("5:PERM ,"))
+			continue
+		}
 
-	if cmd == "json" {
-		ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
-		defer cancel()
-		replyJson(&ctx, &conn, &domain)
-		return
-	}
+		domain := strings.ToLower(strings.TrimSpace(parts[1]))
 
-	// Validate domain
-	if govalidator.IsIPv4(domain) || govalidator.IsIPv6(domain) {
-		log.Debugf("Skipping policy for non-domain: %q", domain)
-		conn.Write([]byte("9:NOTFOUND ,"))
-		return
-	}
-	if strings.HasPrefix(domain, ".") {
-		log.Debugf("Skipping policy for parent domain: %q", domain)
-		conn.Write([]byte("9:NOTFOUND ,"))
-		return
-	}
+		if cmd == "json" {
+			ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
+			defer cancel()
+			replyJson(&ctx, conn, &domain)
+			continue
+		}
 
-	cacheKey := getCacheKey(&domain)
-	if tryCachedPolicy(&conn, &domain, &cacheKey) {
-		return
-	}
+		if govalidator.IsIPv4(domain) || govalidator.IsIPv6(domain) {
+			log.Debugf("Skipping policy for non-domain: %q", domain)
+			(*conn).Write([]byte("9:NOTFOUND ,"))
+			continue
+		}
+		if strings.HasPrefix(domain, ".") {
+			log.Debugf("Skipping policy for parent domain: %q", domain)
+			(*conn).Write([]byte("9:NOTFOUND ,"))
+			continue
+		}
 
-	policy, report, ttl := queryDomain(&domain)
+		cacheKey := getCacheKey(&domain)
+		if tryCachedPolicy(conn, &domain, &cacheKey) {
+			continue
+		}
 
-	replySocketmap(&conn, &domain, &policy, &report, &ttl)
+		policy, report, ttl := queryDomain(&domain)
 
-	if !config.Redis.Disable {
-		cacheJsonSet(redisClient, &cacheKey, &CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl})
+		replySocketmap(conn, &domain, &policy, &report, &ttl)
+
+		if !config.Redis.Disable {
+			cacheJsonSet(redisClient, &cacheKey, &CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl})
+		}
 	}
 }
 
