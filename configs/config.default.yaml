@@ -12,7 +12,7 @@ server:
   prefetch: true
 
 dns:
-  # must support dnssec
+  # must support DNSSEC
   address: 127.0.0.53:53
 
 redis:
