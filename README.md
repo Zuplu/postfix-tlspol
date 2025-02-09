@@ -82,7 +82,7 @@ In `/etc/postfix/main.cf`:
 smtp_dns_support_level = dnssec
 smtp_tls_security_level = dane
 smtp_tls_dane_insecure_mx_policy = dane
-smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:query
+smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:QUERY
 ```
 
 Note: Explicitly setting `smtp_tls_dane_insecure_mx_policy` to `dane` is a workaround to keep falling back to `dane` in case you changed the recommended default `smtp_tls_security_level` to something different than `dane`. postfix-tlspol returns `dane` only for domains where `dane-only` is not possible (because the MX lookup is unsigned, but the MX server itself supports DANE). Not setting this would make `dane` ineffective and only honor `dane-only`, if your `smtp_tls_security_level` is not `dane`.

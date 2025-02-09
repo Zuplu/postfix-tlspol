@@ -37,15 +37,15 @@ type CacheStruct struct {
 const (
 	DB_SCHEMA          = "3"
 	CACHE_KEY_PREFIX   = "TLSPOL-"
-	CACHE_NOTFOUND_TTL = 900
+	CACHE_NOTFOUND_TTL = 600
 	CACHE_MIN_TTL      = 180
-	REQUEST_TIMEOUT    = 3 * time.Second
+	REQUEST_TIMEOUT    = 5 * time.Second
 )
 
 var (
 	Version     = "undefined"
 	bgCtx       = context.Background()
-	client      = new(dns.Client)
+	client      = dns.Client{Timeout: REQUEST_TIMEOUT}
 	config      Config
 	redisClient *redis.Client
 )
@@ -208,19 +208,6 @@ func startServer() {
 	}
 }
 
-func parseQuery(query string) string {
-	query = strings.TrimSpace(query)
-	parts := strings.Split(query, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		subParts := strings.SplitN(part, ":", 2)
-		if len(subParts) > 1 {
-			query = strings.TrimSpace(subParts[1])
-		}
-	}
-	return query
-}
-
 func getCacheKey(domain *string) string {
 	hash := sha256.Sum256([]byte(*domain))
 	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
@@ -325,10 +312,10 @@ func handleConnection(conn *net.Conn) {
 	ns := netstring.NewScanner(*conn)
 
 	for ns.Scan() {
-		query := parseQuery(ns.Text())
+		query := ns.Text()
 		parts := strings.SplitN(query, " ", 2)
-		cmd := strings.ToLower(parts[0])
-		if cmd != "query" && cmd != "json" {
+		cmd := strings.ToUpper(parts[0])
+		if cmd != "QUERY" && cmd != "JSON" {
 			log.Warnf("Unknown command: %q", query)
 			(*conn).Write([]byte("5:PERM ,"))
 			break
@@ -340,7 +327,7 @@ func handleConnection(conn *net.Conn) {
 
 		domain := strings.ToLower(strings.TrimSpace(parts[1]))
 
-		if cmd == "json" {
+		if cmd == "JSON" {
 			ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
 			defer cancel()
 			replyJson(&ctx, conn, &domain)
