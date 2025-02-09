@@ -54,12 +54,14 @@ var showVersion = false
 var showLicense = false
 var configFile string
 var queryMode = false
+var purgeCache = false
 
 func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.BoolVar(&showLicense, "license", false, "Show LICENSE")
 	flag.StringVar(&configFile, "config", "configs/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
+	flag.BoolVar(&purgeCache, "purge", false, "Manually clear the cache")
 }
 
 func flagQueryFunc(f *flag.Flag) {
@@ -167,8 +169,8 @@ func StartDaemon(v *string, licenseText *string) {
 			Password: config.Redis.Password,
 			DB:       config.Redis.DB,
 		})
+		updateDatabase()
 		go func() {
-			updateDatabase()
 			if config.Server.Prefetch {
 				log.Info("Prefetching enabled!")
 				startPrefetching()
@@ -176,6 +178,16 @@ func StartDaemon(v *string, licenseText *string) {
 		}()
 	} else if config.Server.Prefetch {
 		log.Warn("Cannot prefetch with Redis disabled!")
+	}
+
+	if purgeCache {
+		err = purgeDatabase()
+		if err == nil {
+			log.Info("Cache purged successfully!")
+		} else {
+			log.Errorf("Error while purging the cache: %v", err)
+		}
+		return
 	}
 
 	// Start the socketmap server for Postfix
@@ -443,24 +455,29 @@ func cacheJsonSet(redisClient *redis.Client, cacheKey *string, data *CacheStruct
 	return redisClient.Set(bgCtx, *cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN-rand.Uint32N(60))*time.Second).Err()
 }
 
-func updateDatabase() error {
-	schemaKey := CACHE_KEY_PREFIX + "schema"
+func purgeDatabase() error {
+	if config.Redis.Disable {
+		return fmt.Errorf("Cache disabled")
+	}
+	keys, err := redisClient.Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
+	if err != nil {
+		return fmt.Errorf("Error fetching keys: %v", err)
+	}
+	for _, key := range keys {
+		redisClient.Del(bgCtx, key).Err()
+	}
+	return redisClient.Set(bgCtx, CACHE_KEY_PREFIX+"schema", DB_SCHEMA, 0).Err()
+}
 
-	currentSchema, err := redisClient.Get(bgCtx, schemaKey).Result()
+func updateDatabase() error {
+	currentSchema, err := redisClient.Get(bgCtx, CACHE_KEY_PREFIX+"schema").Result()
 	if err != nil && err != redis.Nil {
-		return fmt.Errorf("error getting schema from Redis: %v", err)
+		return fmt.Errorf("Error getting schema from Redis: %v", err)
 	}
 
 	// Check if the schema matches, else clear the database
 	if currentSchema != DB_SCHEMA {
-		keys, err := redisClient.Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
-		if err != nil {
-			return fmt.Errorf("error fetching keys: %v", err)
-		}
-		for _, key := range keys {
-			redisClient.Del(bgCtx, key).Err()
-		}
-		return redisClient.Set(bgCtx, schemaKey, DB_SCHEMA, 0).Err()
+		return purgeDatabase()
 	}
 
 	return nil

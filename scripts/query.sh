@@ -14,4 +14,4 @@ if [ ! -f "$EXEPATH" ]; then
     exit 1
 fi
 
-exec "$EXEPATH" -query "$1"
+exec "$EXEPATH" -config "$BASEDIR/configs/config.yaml" -query "$1"
