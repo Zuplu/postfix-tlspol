@@ -25,7 +25,7 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
     
 - The result is cached by `minimum TTL of all queries` or `max_age` seconds, for DANE and MTA-STS respectively.
 
-It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix.
+It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix (see below).
 
 # Install via Docker
 
@@ -79,14 +79,17 @@ service postfix-tlspol restart
 In `/etc/postfix/main.cf`:
 
 ```
-smtp_tls_security_level = dane
 smtp_dns_support_level = dnssec
+smtp_tls_security_level = dane
+smtp_tls_dane_insecure_mx_policy = dane
 smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:query
 ```
 
+Note: Explicitly setting `smtp_tls_dane_insecure_mx_policy` to `dane` is a workaround to keep falling back to `dane` in case you changed the recommended default `smtp_tls_security_level` to something different than `dane`. postfix-tlspol returns `dane` only for domains where `dane-only` is not possible (because the MX lookup is unsigned, but the MX server itself supports DANE). Not setting this would make `dane` ineffective and only honor `dane-only`, if your `smtp_tls_security_level` is not `dane`.
+
 After changing the Postfix configuration, do:
 ```
-service postfix restart
+postfix reload
 ```
 
 # Update (from source)
