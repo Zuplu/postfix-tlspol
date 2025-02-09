@@ -9,3 +9,8 @@ services:
       - "127.0.0.1:8642:8642"
     restart: unless-stopped
     network_mode: bridge
+    volumes:
+      - postfix-tlspol-data:/data
+
+volumes:
+  postfix-tlspol-data:
