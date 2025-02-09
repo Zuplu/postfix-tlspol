@@ -10,13 +10,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/asaskevich/govalidator/v11"
+	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
 )
 
@@ -72,10 +71,10 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 	if lineLen == 0 {
 		return true
 	}
-	if !govalidator.IsPrintableASCII(line) && !govalidator.IsUTFLetterNumeric(line) {
+	if !valid.IsPrintableASCII(line) && !valid.IsUTFLetterNumeric(line) {
 		return false // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
 	}
-	if lineLen != len(govalidator.BlackList(line, "{}")) {
+	if lineLen != len(valid.BlackList(line, "{}")) {
 		return true // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
 	}
 	keyValPair := strings.SplitN(line, ":", 2)
@@ -90,7 +89,7 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 	*report = (*report) + " { policy_string = " + key + ": " + val + " }"
 	switch key {
 	case "mx":
-		if !govalidator.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
+		if !valid.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
 			return false // invalid policy
 		}
 		*mxHosts = (*mxHosts) + " mx_host_pattern=" + val
@@ -146,7 +145,7 @@ func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) 
 			return "", "", 0
 		}
 	}
-	report = "policy_type=sts policy_domain=" + (*domain) + fmt.Sprintf(" policy_ttl=%d", maxAge) + mxHosts + report
+	report = "policy_type=sts policy_domain=" + (*domain) + mxHosts + report
 
 	if mode == "enforce" {
 		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"

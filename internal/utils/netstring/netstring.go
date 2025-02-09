@@ -1,3 +1,8 @@
+/*
+ * MIT License
+ * Copyright (c) 2024-2025 Zuplu
+ */
+
 package netstring
 
 import (
@@ -21,7 +26,7 @@ func NewScanner(r io.Reader) *Scanner {
 }
 
 func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if len(data) == 0 && atEOF {
+	if len(data) == 0 {
 		return 0, nil, nil
 	}
 
@@ -66,8 +71,5 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 		return 0, nil, errors.New("netstring: missing comma terminator")
 	}
 
-	token = data[colonPos+1 : commaPos]
-	advance = commaPos + 1
-
-	return advance, token, nil
+	return commaPos + 1, data[colonPos+1 : commaPos], nil
 }

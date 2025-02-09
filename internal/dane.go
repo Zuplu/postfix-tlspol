@@ -13,7 +13,7 @@ import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"slices"
 
-	"github.com/asaskevich/govalidator/v11"
+	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
 )
 
@@ -66,7 +66,7 @@ const (
 
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
 func checkMx(ctx *context.Context, mx *string) uint8 {
-	if !govalidator.IsDNSName(*mx) {
+	if !valid.IsDNSName(*mx) {
 		return MxFail
 	}
 	types := []uint16{dns.TypeA, dns.TypeAAAA}
@@ -107,11 +107,11 @@ func isTlsaUsable(r *dns.TLSA) bool {
 
 	switch r.MatchingType {
 	case 1: // SHA-256
-		if !govalidator.IsSHA256(r.Certificate) {
+		if !valid.IsSHA256(r.Certificate) {
 			return false
 		}
 	case 2: // SHA-512
-		if !govalidator.IsSHA512(r.Certificate) {
+		if !valid.IsSHA512(r.Certificate) {
 			return false
 		}
 	case 0: // Full certificate

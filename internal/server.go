@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/asaskevich/govalidator/v11"
+	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
 	"github.com/neilotoole/jsoncolor"
 	"github.com/redis/go-redis/v9"
@@ -68,12 +68,17 @@ func flagQueryFunc(f *flag.Flag) {
 	}
 	queryMode = true
 	domain := (*f).Value.String()
-	raddr, err := net.ResolveTCPAddr("tcp", config.Server.Address)
-	if err != nil {
-		log.Errorf("Cannot find postfix-tlspol server address: %v", err)
+	if len(domain) == 0 || !valid.IsDNSName(domain) {
+		log.Errorf("Invalid domain: %q", domain)
 		return
 	}
-	conn, err := net.DialTCP("tcp", nil, raddr)
+	var conn net.Conn
+	var err error
+	if strings.HasPrefix(config.Server.Address, "unix:") {
+		conn, err = net.Dial("unix", config.Server.Address[5:])
+	} else {
+		conn, err = net.Dial("tcp", config.Server.Address)
+	}
 	if err != nil {
 		log.Errorf("Could not query domain %q. Is postfix-tlspol running? (%v)", domain, err)
 		return
@@ -119,8 +124,6 @@ func StartDaemon(v *string, licenseText *string) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n\n", curYear, Version)
-
 	if showLicense {
 		fmt.Printf("%s\n", *licenseText)
 		return
@@ -140,6 +143,8 @@ func StartDaemon(v *string, licenseText *string) {
 		flag.PrintDefaults()
 		return
 	}
+
+	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n\n", curYear, Version)
 
 	if err != nil {
 		log.Errorf("Error loading config: %v", err)
@@ -174,16 +179,17 @@ func StartDaemon(v *string, licenseText *string) {
 	}
 
 	// Start the socketmap server for Postfix
-	startTcpServer()
+	startServer()
 }
 
-func startTcpServer() {
-	laddr, err := net.ResolveTCPAddr("tcp", config.Server.Address)
-	if err != nil {
-		log.Errorf("Error starting TCP server: %v", err)
-		return
+func startServer() {
+	var listener net.Listener
+	var err error
+	if strings.HasPrefix(config.Server.Address, "unix:") {
+		listener, err = net.Listen("unix", config.Server.Address[5:])
+	} else {
+		listener, err = net.Listen("tcp", config.Server.Address)
 	}
-	listener, err := net.ListenTCP("tcp", laddr)
 	if err != nil {
 		log.Errorf("Error starting TCP server: %v", err)
 		return
@@ -193,13 +199,12 @@ func startTcpServer() {
 	log.Debugf("Listening on %s...", config.Server.Address)
 
 	for {
-		conn, err := listener.AcceptTCP()
+		conn, err := listener.Accept()
 		if err != nil {
 			log.Errorf("Error accepting connection: %v", err)
 			continue
 		}
-		conn.SetLinger(1)
-		go handleConnection(conn)
+		go handleConnection(&conn)
 	}
 }
 
@@ -221,7 +226,7 @@ func getCacheKey(domain *string) string {
 	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
 }
 
-func tryCachedPolicy(conn *net.TCPConn, domain *string, cacheKey *string) bool {
+func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
 	if !config.Redis.Disable {
 		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
@@ -258,12 +263,13 @@ type MtaStsPolicy struct {
 	Time   string `json:"time"`
 }
 type Result struct {
-	Domain string       `json:"domain"`
-	Dane   DanePolicy   `json:"dane"`
-	MtaSts MtaStsPolicy `json:"mta-sts"`
+	Version string       `json:"version"`
+	Domain  string       `json:"domain"`
+	Dane    DanePolicy   `json:"dane"`
+	MtaSts  MtaStsPolicy `json:"mta-sts"`
 }
 
-func replyJson(ctx *context.Context, conn *net.TCPConn, domain *string) {
+func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 	ta := time.Now()
 	dPol, dTtl := checkDane(ctx, domain)
 	tb := time.Now()
@@ -271,7 +277,8 @@ func replyJson(ctx *context.Context, conn *net.TCPConn, domain *string) {
 	tc := time.Now()
 
 	r := Result{
-		Domain: *domain,
+		Version: Version,
+		Domain:  *domain,
 		Dane: DanePolicy{
 			Policy: dPol,
 			Ttl:    dTtl,
@@ -294,7 +301,7 @@ func replyJson(ctx *context.Context, conn *net.TCPConn, domain *string) {
 	(*conn).Write(append(b, '\n'))
 }
 
-func replySocketmap(conn *net.TCPConn, domain *string, policy *string, report *string, ttl *uint32) {
+func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32) {
 	switch *policy {
 	case "":
 		log.Infof("No policy found for %q (cached for %ds)", *domain, *ttl)
@@ -312,24 +319,23 @@ func replySocketmap(conn *net.TCPConn, domain *string, policy *string, report *s
 	}
 }
 
-func handleConnection(conn *net.TCPConn) {
+func handleConnection(conn *net.Conn) {
 	defer (*conn).Close()
 
-	ns := netstring.NewScanner(conn)
+	ns := netstring.NewScanner(*conn)
 
 	for ns.Scan() {
 		query := parseQuery(ns.Text())
 		parts := strings.SplitN(query, " ", 2)
-		if len(parts) != 2 {
-			log.Warnf("Malformed query: %q", query)
-			(*conn).Write([]byte("5:TEMP ,"))
-			continue
-		}
 		cmd := strings.ToLower(parts[0])
 		if cmd != "query" && cmd != "json" {
 			log.Warnf("Unknown command: %q", query)
 			(*conn).Write([]byte("5:PERM ,"))
 			break
+		}
+		if len(parts) != 2 { // empty query
+			(*conn).Write([]byte("9:NOTFOUND ,"))
+			continue
 		}
 
 		domain := strings.ToLower(strings.TrimSpace(parts[1]))
@@ -341,13 +347,18 @@ func handleConnection(conn *net.TCPConn) {
 			continue
 		}
 
-		if govalidator.IsIPv4(domain) || govalidator.IsIPv6(domain) {
+		if valid.IsIPv4(domain) || valid.IsIPv6(domain) {
 			log.Debugf("Skipping policy for non-domain: %q", domain)
 			(*conn).Write([]byte("9:NOTFOUND ,"))
 			continue
 		}
-		if strings.HasPrefix(domain, ".") {
+		if strings.HasPrefix(domain, ".") && valid.IsDNSName(domain[1:]) {
 			log.Debugf("Skipping policy for parent domain: %q", domain)
+			(*conn).Write([]byte("9:NOTFOUND ,"))
+			continue
+		}
+		if !valid.IsDNSName(domain) {
+			log.Debugf("Skipping policy for invalid domain name: %q", domain)
 			(*conn).Write([]byte("9:NOTFOUND ,"))
 			continue
 		}
@@ -399,10 +410,13 @@ func queryDomain(domain *string) (string, string, uint32) {
 		if i >= 2 {
 			close(results)
 		}
+		if r.Policy == "" {
+			continue
+		}
 		policy = r.Policy
 		report = r.Rpt
 		ttl = r.Ttl
-		if r.IsDane && r.Policy != "" {
+		if r.IsDane {
 			break
 		}
 	}
