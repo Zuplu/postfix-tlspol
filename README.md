@@ -32,7 +32,12 @@ It is recommended to still set the default TLS policy to `dane` (Opportunistic D
 Installation with Docker simplifies setup, as it contains its own `Redis` database and a properly configured DNS resolver, `Unbound`. The image itself is only about 25 MB.
 
 ```
-docker run -d -p 127.0.0.1:8642:8642 --restart unless-stopped zuplu/postfix-tlspol:latest
+docker volume create postfix-tlspol-data
+docker run -d -v postfix-tlspol-data:/data \
+    -p 127.0.0.1:8642:8642 \
+    --restart unless-stopped \
+    --name postfix-tlspol \
+    zuplu/postfix-tlspol:latest
 ```
 
 Jump to *Postfix configuration* to integrate the socketmap server.
