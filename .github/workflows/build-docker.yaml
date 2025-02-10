@@ -1,5 +1,7 @@
 name: build-docker
 
+runs-on: self-hosted
+
 on:
   push:
     tags:
