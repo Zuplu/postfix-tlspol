@@ -33,7 +33,8 @@ Installation with Docker simplifies setup, as it contains its own `Redis` databa
 
 ```
 docker volume create postfix-tlspol-data
-docker run -d -v postfix-tlspol-data:/data \
+docker run -d \
+    -v postfix-tlspol-data:/data \
     -p 127.0.0.1:8642:8642 \
     --restart unless-stopped \
     --name postfix-tlspol \
