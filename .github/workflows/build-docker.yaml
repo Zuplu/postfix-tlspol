@@ -7,12 +7,24 @@ on:
 
 env:
   REGISTRY_IMAGE: zuplu/postfix-tlspol
+  PLATFORMS: "linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/386,linux/ppc64le,linux/riscv64,linux/s390x"
 
 permissions:
   contents: read
 
 jobs:
   build:
+    strategy:
+      matrix:
+        platform: 
+          - linux/amd64
+          - linux/arm/v6
+          - linux/arm/v7
+          - linux/arm64
+          - linux/386
+          - linux/ppc64le
+          - linux/riscv64
+          - linux/s390x
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -33,18 +45,54 @@ jobs:
       - name: Determine tags
         id: tags
         run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION_TAG="${{ env.REGISTRY_IMAGE }}:${GITHUB_REF_NAME}"
-            echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
-          fi
+          SANITIZED_PLATFORM=$(echo "${{ matrix.platform }}" | tr '/' '-')
+          echo "VERSION_TAG_PLATFORM=${{ env.REGISTRY_IMAGE }}:${{ github.ref_name }}-$SANITIZED_PLATFORM" >> $GITHUB_ENV
 
-      - name: Build and push
+      - name: Build and push platform-specific image
         uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # pin@v6
         with:
-          platforms: linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/386,linux/ppc64le,linux/riscv64,linux/s390x
+          platforms: ${{ matrix.platform }}
           context: .
           file: deployments/Dockerfile
           push: true
-          tags: |
-            ${{ env.REGISTRY_IMAGE }}:latest
-            ${{ env.VERSION_TAG || '' }}
+          tags: ${{ env.VERSION_TAG_PLATFORM }}
+          attest: false
+          provenance: false
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # pin@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create and push version manifest
+        run: |
+          VERSION_TAG="${{ github.ref_name }}"
+          PLATFORMS="${{ env.PLATFORMS }}"
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+          CMD="docker manifest create ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG"
+          for PLATFORM in "${PLATFORM_ARRAY[@]}"; do
+            SANITIZED_PLATFORM=$(echo "$PLATFORM" | tr '/' '-')
+            CMD+=" --amend ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG-$SANITIZED_PLATFORM"
+          done
+          eval $CMD
+          docker manifest push ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG
+
+      - name: Create and push latest manifest
+        run: |
+          VERSION_TAG="${{ github.ref_name }}"
+          PLATFORMS="${{ env.PLATFORMS }}"
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+          CMD="docker manifest create ${{ env.REGISTRY_IMAGE }}:latest"
+          for PLATFORM in "${PLATFORM_ARRAY[@]}"; do
+            SANITIZED_PLATFORM=$(echo "$PLATFORM" | tr '/' '-')
+            CMD+=" --amend ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG-$SANITIZED_PLATFORM"
+          done
+          eval $CMD
+          docker manifest push ${{ env.REGISTRY_IMAGE }}:latest
+
+          
