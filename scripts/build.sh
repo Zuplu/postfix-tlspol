@@ -22,14 +22,6 @@ cd "$BASEDIR"
 build_go() {
     mkdir -p build
     if command -v go >/dev/null 2>&1; then
-        echo "${green}Testing basic functionality...$rst"
-        # We are only doing a short test here, run scripts/test.sh for a detailed test
-        if [ -n "$GITHUB_ACTIONS" ] || go test -short ./...; then
-            echo "${green}Test succeeded.$rst"
-        else
-            echo "${red}Test failed.$rst"
-            exit 1
-        fi
         echo "${green}Building postfix-tlspol...$rst"
         VERSION=$(git describe --tags --always --long --abbrev=7 --dirty=-modified)
         echo "${cyanbg}Version: ${VERSION}$rst"
@@ -37,6 +29,14 @@ build_go() {
             echo "${green}Build succeeded!$rst"
         else
             echo "${red}Build failed!$rst"
+            exit 1
+        fi
+        echo "${green}Testing basic functionality...$rst"
+        # We are only doing a short test here, run scripts/test.sh for a detailed test
+        if [ -n "$GITHUB_ACTIONS" ] || go test -short ./...; then
+            echo "${green}Test succeeded.$rst"
+        else
+            echo "${red}Test failed.$rst"
             exit 1
         fi
         # Migrate config.yaml to new directory structure
@@ -65,7 +65,7 @@ install_systemd_service() {
         fi
         echo "$rst"
         sleep 0.2
-        systemctl status -ocat --no-pager postfix-tlspol.service
+        systemctl status --all --no-pager postfix-tlspol.service
     else
         echo "${red}systemctl not found.$rst"
     fi
