@@ -1,6 +1,6 @@
 module github.com/Zuplu/postfix-tlspol
 
-go 1.23.6
+go 1.24
 
 require (
 	github.com/asaskevich/govalidator/v11 v11.0.2-0.20250122183457-e11347878e23

@@ -35,6 +35,13 @@ const (
 	colorGrey   = "\033[90m"
 )
 
+var showTimestamp bool = true
+
+func init() {
+	_, inJournal := os.LookupEnv("JOURNAL_STREAM")
+	showTimestamp = !inJournal
+}
+
 // logMutex ensures thread-safe writes to the output
 var logMutex sync.Mutex
 
@@ -67,7 +74,11 @@ func logMessage(level LogLevel, message string) {
 		color = colorReset
 	}
 
-	coloredMsg := time.Now().Format(time.StampMilli) + " " + color + levelStr + message + colorReset
+	var coloredMsg string
+	if showTimestamp {
+		coloredMsg = time.Now().Format(time.StampMilli) + " "
+	}
+	coloredMsg = coloredMsg + color + levelStr + message + colorReset
 	fmt.Fprintln(output, coloredMsg)
 }
 

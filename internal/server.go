@@ -452,7 +452,7 @@ func cacheJsonSet(redisClient *redis.Client, cacheKey *string, data *CacheStruct
 		return fmt.Errorf("Error marshaling JSON: %v", err)
 	}
 
-	return redisClient.Set(bgCtx, *cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN-rand.Uint32N(80))*time.Second).Err()
+	return redisClient.Set(bgCtx, *cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN-rand.Uint32N(60))*time.Second).Err()
 }
 
 func purgeDatabase() error {
