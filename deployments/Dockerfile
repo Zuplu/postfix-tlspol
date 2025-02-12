@@ -4,9 +4,8 @@ FROM golang:1-alpine AS workspace
 RUN addgroup -g 1000 default \
   && adduser -G default -u 1000 default -D
 
-# Install unbound and redis-equivalent keydb
-RUN apk add --no-cache git unbound
-RUN apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing keydb
+# Install unbound and redis
+RUN apk add --no-cache git unbound redis
 
 # Copy postfix-tlspol
 COPY --chown=default:default . /build
@@ -86,9 +85,9 @@ RUN <<EOR
   cat <<EOF > /entrypoint.sh
 #!/bin/sh
 /usr/sbin/unbound -V
-/usr/bin/keydb-server -v
+/usr/bin/redis-server -v
 ( cd /etc/unbound ; /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &
-( cd /data ; /usr/bin/keydb-server /etc/redis.conf ) &
+( cd /data ; /usr/bin/redis-server /etc/redis.conf ) &
 exec /postfix-tlspol -config /data/config.yaml
 EOF
   chmod +x /entrypoint.sh
