@@ -48,6 +48,10 @@ var (
 	client      = dns.Client{Timeout: REQUEST_TIMEOUT}
 	config      Config
 	redisClient *redis.Client
+	NS_NOTFOUND = netstring.Marshal("NOTFOUND ")
+	NS_TEMP     = netstring.Marshal("TEMP ")
+	NS_PERM     = netstring.Marshal("PERM ")
+	NS_TIMEOUT  = netstring.Marshal("TIMEOUT ")
 )
 
 var showVersion = false
@@ -86,7 +90,7 @@ func flagQueryFunc(f *flag.Flag) {
 		return
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "%d:json %s,", len(domain)+5, domain)
+	conn.Write(netstring.Marshal("JSON " + domain))
 	raw, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
 		log.Errorf("Could not query domain %q. (%v)", domain, err)
@@ -233,16 +237,16 @@ func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
 			switch cache.Result {
 			case "":
 				log.Infof("No policy found for %q (from cache, %ds remaining)", *domain, ttl)
-				(*conn).Write([]byte("9:NOTFOUND ,"))
+				(*conn).Write(NS_NOTFOUND)
 			case "TEMP":
 				log.Warnf("Evaluating policy for %q failed temporarily (from cache, %ds remaining)", *domain, ttl)
-				(*conn).Write([]byte("5:TEMP ,"))
+				(*conn).Write(NS_TEMP)
 			default:
 				log.Infof("Evaluated policy for %q: %s (from cache, %ds remaining)", *domain, cache.Result, ttl)
 				if config.Server.TlsRpt {
 					cache.Result = cache.Result + " " + cache.Report
 				}
-				(*conn).Write([]byte(fmt.Sprintf("%d:OK %s,", len(cache.Result)+3, cache.Result)))
+				(*conn).Write(netstring.Marshal("OK " + cache.Result))
 			}
 			return true
 		}
@@ -304,17 +308,17 @@ func replySocketmap(conn *net.Conn, domain *string, policy *string, report *stri
 	switch *policy {
 	case "":
 		log.Infof("No policy found for %q (cached for %ds)", *domain, *ttl)
-		(*conn).Write([]byte("9:NOTFOUND ,"))
+		(*conn).Write(NS_NOTFOUND)
 	case "TEMP":
 		log.Warnf("Evaluating policy for %q failed temporarily (cached for %ds)", *domain, *ttl)
-		(*conn).Write([]byte("5:TEMP ,"))
+		(*conn).Write(NS_TEMP)
 	default:
 		log.Infof("Evaluated policy for %q: %s (cached for %ds)", *domain, *policy, *ttl)
 		res := *policy
 		if config.Server.TlsRpt {
 			res = res + " " + (*report)
 		}
-		(*conn).Write([]byte(fmt.Sprintf("%d:OK %s,", len(res)+3, res)))
+		(*conn).Write(netstring.Marshal("OK " + res))
 	}
 }
 
@@ -329,11 +333,11 @@ func handleConnection(conn *net.Conn) {
 		cmd := strings.ToUpper(parts[0])
 		if cmd != "QUERY" && cmd != "JSON" {
 			log.Warnf("Unknown command: %q", query)
-			(*conn).Write([]byte("5:PERM ,"))
+			(*conn).Write(NS_PERM)
 			break
 		}
 		if len(parts) != 2 { // empty query
-			(*conn).Write([]byte("9:NOTFOUND ,"))
+			(*conn).Write(NS_NOTFOUND)
 			continue
 		}
 
@@ -348,17 +352,17 @@ func handleConnection(conn *net.Conn) {
 
 		if valid.IsIPv4(domain) || valid.IsIPv6(domain) {
 			log.Debugf("Skipping policy for non-domain: %q", domain)
-			(*conn).Write([]byte("9:NOTFOUND ,"))
+			(*conn).Write(NS_NOTFOUND)
 			continue
 		}
 		if strings.HasPrefix(domain, ".") && valid.IsDNSName(domain[1:]) {
 			log.Debugf("Skipping policy for parent domain: %q", domain)
-			(*conn).Write([]byte("9:NOTFOUND ,"))
+			(*conn).Write(NS_NOTFOUND)
 			continue
 		}
 		if !valid.IsDNSName(domain) {
 			log.Debugf("Skipping policy for invalid domain name: %q", domain)
-			(*conn).Write([]byte("9:NOTFOUND ,"))
+			(*conn).Write(NS_NOTFOUND)
 			continue
 		}
 
