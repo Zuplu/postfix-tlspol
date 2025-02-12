@@ -22,7 +22,8 @@ cd "$BASEDIR"
 build_go() {
     mkdir -p build
     if command -v go >/dev/null 2>&1; then
-        GOTOOLCHAIN=auto go mod download
+        export GOTOOLCHAIN=auto
+        go mod download
         echo "${green}Building postfix-tlspol...$rst"
         VERSION=$(git describe --tags --always --long --abbrev=7 --dirty=-modified)
         echo "${cyanbg}Version: ${VERSION}$rst"
