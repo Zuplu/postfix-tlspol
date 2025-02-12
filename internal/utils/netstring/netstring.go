@@ -73,3 +73,7 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 
 	return commaPos + 1, data[colonPos+1 : commaPos], nil
 }
+
+func Marshal(s string) []byte {
+	return []byte(strconv.Itoa(len(s)) + ":" + s + ",")
+}
