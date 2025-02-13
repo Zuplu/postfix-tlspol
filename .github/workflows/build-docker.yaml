@@ -1,19 +1,53 @@
-name: build-docker
+# Made with ❤️ by Zuplu.
+# All rights reserved.
+
+name: 🚀 Build and Deploy Docker Images
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 env:
   REGISTRY_IMAGE: zuplu/postfix-tlspol
-  PLATFORMS: "linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/386,linux/ppc64le,linux/riscv64,linux/s390x"
+  DEV_REGISTRY_IMAGE: zupluadmin/postfix-tlspol-dev
+  PLATFORMS: "linux-amd64,linux-arm-v6,linux-arm-v7,linux-arm64,linux-386,linux-ppc64le,linux-riscv64,linux-s390x"
 
-permissions:
-  contents: read
+permissions: read-all
 
 jobs:
+  test:
+    name: 🧪 Unit Testing
+    uses: ./.github/workflows/go-test.yaml
+
+  label:
+    name: 🏷️ Find Label
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🔧 Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: 🏷️ Determine version tag
+        id: tag
+        run: |
+          LATEST_TAG="$(curl -s "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/latest" | jq -r .tag_name)"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VERSION_TAG="$GITHUB_REF_NAME"
+          else
+            VERSION_TAG="$LATEST_TAG"
+          fi
+          echo "Building $VERSION_TAG, whereas $LATEST_TAG is latest..."
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_OUTPUT
+    outputs:
+      LATEST_TAG: ${{ steps.tag.outputs.LATEST_TAG }}
+      VERSION_TAG: ${{ steps.tag.outputs.VERSION_TAG }}
+
   build:
+    name: 🚧 Build Docker Images
+    needs: label
     strategy:
       matrix:
         platform: 
@@ -27,90 +61,83 @@ jobs:
           - linux/s390x
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # pin@v4
+      - name: 🏷️ Prepare tags
+        run: |
+          VERSION_TAG="${{ needs.label.outputs.VERSION_TAG }}"
+          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
+          PLATFORM="$(echo "${{ matrix.platform }}" | tr '/' '-')"
+          echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # pin@v3
+      - name: 📦 Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # pin@v3
+      - name: ⚙️ Set up QEMU
+        uses: docker/setup-qemu-action@4574d27a4764455b42196d70a065bc6853246a25 # pin@v3
 
-      - name: Login to Docker Hub
+      - name: 🛠️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # pin@v3
+
+      - name: 🔐 Login to Docker Hub
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # pin@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Determine tags
-        id: tags
-        run: |
-          SANITIZED_PLATFORM="$(echo "${{ matrix.platform }}" | tr '/' '-')"
-          echo "VERSION_TAG_PLATFORM=\"${{ env.REGISTRY_IMAGE }}:${{ github.ref_name }}-$SANITIZED_PLATFORM\"" >> $GITHUB_ENV
-
-      - name: Build and push platform-specific image
-        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # pin@v6
+      - name: 🏗️ Build platform-specific Docker image 🚧
+        id: build
+        uses: docker/build-push-action@ca877d9245402d1537745e0e356eab47c3520991 # pin@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           platforms: ${{ matrix.platform }}
           context: .
           file: deployments/Dockerfile
           push: true
-          tags: ${{ env.VERSION_TAG_PLATFORM }}
-          attest: false
+          tags: ${{ env.DEV_REGISTRY_IMAGE }}:${{ env.VERSION_TAG }}-${{ env.PLATFORM }}
+          sbom: false
           provenance: false
 
   manifest:
-    needs: build
+    name: 📦 Bundle and Deploy ✨
+    needs: [ label, build ]
     runs-on: ubuntu-latest
     steps:
-      - name: Login to Docker Hub
+      - name: 🏷️ Prepare tags
+        run: |
+          LATEST_TAG="${{ needs.label.outputs.LATEST_TAG }}"
+          VERSION_TAG="${{ needs.label.outputs.VERSION_TAG }}"
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
+
+      - name: 🔧 Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: 🔐 Login to Docker Hub
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # pin@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create and push version manifest
+      - name: ✨ Bundle and push version »${{ env.VERSION_TAG }}«
         run: |
-          VERSION_TAG="${{ github.ref_name }}"
           PLATFORMS="${{ env.PLATFORMS }}"
           IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
           CMD="docker manifest create ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG"
           for PLATFORM in "${PLATFORM_ARRAY[@]}"; do
-            SANITIZED_PLATFORM="$(echo "$PLATFORM" | tr '/' '-')"
-            CMD+=" --amend ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG-$SANITIZED_PLATFORM"
+            CMD+=" --amend ${{ env.DEV_REGISTRY_IMAGE }}:$VERSION_TAG-$PLATFORM"
           done
           eval "$CMD"
           docker manifest push ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG
 
-      - name: Create and push latest manifest
+      - name: ✨ Bundle and push version »latest«
+        if: ${{ success() && env.VERSION_TAG == env.LATEST_TAG }}
         run: |
-          VERSION_TAG="${{ github.ref_name }}"
           PLATFORMS="${{ env.PLATFORMS }}"
           IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
           CMD="docker manifest create ${{ env.REGISTRY_IMAGE }}:latest"
           for PLATFORM in "${PLATFORM_ARRAY[@]}"; do
-            SANITIZED_PLATFORM="$(echo "$PLATFORM" | tr '/' '-')"
-            CMD+=" --amend ${{ env.REGISTRY_IMAGE }}:$VERSION_TAG-$SANITIZED_PLATFORM"
+            CMD+=" --amend ${{ env.DEV_REGISTRY_IMAGE }}:$VERSION_TAG-$PLATFORM"
           done
           eval "$CMD"
           docker manifest push ${{ env.REGISTRY_IMAGE }}:latest
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Cleanup platform-specific tags
-        run: |
-          TOKEN="$(curl -s -H "Content-Type: application/json" -X POST \
-            -d "{\"username\": \"${{ vars.DOCKERHUB_USERNAME }}\", \"password\": \"${{ secrets.DOCKERHUB_TOKEN }}\"}" \
-            https://hub.docker.com/v2/users/login/ | jq -r .token)"
-          PLATFORMS="${{ env.PLATFORMS }}"
-          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VERSION_TAG="${{ github.ref_name }}"
-            for PLATFORM in "${PLATFORM_ARRAY[@]}"; do
-              SANITIZED_PLATFORM="$(echo "$PLATFORM" | tr '/' '-')"
-              echo "Deleting $VERSION_TAG-$SANITIZED_PLATFORM"
-              curl -X DELETE -H "Authorization: JWT $TOKEN" \
-                "https://hub.docker.com/v2/repositories/${{ env.REGISTRY_IMAGE }}/tags/$VERSION_TAG-$SANITIZED_PLATFORM/"
-            done
-          fi
