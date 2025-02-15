@@ -6,8 +6,5 @@ updates:
       interval: weekly
   - package-ecosystem: gomod
     directory: /
-    options:
-      tidy: true
-      vendor: true
     schedule:
       interval: weekly
