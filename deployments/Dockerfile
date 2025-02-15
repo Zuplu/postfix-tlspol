@@ -1,4 +1,4 @@
-FROM golang:1-alpine AS workspace
+FROM golang:1.24.0-alpine3.21@sha256:3d74d23af285af08b6a2c89a15c437b9bc2854f63948fb8fd703823528820230 AS workspace
 
 # Create a non-root user
 RUN addgroup -g 1000 default \
@@ -41,6 +41,14 @@ server:
   log-servfail: yes
   ede: yes
   interface: 127.0.0.53
+  do-ip4: yes
+  prefer-ip4: yes
+  do-ip6: yes
+  prefer-ip6: no
+  do-udp: yes
+  do-tcp: yes
+  max-udp-size: 1232
+  edns-buffer-size: 1232
   auto-trust-anchor-file: /usr/share/dnssec-root/trusted-key.key
   cache-min-ttl: 10
   cache-max-ttl: 180
@@ -50,18 +58,11 @@ server:
   discard-timeout: 4500
   hide-identity: yes
   hide-version: yes
-  target-fetch-policy: "-1 -1 -1 -1 -1"
-  harden-short-bufsize: yes
-  harden-glue: yes
-  harden-unverified-glue: yes
-  harden-referral-path: yes
-  harden-dnssec-stripped: yes
-  harden-algo-downgrade: yes
-  harden-below-nxdomain: yes
-  aggressive-nsec: yes
+  target-fetch-policy: "0 0 0 0 0"
   qname-minimisation: yes
+  minimal-responses: yes
+  infra-cache-min-rtt: 4500
   infra-keep-probing: yes
-  ignore-cd-flag: yes
   module-config: "validator iterator"
 EOF
   chown -R default:default /etc/unbound
