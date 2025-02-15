@@ -1,0 +1,6 @@
+.github
+deployments
+init
+configs/config.yaml
+build
+*.md
