@@ -25,9 +25,9 @@ build_go() {
         export GOTOOLCHAIN=auto
         go mod download
         echo "${green}Building postfix-tlspol...$rst"
-        VERSION=$(git describe --tags --always --long --abbrev=7 --dirty=-modified)
-        echo "${cyanbg}Version: ${VERSION}$rst"
-        if CGO_ENABLED=0 go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=${VERSION}'" -o build/postfix-tlspol .; then
+        VERSION="$(git describe --always --tags --match='v*' --abbrev=7 --dirty=-modified)"
+        echo "${cyanbg}Version: $VERSION$rst"
+        if CGO_ENABLED=0 go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
             echo "${green}Build succeeded!$rst"
         else
             echo "${red}Build failed!$rst"
