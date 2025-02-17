@@ -5,12 +5,13 @@ name: 🧪 Run unit tests
 
 on:
   push:
-    branches: [ "main" ]
+    paths:
+      - **/*.go
   pull_request:
-    branches: [ "main" ]
   workflow_call:
 
-permissions: read-all
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -24,4 +25,4 @@ jobs:
         with:
           go-version-file: ./go.mod
       - name: 🧐 Test basic functionality
-        run: go test -v -short ./internal
+        run: go test -v -failfast -short ./...
