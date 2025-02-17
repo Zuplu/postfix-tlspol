@@ -23,22 +23,23 @@ build_go() {
     mkdir -p build
     if command -v go >/dev/null 2>&1; then
         export GOTOOLCHAIN=auto
+        export CGO_ENABLED=0
         go mod download
-        echo "${green}Building postfix-tlspol...$rst"
         VERSION="$(git describe --always --tags --match='v*' --abbrev=7 --dirty=-modified)"
         echo "${cyanbg}Version: $VERSION$rst"
-        if CGO_ENABLED=0 go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
-            echo "${green}Build succeeded!$rst"
-        else
-            echo "${red}Build failed!$rst"
-            exit 1
-        fi
         echo "${green}Testing basic functionality...$rst"
         # We are only doing a short test here, run scripts/test.sh for a detailed test
-        if [ -n "$GITHUB_ACTIONS" ] || go test -short ./...; then
+        if [ -n "$GITHUB_ACTIONS" ] || go test -tags netgo -ldflags "-d -extldflags '-static'" -failfast -short ./...; then
             echo "${green}Test succeeded.$rst"
         else
             echo "${red}Test failed.$rst"
+            exit 1
+        fi
+        echo "${green}Building postfix-tlspol...$rst"
+        if go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
+            echo "${green}Build succeeded!$rst"
+        else
+            echo "${red}Build failed!$rst"
             exit 1
         fi
         # Migrate config.yaml to new directory structure

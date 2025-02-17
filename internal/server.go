@@ -24,7 +24,8 @@ import (
 	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
 	"github.com/neilotoole/jsoncolor"
-	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
+	"github.com/valkey-io/valkey-go/valkeycompat"
 )
 
 type CacheStruct struct {
@@ -47,7 +48,7 @@ var (
 	bgCtx       = context.Background()
 	client      = dns.Client{Timeout: REQUEST_TIMEOUT}
 	config      Config
-	redisClient *redis.Client
+	dbClient    *valkeycompat.Cmdable
 	NS_NOTFOUND = netstring.Marshal("NOTFOUND ")
 	NS_TEMP     = netstring.Marshal("TEMP ")
 	NS_PERM     = netstring.Marshal("PERM ")
@@ -168,11 +169,17 @@ func StartDaemon(v *string, licenseText *string) {
 
 	if !config.Redis.Disable {
 		// Setup redis client for cache
-		redisClient = redis.NewClient(&redis.Options{
-			Addr:     config.Redis.Address,
-			Password: config.Redis.Password,
-			DB:       config.Redis.DB,
+		valkeyClient, err := valkey.NewClient(valkey.ClientOption{
+			InitAddress: []string{config.Redis.Address},
+			Password:    config.Redis.Password,
+			SelectDB:    config.Redis.DB,
 		})
+		if err != nil {
+			log.Errorf("Could not initialize Valkey (Redis) client: %v", err)
+			return
+		}
+		dbAdapter := valkeycompat.NewAdapter(valkeyClient)
+		dbClient = &dbAdapter
 		updateDatabase()
 		go func() {
 			if config.Server.Prefetch {
@@ -181,7 +188,7 @@ func StartDaemon(v *string, licenseText *string) {
 			}
 		}()
 	} else if config.Server.Prefetch {
-		log.Warn("Cannot prefetch with Redis disabled!")
+		log.Warn("Cannot prefetch with Valkey (Redis) disabled!")
 	}
 
 	if purgeCache {
@@ -231,7 +238,7 @@ func getCacheKey(domain *string) string {
 
 func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
 	if !config.Redis.Disable {
-		cache, ttl, err := cacheJsonGet(redisClient, cacheKey)
+		cache, ttl, err := cacheJsonGet(cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
 			ttl := ttl - PREFETCH_MARGIN
 			switch cache.Result {
@@ -376,7 +383,7 @@ func handleConnection(conn *net.Conn) {
 		replySocketmap(conn, &domain, &policy, &report, &ttl)
 
 		if !config.Redis.Disable {
-			cacheJsonSet(redisClient, &cacheKey, &CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl})
+			cacheJsonSet(&cacheKey, &CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl})
 		}
 	}
 }
@@ -433,15 +440,15 @@ func queryDomain(domain *string) (string, string, uint32) {
 	return policy, report, ttl
 }
 
-func cacheJsonGet(redisClient *redis.Client, cacheKey *string) (CacheStruct, uint32, error) {
+func cacheJsonGet(cacheKey *string) (CacheStruct, uint32, error) {
 	var data CacheStruct
 
-	jsonData, err := redisClient.Get(bgCtx, *cacheKey).Result()
+	jsonData, err := (*dbClient).Get(bgCtx, *cacheKey).Result()
 	if err != nil {
 		return data, 0, err
 	}
 
-	ttl, err := redisClient.TTL(bgCtx, *cacheKey).Result()
+	ttl, err := (*dbClient).TTL(bgCtx, *cacheKey).Result()
 	if err != nil {
 		log.Warnf("Error getting TTL: %v", err)
 		return data, 0, err
@@ -450,33 +457,33 @@ func cacheJsonGet(redisClient *redis.Client, cacheKey *string) (CacheStruct, uin
 	return data, uint32(ttl.Seconds()), json.Unmarshal([]byte(jsonData), &data)
 }
 
-func cacheJsonSet(redisClient *redis.Client, cacheKey *string, data *CacheStruct) error {
+func cacheJsonSet(cacheKey *string, data *CacheStruct) error {
 	jsonData, err := json.Marshal(*data)
 	if err != nil {
 		return fmt.Errorf("Error marshaling JSON: %v", err)
 	}
 
-	return redisClient.Set(bgCtx, *cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN-rand.Uint32N(60))*time.Second).Err()
+	return (*dbClient).Set(bgCtx, *cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN-rand.Uint32N(60))*time.Second).Err()
 }
 
 func purgeDatabase() error {
 	if config.Redis.Disable {
 		return fmt.Errorf("Cache disabled")
 	}
-	keys, err := redisClient.Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
+	keys, err := (*dbClient).Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
 	if err != nil {
 		return fmt.Errorf("Error fetching keys: %v", err)
 	}
 	for _, key := range keys {
-		redisClient.Del(bgCtx, key).Err()
+		(*dbClient).Del(bgCtx, key).Err()
 	}
-	return redisClient.Set(bgCtx, CACHE_KEY_PREFIX+"schema", DB_SCHEMA, 0).Err()
+	return (*dbClient).Set(bgCtx, CACHE_KEY_PREFIX+"schema", DB_SCHEMA, 0).Err()
 }
 
 func updateDatabase() error {
-	currentSchema, err := redisClient.Get(bgCtx, CACHE_KEY_PREFIX+"schema").Result()
-	if err != nil && err != redis.Nil {
-		return fmt.Errorf("Error getting schema from Redis: %v", err)
+	currentSchema, err := (*dbClient).Get(bgCtx, CACHE_KEY_PREFIX+"schema").Result()
+	if err != nil && err != valkey.Nil {
+		return fmt.Errorf("Error getting schema from Valkey (Redis): %v", err)
 	}
 
 	// Check if the schema matches, else clear the database

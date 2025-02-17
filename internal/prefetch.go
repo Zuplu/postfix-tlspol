@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	PREFETCH_INTERVAL float64 = 20
+	PREFETCH_INTERVAL float64 = 30
 	PREFETCH_MARGIN           = 300 // seconds
 
 	PREFETCH_FACTOR = (PREFETCH_INTERVAL + 1.0) / float64(PREFETCH_MARGIN)
@@ -28,7 +28,7 @@ func startPrefetching() {
 }
 
 func prefetchCachedPolicies() {
-	keys, err := redisClient.Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
+	keys, err := (*dbClient).Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
 	if err != nil {
 		log.Errorf("Error fetching keys from Redis: %v", err)
 		return
@@ -51,7 +51,7 @@ func prefetchCachedPolicies() {
 				wg.Done()
 				<-semaphore
 			}()
-			cachedPolicy, ttl, err := cacheJsonGet(redisClient, &key)
+			cachedPolicy, ttl, err := cacheJsonGet(&key)
 			if err != nil || cachedPolicy.Result == "" {
 				return
 			}
@@ -61,7 +61,7 @@ func prefetchCachedPolicies() {
 				refreshedResult, refreshedRpt, refreshedTtl := queryDomain(&cachedPolicy.Domain)
 				if refreshedResult != "" && refreshedResult != "TEMP" {
 					counter.Add(1)
-					cacheJsonSet(redisClient, &key, &CacheStruct{Domain: cachedPolicy.Domain, Result: refreshedResult, Report: refreshedRpt, Ttl: refreshedTtl})
+					cacheJsonSet(&key, &CacheStruct{Domain: cachedPolicy.Domain, Result: refreshedResult, Report: refreshedRpt, Ttl: refreshedTtl})
 				}
 			}
 		}(key)
