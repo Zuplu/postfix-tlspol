@@ -2,7 +2,7 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/releases/latest) [![GitHub License](https://img.shields.io/github/license/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/blob/main/LICENSE) [![CodeQL Badge](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/) [![Go Report Card](https://goreportcard.com/badge/github.com/Zuplu/postfix-tlspol)](https://goreportcard.com/report/github.com/Zuplu/postfix-tlspol) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/98f114fa07ac4daa89495e5248d4c76b)](https://app.codacy.com/gh/Zuplu/postfix-tlspol/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) [![build-docker](https://img.shields.io/github/actions/workflow/status/Zuplu/postfix-tlspol/build-docker.yaml?branch=main&event=push&logo=docker&logoColor=white&label=Docker&color=%232496ED)](https://hub.docker.com/r/zuplu/postfix-tlspol/tags) [![Libraries.io dependency status for GitHub repo](https://img.shields.io/librariesio/github/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/blob/main/go.mod)
 
-[![Zuplu Mascot](https://zuplu.com/mascot.svg)](#)
+[<img src="https://zuplu.com/mascot.svg" width="130em" align="right" alt="Gopher mascot" />](#)
 
 A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for Postfix that complies to the standards and prioritizes DANE where possible.
 
@@ -63,7 +63,7 @@ scripts/build.sh # press 'd' for Docker when prompted
 
 These requirements only apply if you use the non-Docker variant for installation, i. e. as a systemd service unit.
 
-- A Redis-compatible database (optional if caching is disabled)
+- A Redis-compatible database (e. g. Valkey, KeyDB, Redis, ...; optional if caching is disabled)
 - Postfix
 - Go (latest)
 - DNSSEC-validating DNS server (preferably on localhost)
