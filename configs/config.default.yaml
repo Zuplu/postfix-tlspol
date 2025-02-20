@@ -3,9 +3,9 @@ server:
   # or unix:/run/postfix-tlspol/tlspol.sock for Unix Domain Socket
   address: 127.0.0.1:8642
 
-  # set true to enable Postfix 3.10+ TLSRPT support
-  # this is experimental, not backwards compatible
-  # and may result in delivery failures (default false)
+  # DEPRECATED: use QUERYwithTLSRPT instead of QUERY in Postfix main.cf
+  # to enable Postfix 3.10+ TLSRPT support
+  # setting this to true with reply with TLSRPT to both commands
   tlsrpt: false
 
   # prefetch when TTL is about to expire (default true)

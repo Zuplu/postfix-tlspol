@@ -15,6 +15,62 @@ else
     rst=""
 fi
 
+MAX_GOAMD64="v1"
+if [ "$(uname -m)" = "x86_64" ]; then
+    check_level() {
+      level="$1"
+      flags=$(sed -n '/^flags[[:space:]]*:/{s/^flags[[:space:]]*:[[:space:]]*//; p; q}' /proc/cpuinfo)
+      shift
+      for flag in "$@"; do
+        found=0
+        for alt in $(echo "$flag" | tr '|' ' '); do
+          case "$flags" in
+            *"$alt"*)
+              found=1
+              break
+              ;;
+          esac
+        done
+        [ "$found" -eq 0 ] && return 1
+      done
+      return 0
+    }
+    v2_flags="cx16 lahf_lm popcnt sse3 sse4_1 sse4_2 ssse3"
+    v3_flags="avx avx2 bmi1 bmi2 f16c fma lzcnt|abm movbe xsave"
+    v4_flags="avx512f avx512bw avx512cd avx512dq avx512vl"
+    for level in v2 v3 v4; do
+      eval "current_flags=\"\$${level}_flags\""
+      set -- $current_flags
+      if check_level "$level" "$@"; then
+        MAX_GOAMD64="$level"
+      fi
+    done
+fi
+
+if [ -n "$TARGETPLATFORM" ]; then
+    level="v1"
+    case "$TARGETPLATFORM" in
+      "linux/amd64/"*)
+        reqLevel="$(echo "$TARGETPLATFORM" | awk -F/ '{print $NF}')"
+        if [ "${reqLevel#v}" -le "${MAX_GOAMD64#v}" ]; then
+            level="$reqLevel"
+        else
+            level="$MAX_GOAMD64"
+        fi
+        ;;
+      *)
+        ;;
+    esac
+    export GOAMD64="$level"
+fi
+
+if [ -z "$GOAMD64" ]; then
+    export GOAMD64="$MAX_GOAMD64"
+fi
+
+env
+exit
+
 # Get working directory relative to this script
 BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")
 cd "$BASEDIR"
@@ -29,13 +85,16 @@ build_go() {
         echo "${cyanbg}Version: $VERSION$rst"
         echo "${green}Testing basic functionality...$rst"
         # We are only doing a short test here, run scripts/test.sh for a detailed test
-        if [ -n "$GITHUB_ACTIONS" ] || go test -tags netgo -ldflags "-d -extldflags '-static'" -failfast -short ./...; then
+        if [ -n "$GITHUB_ACTIONS" ] || go test -tags netgo -failfast -short ./...; then
             echo "${green}Test succeeded.$rst"
         else
             echo "${red}Test failed.$rst"
             exit 1
         fi
         echo "${green}Building postfix-tlspol...$rst"
+        if [ -n "$GOAMD64" ]; then
+            echo "${cyanbg}(Optimized for x86_64-$GOAMD64)$rst"
+        fi
         if go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
             echo "${green}Build succeeded!$rst"
         else
@@ -67,7 +126,7 @@ install_systemd_service() {
             systemctl enable --now init/postfix-tlspol.service
         fi
         echo "$rst"
-        sleep 0.2
+        sleep 0.1
         systemctl status --all --no-pager postfix-tlspol.service
     else
         echo "${red}systemctl not found.$rst"

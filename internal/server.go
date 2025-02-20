@@ -19,6 +19,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	valid "github.com/asaskevich/govalidator/v11"
@@ -236,7 +237,7 @@ func getCacheKey(domain *string) string {
 	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
 }
 
-func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
+func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string, withTlsRpt *bool) bool {
 	if !config.Redis.Disable {
 		cache, ttl, err := cacheJsonGet(cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
@@ -250,7 +251,7 @@ func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string) bool {
 				(*conn).Write(NS_TEMP)
 			default:
 				log.Infof("Evaluated policy for %q: %s (from cache, %ds remaining)", *domain, cache.Result, ttl)
-				if config.Server.TlsRpt {
+				if *withTlsRpt {
 					cache.Result = cache.Result + " " + cache.Report
 				}
 				(*conn).Write(netstring.Marshal("OK " + cache.Result))
@@ -281,11 +282,28 @@ type Result struct {
 
 func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 	ta := time.Now()
-	dPol, dTtl := checkDane(ctx, domain)
-	tb := time.Now()
-	msPol, msRpt, msTtl := checkMtaSts(ctx, domain)
-	tc := time.Now()
-
+	var (
+		wg    sync.WaitGroup
+		tb    time.Time = ta
+		dPol  string
+		dTtl  uint32
+		tc    time.Time = ta
+		msPol string
+		msRpt string
+		msTtl uint32
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		dPol, dTtl = checkDane(ctx, domain)
+		tb = time.Now()
+	}()
+	go func() {
+		defer wg.Done()
+		msPol, msRpt, msTtl = checkMtaSts(ctx, domain)
+		tc = time.Now()
+	}()
+	wg.Wait()
 	r := Result{
 		Version: Version,
 		Domain:  *domain,
@@ -298,7 +316,7 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 			Policy: msPol,
 			Ttl:    msTtl,
 			Report: msRpt,
-			Time:   tc.Sub(tb).Truncate(time.Millisecond).String(),
+			Time:   tc.Sub(ta).Truncate(time.Millisecond).String(),
 		},
 	}
 
@@ -311,7 +329,7 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 	(*conn).Write(append(b, '\n'))
 }
 
-func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32) {
+func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
 	switch *policy {
 	case "":
 		log.Infof("No policy found for %q (cached for %ds)", *domain, *ttl)
@@ -322,7 +340,7 @@ func replySocketmap(conn *net.Conn, domain *string, policy *string, report *stri
 	default:
 		log.Infof("Evaluated policy for %q: %s (cached for %ds)", *domain, *policy, *ttl)
 		res := *policy
-		if config.Server.TlsRpt {
+		if *withTlsRpt {
 			res = res + " " + (*report)
 		}
 		(*conn).Write(netstring.Marshal("OK " + res))
@@ -338,10 +356,15 @@ func handleConnection(conn *net.Conn) {
 		query := ns.Text()
 		parts := strings.SplitN(query, " ", 2)
 		cmd := strings.ToUpper(parts[0])
-		if cmd != "QUERY" && cmd != "JSON" {
+		withTlsRpt := config.Server.TlsRpt
+		switch cmd {
+		case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
+			withTlsRpt = true
+		case "QUERY", "JSON":
+		default:
 			log.Warnf("Unknown command: %q", query)
 			(*conn).Write(NS_PERM)
-			break
+			return
 		}
 		if len(parts) != 2 { // empty query
 			(*conn).Write(NS_NOTFOUND)
@@ -374,13 +397,13 @@ func handleConnection(conn *net.Conn) {
 		}
 
 		cacheKey := getCacheKey(&domain)
-		if tryCachedPolicy(conn, &domain, &cacheKey) {
+		if tryCachedPolicy(conn, &domain, &cacheKey, &withTlsRpt) {
 			continue
 		}
 
 		policy, report, ttl := queryDomain(&domain)
 
-		replySocketmap(conn, &domain, &policy, &report, &ttl)
+		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
 		if !config.Redis.Disable {
 			cacheJsonSet(&cacheKey, &CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl})
@@ -443,12 +466,12 @@ func queryDomain(domain *string) (string, string, uint32) {
 func cacheJsonGet(cacheKey *string) (CacheStruct, uint32, error) {
 	var data CacheStruct
 
-	jsonData, err := (*dbClient).Get(bgCtx, *cacheKey).Result()
+	jsonData, err := (*dbClient).Cache(CACHE_MIN_TTL*time.Second).Get(bgCtx, *cacheKey).Result()
 	if err != nil {
 		return data, 0, err
 	}
 
-	ttl, err := (*dbClient).TTL(bgCtx, *cacheKey).Result()
+	ttl, err := (*dbClient).Cache(CACHE_MIN_TTL*time.Second).TTL(bgCtx, *cacheKey).Result()
 	if err != nil {
 		log.Warnf("Error getting TTL: %v", err)
 		return data, 0, err

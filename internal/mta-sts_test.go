@@ -19,6 +19,7 @@ func init() {
 }
 
 func TestMtaSts(t *testing.T) {
+	t.Parallel()
 	domains := []string{"gmail.com", "outlook.com", "zuplu.com", "mailbox.org", "protonmail.com"}
 
 	passedOnce := false

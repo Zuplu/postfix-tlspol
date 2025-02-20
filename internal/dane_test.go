@@ -18,6 +18,7 @@ func init() {
 }
 
 func TestDane(t *testing.T) {
+	t.Parallel()
 	domains := []string{"ietf.org", "ripe.net", "nlnet.nl", "denic.de", "bund.de", "zuplu.com", "mailbox.org", "protonmail.com"}
 
 	passedOnce := false

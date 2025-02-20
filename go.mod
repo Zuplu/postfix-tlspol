@@ -12,7 +12,6 @@ require (
 )
 
 require (
-	github.com/fatih/color v1.18.0 // indirect
 	golang.org/x/mod v0.23.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
