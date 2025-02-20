@@ -1,5 +1,8 @@
 FROM golang:1.24.0-alpine3.21@sha256:2d40d4fc278dad38be0777d5e2a88a2c6dee51b0b29c97a764fc6c6a11ca893c AS workspace
 
+ARG TARGETPLATFORM
+ARG GITHUB_ACTIONS
+
 # Create a non-root user
 RUN addgroup -g 1000 default \
   && adduser -G default -u 1000 default -D
