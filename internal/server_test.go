@@ -18,6 +18,7 @@ func init() {
 }
 
 func TestDaneOverMtaSts(t *testing.T) {
+	t.Parallel()
 	domains := []string{"zuplu.com", "mailbox.org", "protonmail.com"}
 	passedOnce := false
 	for _, domain := range domains {

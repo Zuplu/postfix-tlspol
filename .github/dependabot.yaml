@@ -1,10 +1,42 @@
 version: 2
+
 updates:
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      major:
+        update-types:
+          - major
+      minor:
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: docker
     directory: /deployments
     schedule:
       interval: weekly
+    groups:
+      major:
+        update-types:
+          - major
+      minor:
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    groups:
+      major:
+        update-types:
+          - major
+      minor:
+        update-types:
+          - minor
+          - patch
