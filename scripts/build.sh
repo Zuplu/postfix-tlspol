@@ -133,7 +133,7 @@ install_docker_app() {
   if command -v docker > /dev/null 2>&1; then
     docker compose up --build -d
   else
-    echo "$redDocker not found.$rst"
+    echo "${red}Docker not found.$rst"
   fi
 }
 

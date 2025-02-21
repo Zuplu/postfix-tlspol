@@ -38,7 +38,7 @@ RUN <<EOR
 server:
   username: default
   chroot: ""
-  do-daemonize: no
+  do-daemonize: yes
   use-syslog: no
   verbosity: 1
   log-servfail: yes
@@ -76,7 +76,7 @@ RUN <<EOR
   cat <<EOF > /etc/valkey.conf
 bind 127.0.0.1 -::1
 port 6379
-daemonize no
+daemonize yes
 logfile ""
 loglevel notice
 dbfilename cache.rdb
@@ -88,10 +88,9 @@ EOR
 RUN <<EOR
   cat <<EOF > /entrypoint.sh
 #!/bin/sh
-/usr/sbin/unbound -V
-/usr/bin/valkey-server -v
 ( cd /etc/unbound ; /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &
 ( cd /data ; /usr/bin/valkey-server /etc/valkey.conf ) &
+wait
 exec /postfix-tlspol -config /data/config.yaml
 EOF
   chmod +x /entrypoint.sh
