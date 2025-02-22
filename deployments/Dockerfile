@@ -25,15 +25,14 @@ RUN mkdir -p /data \
   && chown default:default /data
 
 # Setup postfix-tlspol
-RUN su default -c 'sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" /build/configs/config.yaml' \
-  && mv /build/build/postfix-tlspol / \
-  && mv /build/configs/config.yaml /data/ \
-  && rm -rf /build
+RUN mv /build/build/postfix-tlspol / \
+  && mv /build/configs/config.yaml /etc/postfix-tlspol.yaml \
+  && rm -rf /build \
+  && sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/127\.0\.0\.53:53/127\.0\.0\.1:8053/" /etc/postfix-tlspol.yaml
 
 # Setup unbound
 RUN <<EOR
   chown -R default:default /usr/share/dnssec-root
-  chmod 4755 /usr/sbin/unbound
   cat <<EOF > /etc/unbound/unbound.conf
 server:
   username: default
@@ -41,9 +40,11 @@ server:
   do-daemonize: yes
   use-syslog: no
   verbosity: 1
+  logfile: /var/log/unbound.log
   log-servfail: yes
   ede: yes
-  interface: 127.0.0.53
+  interface: 127.0.0.1
+  port: 8053
   do-ip4: yes
   prefer-ip4: yes
   do-ip6: yes
@@ -54,21 +55,42 @@ server:
   edns-buffer-size: 1232
   auto-trust-anchor-file: /usr/share/dnssec-root/trusted-key.key
   cache-min-ttl: 10
-  cache-max-ttl: 180
+  cache-max-ttl: 240
   serve-original-ttl: yes
+  serve-expired: yes
+  serve-expired-client-timeout: 3500
   prefetch-key: yes
   prefetch: yes
-  discard-timeout: 4500
   hide-identity: yes
   hide-version: yes
-  target-fetch-policy: "0 0 0 0 0"
-  qname-minimisation: yes
+  target-fetch-policy: "4 3 2 2 1"
+  harden-glue: yes
+  harden-dnssec-stripped: yes
+  harden-algo-downgrade: yes
+  harden-below-nxdomain: no
+  harden-referral-path: no
+  harden-large-queries: no
+  harden-short-bufsize: yes
+  harden-unverified-glue: no
+  harden-unknown-additional: no
+  aggressive-nsec: no
+  val-permissive-mode: no
+  unknown-server-time-limit: 1500
+  jostle-timeout: 1000
+  discard-timeout: 4000
+  so-reuseport: yes
+  num-threads: 2
+  qname-minimisation: no
   minimal-responses: yes
   infra-cache-min-rtt: 4500
   infra-keep-probing: yes
   module-config: "validator iterator"
+remote-control:
+  control-enable: no
 EOF
   chown -R default:default /etc/unbound
+  touch /var/log/unbound.log
+  chown default:default /var/log/unbound.log
 EOR
 
 # Setup valkey (redis)
@@ -77,21 +99,35 @@ RUN <<EOR
 bind 127.0.0.1 -::1
 port 6379
 daemonize yes
-logfile ""
+pidfile /dev/null
+logfile /var/log/valkey.log
 loglevel notice
 dbfilename cache.rdb
 dir /data
 EOF
+  touch /var/log/valkey.log
+  chown default:default /var/log/valkey.log
 EOR
 
 # Setup entrypoint
 RUN <<EOR
   cat <<EOF > /entrypoint.sh
 #!/bin/sh
-( cd /etc/unbound ; /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &
-( cd /data ; /usr/bin/valkey-server /etc/valkey.conf ) &
+set -e
+# Upgrade from old container with persistent config.yaml
+if [ -e /data/config.yaml ]; then
+  mv /data/config.yaml /data/config.yaml.bak
+  echo "WARNING: /data/config.yaml is deprecated and removed. See /etc/postfix-tlspol.yaml (which will be overriden on each update as it is maintained by the container)"
+fi
+truncate -s0 /var/log/unbound.log /var/log/valkey.log
+( cd /etc/unbound ; \
+  /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &
+( cd /data ; \
+  /usr/bin/valkey-server /etc/valkey.conf ) &
 wait
-exec /postfix-tlspol -config /data/config.yaml
+tail -f /var/log/unbound.log &
+tail -f /var/log/valkey.log &
+exec /postfix-tlspol -config /etc/postfix-tlspol.yaml
 EOF
   chmod +x /entrypoint.sh
 EOR
