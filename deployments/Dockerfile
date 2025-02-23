@@ -57,8 +57,7 @@ server:
   cache-min-ttl: 10
   cache-max-ttl: 240
   serve-original-ttl: yes
-  serve-expired: yes
-  serve-expired-client-timeout: 3500
+  serve-expired: no
   prefetch-key: yes
   prefetch: yes
   hide-identity: yes
