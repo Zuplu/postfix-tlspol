@@ -28,6 +28,12 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
 
 It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix (see below).
 
+# Install packaged version
+
+List of repositories serving prebuilt and packaged versions of postfix-tlspol:
+
+[![Packaging status](https://repology.org/badge/vertical-allrepos/postfix-tlspol.svg?exclude_sources=modules,site)](#)
+
 # Install via Docker
 
 Installation with Docker simplifies setup, as it contains its own `Redis` database and a properly configured DNS resolver, `Unbound`. The image itself is only about 25 MB.
@@ -48,9 +54,9 @@ To update the image, stop and remove the container, and run the above command ag
 
 To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
 
-# Build from source
+# Install from source
 
-### Build a Docker container from source
+## Build a Docker container from source
 
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
@@ -58,7 +64,9 @@ cd postfix-tlspol
 scripts/build.sh # press 'd' for Docker when prompted
 ```
 
-### Requirements (standalone)
+## Standalone
+
+### Requirements
 
 These requirements only apply if you use the non-Docker variant for installation, i. e. as a systemd service unit.
 
@@ -67,7 +75,7 @@ These requirements only apply if you use the non-Docker variant for installation
 - Go (latest)
 - DNSSEC-validating DNS server (preferably on localhost)
 
-### Install (standalone)
+### Build and install
 
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
