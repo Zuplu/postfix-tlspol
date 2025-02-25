@@ -7,12 +7,12 @@ github.com/miekg/dns
 # github.com/neilotoole/jsoncolor v0.7.1
 ## explicit; go 1.16
 github.com/neilotoole/jsoncolor
-# github.com/valkey-io/valkey-go v1.0.54
+# github.com/valkey-io/valkey-go v1.0.55
 ## explicit; go 1.22.0
 github.com/valkey-io/valkey-go
 github.com/valkey-io/valkey-go/internal/cmds
 github.com/valkey-io/valkey-go/internal/util
-# github.com/valkey-io/valkey-go/valkeycompat v1.0.54
+# github.com/valkey-io/valkey-go/valkeycompat v1.0.55
 ## explicit; go 1.22.0
 github.com/valkey-io/valkey-go/valkeycompat
 # golang.org/x/mod v0.23.0
