@@ -5,38 +5,26 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
-      major:
-        update-types:
-          - major
-      minor:
-        update-types:
-          - minor
-          - patch
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
     directory: /deployments
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
-      major:
-        update-types:
-          - major
-      minor:
-        update-types:
-          - minor
-          - patch
+      docker:
+        patterns:
+          - "*"
 
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
-      major:
-        update-types:
-          - major
-      minor:
-        update-types:
-          - minor
-          - patch
+      go-modules:
+        patterns:
+          - "*"
