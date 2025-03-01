@@ -2,7 +2,7 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/releases/latest) [![GitHub License](https://img.shields.io/github/license/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/blob/main/LICENSE) [![CodeQL Badge](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/) [![Go Report Card](https://goreportcard.com/badge/github.com/Zuplu/postfix-tlspol)](https://goreportcard.com/report/github.com/Zuplu/postfix-tlspol) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/98f114fa07ac4daa89495e5248d4c76b)](https://app.codacy.com/gh/Zuplu/postfix-tlspol/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) [![build-docker](https://img.shields.io/github/actions/workflow/status/Zuplu/postfix-tlspol/build-docker.yaml?branch=main&event=push&logo=docker&logoColor=white&label=Docker&color=%232496ED)](https://hub.docker.com/r/zuplu/postfix-tlspol/tags) [![Libraries.io dependency status for GitHub repo](https://img.shields.io/librariesio/github/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/blob/main/go.mod)
 
-[<img src="https://zuplu.com/mascot.svg" width="140em" align="right" alt="Gopher mascot" />](#)
+[<img src="https://zuplu.com/mascot.svg?1" width="140em" align="right" alt="Gopher mascot" />](#)
 
 A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for Postfix that complies to the standards and prioritizes DANE where possible.
 
@@ -50,7 +50,7 @@ docker run -d \
 
 Jump to *Postfix configuration* to integrate the socketmap server.
 
-To update the image, stop and remove the container, and run the above command again.
+To update the image, stop and remove the container, and run the `docker run ...` command again.
 
 To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
 
@@ -61,8 +61,9 @@ To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
 cd postfix-tlspol
-scripts/build.sh # press 'd' for Docker when prompted
+scripts/build.sh
 ```
+Press _d_ for Docker when prompted or select it if a terminal UI appears.
 
 ## Standalone
 
@@ -80,10 +81,11 @@ These requirements only apply if you use the non-Docker variant for installation
 ```
 git clone https://github.com/Zuplu/postfix-tlspol
 cd postfix-tlspol
-scripts/build.sh # press 's' for systemd when prompted
+scripts/build.sh
 ```
+Press _s_ for systemd when prompted or select it if a terminal UI appears.
 
-Edit `configs/config.yaml` as needed. After any change, a restart is required:
+Edit `/etc/postfix-tlspol/config.yaml` as needed. After any change, a restart is required:
 ```
 service postfix-tlspol restart
 ```
@@ -92,6 +94,8 @@ service postfix-tlspol restart
 
 In `/etc/postfix/main.cf`:
 
+### Before Postfix 3.10
+
 ```
 smtp_dns_support_level = dnssec
 smtp_tls_security_level = dane
@@ -99,15 +103,21 @@ smtp_tls_dane_insecure_mx_policy = dane
 smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:QUERY
 ```
 
-Note: Explicitly setting `smtp_tls_dane_insecure_mx_policy` to `dane` is a workaround to keep falling back to `dane` in case you changed the recommended default `smtp_tls_security_level` to something different than `dane`. postfix-tlspol returns `dane` only for domains where `dane-only` is not possible (because the MX lookup is unsigned, but the MX server itself supports DANE). Not setting this would make `dane` ineffective and only honor `dane-only`, if your `smtp_tls_security_level` is not `dane`.
+<details>
+  <summary><b>Explanation for <code>smtp_tls_dane_insecure_mx_policy</code></b></summary>
+
+  This bug has been fixed in [Postfix stable release 3.10.0](https://www.postfix.org/announcements/postfix-3.10.0.html), as well as in [Postfix legacy releases 3.9.2, 3.8.8, 3.7.13, and 3.6.17](https://www.postfix.org/announcements/postfix-3.9.2.html) and all subsequent newer releases. *You do not need to manually set this, if you use one of these or more recent versions.*
+
+  Explicitly setting <code>smtp_tls_dane_insecure_mx_policy</code> to <code>dane</code> is a workaround for a bug that only matters in case you change the recommended default <code>smtp_tls_security_level</code> to something different than <code>dane</code>.
+
+  postfix-tlspol returns <code>dane</code> (opportunistic DANE) only for domains where <code>dane-only</code> (mandatory DANE) is not possible (because the MX lookup is unsigned, but the MX server itself supports DANE). Not setting this would render <code>dane</code> ineffective and only honor <code>dane-only</code>, if your <code>smtp_tls_security_level</code> is not <code>dane</code>. So even when postfix-tlspol explicitly requests opportunistic DANE for a domain, Postfix would ignore it before the fix.
+</details>
 
 ### For Postfix 3.10 and later
 
 ```
 smtp_dns_support_level = dnssec
 smtp_tls_security_level = dane
-# already default:
-# smtp_tls_dane_insecure_mx_policy = dane
 smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:QUERYwithTLSRPT
 ```
 
@@ -130,9 +140,9 @@ scripts/build.sh
 
 # Configuration
 
-_*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is configured properly with prefetching enabled._
+_*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is autoconfigured._
 
-Configuration example for `configs/config.yaml`:
+Configuration example for `/etc/postfix-tlspol/config.yaml`:
 ```
 server:
   # server:port to listen as a socketmap server
@@ -159,7 +169,7 @@ redis:
 
 # Prefetching
 
-If you enable prefetching via `configs/config.yaml`, it is recommended to adjust your local DNS caching resolver to serve the original TTL response.
+It is recommended to adjust your local DNS caching resolver to serve the original TTL response.
 
 For example, in `Unbound`, configure the following:
 ```
@@ -171,4 +181,4 @@ This will serve the original TTL, but still skip the cache after `240` seconds, 
 
 It ensures that when postfix-tlspol prefetches policies before the TTL actually expires, the DNS cache won't be used (otherwise it would only prefetch for the residual TTL time).
 
-Prefetching will work without these settings, but a little less efficiently.
+Prefetching will work without these settings, albeit slightly less efficiently.
