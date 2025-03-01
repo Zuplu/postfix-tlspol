@@ -5,12 +5,10 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")
-EXEPATH="$BASEDIR/build/postfix-tlspol"
-
-if [ ! -f "$EXEPATH" ]; then
+if [ ! -f /usr/bin/postfix-tlspol ]; then
   echo "Build and start postfix-tlspol first."
   exit 1
 fi
 
-exec "$EXEPATH" -config "$BASEDIR/configs/config.yaml" -query "$1"
+printf "Tip: Use \033[34mpostfix-tlspol [-config /etc/postfix-tlspol/config.yaml] -query $1\033[0m instead.\n" >&2
+exec /usr/bin/postfix-tlspol -query "$1"

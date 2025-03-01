@@ -1,11 +1,10 @@
 [Unit]
-Description=postfix-tlspol
+Description=postfix-tlspol daemon
 After=nss-lookup.target network-online.target
 Wants=nss-lookup.target
 
 [Service]
-WorkingDirectory=%%BASEDIR%%
-ExecStart=%%BASEDIR%%/build/postfix-tlspol -config %%BASEDIR%%/configs/config.yaml
+ExecStart=/usr/bin/postfix-tlspol -config /etc/postfix-tlspol/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 DynamicUser=yes
 Restart=always
@@ -36,10 +35,11 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
-ReadOnlyPaths=%%BASEDIR%%
+SecureBits=noroot-locked
+ReadOnlyPaths=/etc/postfix-tlspol
 UMask=0111
 RuntimeDirectory=postfix-tlspol
-RuntimeDirectoryMode=1777
+RuntimeDirectoryMode=1755
 BindPaths=/run/postfix-tlspol
 
 [Install]

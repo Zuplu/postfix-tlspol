@@ -65,7 +65,7 @@ var purgeCache = false
 func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.BoolVar(&showLicense, "license", false, "Show LICENSE")
-	flag.StringVar(&configFile, "config", "configs/config.yaml", "Path to the config.yaml")
+	flag.StringVar(&configFile, "config", "/etc/postfix-tlspol/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
 	flag.BoolVar(&purgeCache, "purge", false, "Manually clear the cache")
 }
