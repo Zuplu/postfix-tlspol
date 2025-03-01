@@ -1,4 +1,3 @@
 #!/bin/sh
-BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")
-cd "$BASEDIR"
+cd "$(dirname "$(dirname "$(readlink -f "$0")")")"
 exec go test -v -count=1 ./...

@@ -1,7 +1,19 @@
 #!/bin/sh
+###################
+#
+#  MIT License
+#  Copyright (c) 2024-2025 Zuplu
+#
+#  Calling this script with the env variable NOOPT=1
+#  will build a more compatible binary ("NOOPT=1 scripts/build.sh")
+#  (i. e. Go toolchain will build for x86_64-v1
+#  even if current machine supports v4)
+#
+#  Set env NOTEST=1 to skip testing (which requires internet access)
+#
+###################
 
 act="$1"
-
 if [ -t 1 ]; then
   red="\033[31m"
   green="\033[32m"
@@ -15,60 +27,62 @@ else
   cyanbg=""
   rst=""
 fi
-
-if [ "$(uname -m)" = "x86_64" ]; then
-  MAX_GOAMD64="v1"
-  check_level() {
-    level="$1"
-    flags=$(sed -n '/^flags[[:space:]]*:/{s/^flags[[:space:]]*:[[:space:]]*//; p; q}' /proc/cpuinfo)
-    shift
-    for flag in "$@"; do
-      found=0
-      for alt in $(echo "$flag" | tr '|' ' '); do
-        case "$flags" in
-          *"$alt"*)
-            found=1
-            break
-            ;;
-        esac
-      done
-      [ "$found" -eq 0 ] && return 1
-    done
-    return 0
-  }
-  v2_flags="cx16 lahf_lm popcnt sse3 sse4_1 sse4_2 ssse3"
-  v3_flags="avx avx2 bmi1 bmi2 f16c fma lzcnt|abm movbe xsave"
-  v4_flags="avx512f avx512bw avx512cd avx512dq avx512vl"
-  for level in v2 v3 v4; do
-    eval "current_flags=\"\$${level}_flags\""
-    set -- $current_flags
-    if check_level "$level" "$@"; then
-      MAX_GOAMD64="$level"
-    fi
-  done
-  if [ -n "$TARGETPLATFORM" ]; then
-    level="v1"
-    case "$TARGETPLATFORM" in
-      "linux/amd64/"*)
-        reqLevel="$(echo "$TARGETPLATFORM" | awk -F/ '{print $NF}')"
-        if [ "${reqLevel#v}" -le "${MAX_GOAMD64#v}" ]; then
-          level="$reqLevel"
-        else
-          level="$MAX_GOAMD64"
-        fi
-        ;;
-      *) ;;
-
-    esac
-    export GOAMD64="$level"
-  fi
-  if [ -z "$GOAMD64" ]; then
-    export GOAMD64="$MAX_GOAMD64"
-  fi
+if [ -n "$GITHUB_ACTIONS" ]; then
+  NOTEST="${NOTEST:-1}"
 fi
 
-BASEDIR=$(dirname "$(dirname "$(readlink -f "$0")")")
-cd "$BASEDIR"
+if [ -z "$NOOPT" ]; then
+  if [ "$(uname -m)" = "x86_64" ]; then
+    MAX_GOAMD64="v1"
+    check_level() {
+      level="$1"
+      flags=$(sed -n '/^flags[[:space:]]*:/{s/^flags[[:space:]]*:[[:space:]]*//; p; q}' /proc/cpuinfo)
+      shift
+      for flag in "$@"; do
+        found=0
+        for alt in $(echo "$flag" | tr '|' ' '); do
+          case "$flags" in
+            *"$alt"*)
+              found=1
+              break
+              ;;
+          esac
+        done
+        [ "$found" -eq 0 ] && return 1
+      done
+      return 0
+    }
+    v2_flags="cx16 lahf_lm popcnt sse3 sse4_1 sse4_2 ssse3"
+    v3_flags="avx avx2 bmi1 bmi2 f16c fma lzcnt|abm movbe xsave"
+    v4_flags="avx512f avx512bw avx512cd avx512dq avx512vl"
+    for level in v2 v3 v4; do
+      eval "current_flags=\"\$${level}_flags\""
+      set -- $current_flags
+      if check_level "$level" "$@"; then
+        MAX_GOAMD64="$level"
+      fi
+    done
+    if [ -n "$TARGETPLATFORM" ]; then
+      level="v1"
+      case "$TARGETPLATFORM" in
+        "linux/amd64/"*)
+          reqLevel="$(echo "$TARGETPLATFORM" | awk -F/ '{print $NF}')"
+          if [ "${reqLevel#v}" -le "${MAX_GOAMD64#v}" ]; then
+            level="$reqLevel"
+          else
+            level="$MAX_GOAMD64"
+          fi
+          ;;
+        *) ;;
+
+      esac
+      export GOAMD64="$level"
+    fi
+    if [ -z "$GOAMD64" ]; then
+      export GOAMD64="$MAX_GOAMD64"
+    fi
+  fi
+fi
 
 build_go() {
   mkdir -p build
@@ -77,31 +91,43 @@ build_go() {
     export CGO_ENABLED=0
     go mod download
     VERSION="$(git describe --always --tags --match='v*' --abbrev=7 --dirty=-modified)"
-    echo "${cyanbg}Version: $VERSION$rst"
-    echo "${green}Testing basic functionality...$rst"
+    printf "${cyanbg}Version: $VERSION$rst\n"
+    printf "${green}Testing basic functionality...$rst\n"
     # We are only doing a short test here, run scripts/test.sh for a detailed test
-    if [ -n "$GITHUB_ACTIONS" ] || go test -tags netgo -failfast -short ./...; then
-      echo "${green}Test succeeded.$rst"
+    if [ -n "$NOTEST" ]; then
+      printf "${yellow}Test skipped.$rst\n"
     else
-      echo "${red}Test failed.$rst"
-      exit 1
+      if go test -tags netgo -failfast -short ./...; then
+        printf "${green}Test succeeded.$rst\n"
+      else
+        printf "${red}Test failed.$rst\n"
+        exit 1
+      fi
     fi
-    echo "${green}Building postfix-tlspol...$rst"
+    printf "${green}Building postfix-tlspol...$rst\n"
     if [ -n "$GOAMD64" ]; then
-      echo "${cyanbg}(Optimized for x86_64-$GOAMD64)$rst"
+      printf "${cyanbg}(Optimized for x86_64-$GOAMD64)$rst\n"
     fi
     if go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
-      echo "${green}Build succeeded!$rst"
+      printf "${green}Build succeeded!$rst\n"
     else
-      echo "${red}Build failed!$rst"
+      printf "${red}Build failed!$rst\n"
       exit 1
     fi
-    # Migrate config.yaml to new directory structure
-    [ -f config.yaml ] && mv config.yaml configs/config.yaml
-    # Create scripts/config.yaml from blueprint if it does not exist
-    [ ! -f configs/config.yaml ] && cp -a configs/config.default.yaml configs/config.yaml
+    if [ ! -f /etc/postfix-tlspol/config.yaml ]; then
+      if [ -f config.yaml ]; then
+        # Migrate config.yaml to new directory structure
+        mv config.yaml configs/config.yaml
+      elif [ ! -f configs/config.yaml ]; then
+        # Create scripts/config.yaml from blueprint if it does not exist
+        cp -a configs/config.default.yaml configs/config.yaml
+      fi
+      install -C -D configs/config.yaml /etc/postfix-tlspol/config.yaml
+      rm -f configs/config.yaml
+    fi
+    install -T build/postfix-tlspol /usr/bin/postfix-tlspol
   else
-    echo "${red}Go toolchain not found. Required unless installing as a Docker container.$rst"
+    printf "${red}Go toolchain not found. Required unless installing as a Docker container.$rst\n"
     exit 1
   fi
 }
@@ -109,22 +135,20 @@ build_go() {
 install_systemd_service() {
   build_go
   if command -v systemctl > /dev/null 2>&1; then
-    # Remove systemd service unit from project root (migration from old directory structure)
-    [ -f postfix-tlspol.service ] && rm postfix-tlspol.service
-    sed "s!%%BASEDIR%%!$BASEDIR!g" init/postfix-tlspol.service.template > init/postfix-tlspol.service
+    install -C -D -b init/postfix-tlspol.service /usr/lib/systemd/system/postfix-tlspol.service
     systemctl daemon-reload
     if systemctl is-enabled postfix-tlspol.service > /dev/null 2>&1; then
-      echo "Restarting service unit...$yellow"
-      systemctl reenable --now init/postfix-tlspol.service
+      printf "Restarting service unit...$yellow\n"
+      systemctl reenable --now postfix-tlspol.service
     else
-      echo "Enabling and starting service unit...$yellow"
-      systemctl enable --now init/postfix-tlspol.service
+      printf "Enabling and starting service unit...$yellow\n"
+      systemctl enable --now postfix-tlspol.service
     fi
-    echo "$rst"
+    printf "$rst"
     sleep 0.1
     systemctl status --all --no-pager postfix-tlspol.service
   else
-    echo "${red}systemctl not found.$rst"
+    printf "${red}systemctl not found.$rst\n"
   fi
 }
 
@@ -133,7 +157,7 @@ install_docker_app() {
   if command -v docker > /dev/null 2>&1; then
     docker compose up --build -d
   else
-    echo "${red}Docker not found.$rst"
+    printf "${red}Docker not found.$rst\n"
   fi
 }
 
