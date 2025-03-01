@@ -84,12 +84,13 @@ if [ -z "$NOOPT" ]; then
   fi
 fi
 
+cd "$(dirname "$(dirname "$(readlink -f "$0")")")"
+
 build_go() {
   mkdir -p build
   if command -v go > /dev/null 2>&1; then
     export GOTOOLCHAIN=auto
     export CGO_ENABLED=0
-    go mod download
     VERSION="$(git describe --always --tags --match='v*' --abbrev=7 --dirty=-modified)"
     printf "${cyanbg}Version: $VERSION$rst\n"
     printf "${green}Testing basic functionality...$rst\n"
@@ -122,10 +123,10 @@ build_go() {
         # Create scripts/config.yaml from blueprint if it does not exist
         cp -a configs/config.default.yaml configs/config.yaml
       fi
-      install -C -D configs/config.yaml /etc/postfix-tlspol/config.yaml
+      install -D configs/config.yaml /etc/postfix-tlspol/config.yaml
       rm -f configs/config.yaml
     fi
-    install -T build/postfix-tlspol /usr/bin/postfix-tlspol
+    install build/postfix-tlspol /usr/bin/postfix-tlspol
   else
     printf "${red}Go toolchain not found. Required unless installing as a Docker container.$rst\n"
     exit 1
@@ -135,7 +136,7 @@ build_go() {
 install_systemd_service() {
   build_go
   if command -v systemctl > /dev/null 2>&1; then
-    install -C -D -b init/postfix-tlspol.service /usr/lib/systemd/system/postfix-tlspol.service
+    install -D init/postfix-tlspol.service /usr/lib/systemd/system/postfix-tlspol.service
     systemctl daemon-reload
     if systemctl is-enabled postfix-tlspol.service > /dev/null 2>&1; then
       printf "Restarting service unit...$yellow\n"

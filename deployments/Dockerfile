@@ -11,10 +11,14 @@ RUN addgroup -g 1000 default \
 RUN apk add --no-cache git unbound valkey
 
 # Copy postfix-tlspol
-COPY --chown=default:default . /build
+COPY . /build
 
-# Build postfix-tlspol and remove Go toolchain
-RUN su default -c "/build/scripts/build.sh build-only ; go clean -cache -modcache" \
+# Build postfix-tlspol
+RUN /build/scripts/build.sh build-only
+
+# Remove residual toolchain
+RUN go clean -cache -modcache \
+  && rm -rf /build \
   && rm -rf /usr/local/go \
   && rm -rf /go \
   && rm -rf /home \
@@ -25,10 +29,8 @@ RUN mkdir -p /data \
   && chown default:default /data
 
 # Setup postfix-tlspol
-RUN mv /build/build/postfix-tlspol / \
-  && mv /build/configs/config.yaml /etc/postfix-tlspol.yaml \
-  && rm -rf /build \
-  && sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/127\.0\.0\.53:53/127\.0\.0\.1:8053/" /etc/postfix-tlspol.yaml
+RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/127\.0\.0\.53:53/127\.0\.0\.1:8053/" /etc/postfix-tlspol/config.yaml \
+  && chown -R default:default /etc/postfix-tlspol
 
 # Setup unbound
 RUN <<EOR
@@ -94,7 +96,8 @@ EOR
 
 # Setup valkey (redis)
 RUN <<EOR
-  cat <<EOF > /etc/valkey.conf
+  mkdir -p /etc/valkey
+  cat <<EOF > /etc/valkey/valkey.conf
 bind 127.0.0.1 -::1
 port 6379
 daemonize yes
@@ -104,6 +107,7 @@ loglevel notice
 dbfilename cache.rdb
 dir /data
 EOF
+  chown -R default:default /etc/valkey
   touch /var/log/valkey.log
   chown default:default /var/log/valkey.log
 EOR
@@ -116,17 +120,17 @@ set -e
 # Upgrade from old container with persistent config.yaml
 if [ -e /data/config.yaml ]; then
   mv /data/config.yaml /data/config.yaml.bak
-  echo "WARNING: /data/config.yaml is deprecated and removed. See /etc/postfix-tlspol.yaml (which will be overriden on each update as it is maintained by the container)"
+  echo "WARNING: /data/config.yaml is deprecated and removed. See /etc/postfix-tlspol/config.yaml (which will be overriden on each update as it is maintained by the container)"
 fi
 truncate -s0 /var/log/unbound.log /var/log/valkey.log
 ( cd /etc/unbound ; \
   /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &
 ( cd /data ; \
-  /usr/bin/valkey-server /etc/valkey.conf ) &
+  /usr/bin/valkey-server /etc/valkey/valkey.conf ) &
 wait
 tail -f /var/log/unbound.log &
 tail -f /var/log/valkey.log &
-exec /postfix-tlspol -config /etc/postfix-tlspol.yaml
+exec /usr/bin/postfix-tlspol -config /etc/postfix-tlspol/config.yaml
 EOF
   chmod +x /entrypoint.sh
 EOR
