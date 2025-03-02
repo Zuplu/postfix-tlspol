@@ -6,11 +6,14 @@
 package tlspol
 
 import (
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"math/rand/v2"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Zuplu/postfix-tlspol/internal/cache"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 )
 
 const (
@@ -28,9 +31,9 @@ func startPrefetching() {
 }
 
 func prefetchCachedPolicies() {
-	keys, err := (*dbClient).Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
+	keys, err := cacheClient.Keys(bgCtx)
 	if err != nil {
-		log.Errorf("Error fetching keys from Redis: %v", err)
+		log.Errorf("Error fetching keys from cache: %v", err)
 		return
 	}
 	polCnt := len(keys) - 1
@@ -41,9 +44,6 @@ func prefetchCachedPolicies() {
 	var wg sync.WaitGroup
 	var counter atomic.Uint32
 	for _, key := range keys {
-		if key == CACHE_KEY_PREFIX+"version" {
-			continue
-		}
 		semaphore <- struct{}{}
 		wg.Add(1)
 		go func(key string) {
@@ -51,7 +51,7 @@ func prefetchCachedPolicies() {
 				wg.Done()
 				<-semaphore
 			}()
-			cachedPolicy, ttl, err := cacheJsonGet(&key)
+			cachedPolicy, ttl, err := cacheClient.Get(bgCtx, key)
 			if err != nil || cachedPolicy.Result == "" {
 				return
 			}
@@ -61,7 +61,8 @@ func prefetchCachedPolicies() {
 				refreshedResult, refreshedRpt, refreshedTtl := queryDomain(&cachedPolicy.Domain)
 				if refreshedResult != "" && refreshedResult != "TEMP" {
 					counter.Add(1)
-					cacheJsonSet(&key, &CacheStruct{Domain: cachedPolicy.Domain, Result: refreshedResult, Report: refreshedRpt, Ttl: refreshedTtl})
+					dbTtl := time.Duration(ttl+PREFETCH_MARGIN-rand.Uint32N(60)) * time.Second
+					cacheClient.Set(bgCtx, key, &cache.CacheStruct{Domain: cachedPolicy.Domain, Result: refreshedResult, Report: refreshedRpt, Ttl: refreshedTtl}, dbTtl)
 				}
 			}
 		}(key)

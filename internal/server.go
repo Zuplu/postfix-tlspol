@@ -13,8 +13,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -22,26 +20,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Zuplu/postfix-tlspol/internal/cache"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
+
 	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
 	"github.com/neilotoole/jsoncolor"
-	"github.com/valkey-io/valkey-go"
-	"github.com/valkey-io/valkey-go/valkeycompat"
 )
 
-type CacheStruct struct {
-	Domain string `json:"d"`
-	Result string `json:"r"`
-	Report string `json:"p"`
-	Ttl    uint32 `json:"t"`
-}
-
 const (
-	DB_SCHEMA          = "3"
-	CACHE_KEY_PREFIX   = "TLSPOL-"
-	CACHE_NOTFOUND_TTL = 600
-	CACHE_MIN_TTL      = 180
-	REQUEST_TIMEOUT    = 5 * time.Second
+	REQUEST_TIMEOUT = 5 * time.Second
 )
 
 var (
@@ -49,7 +38,7 @@ var (
 	bgCtx       = context.Background()
 	client      = dns.Client{Timeout: REQUEST_TIMEOUT}
 	config      Config
-	dbClient    *valkeycompat.Cmdable
+	cacheClient cache.Cache
 	NS_NOTFOUND = netstring.Marshal("NOTFOUND ")
 	NS_TEMP     = netstring.Marshal("TEMP ")
 	NS_PERM     = netstring.Marshal("PERM ")
@@ -169,36 +158,31 @@ func StartDaemon(v *string, licenseText *string) {
 	}
 
 	if !config.Redis.Disable {
-		// Setup redis client for cache
-		valkeyClient, err := valkey.NewClient(valkey.ClientOption{
-			InitAddress: []string{config.Redis.Address},
-			Password:    config.Redis.Password,
-			SelectDB:    config.Redis.DB,
-		})
-		if err != nil {
-			log.Errorf("Could not initialize Valkey (Redis) client: %v", err)
+		cacheClient = cache.NewRedisCache(config.Redis.Address, config.Redis.Password, config.Redis.DB)
+		cacheClient.UpdateDatabase(bgCtx)
+
+		if purgeCache {
+			err = cacheClient.PurgeDatabase(bgCtx)
+			if err == nil {
+				log.Info("Cache purged successfully!")
+			} else {
+				log.Errorf("Error while purging the cache: %v", err)
+			}
 			return
 		}
-		dbAdapter := valkeycompat.NewAdapter(valkeyClient)
-		dbClient = &dbAdapter
-		updateDatabase()
-		go func() {
-			if config.Server.Prefetch {
-				log.Info("Prefetching enabled!")
-				startPrefetching()
-			}
-		}()
+
+		if config.Server.Prefetch {
+			go func() {
+				if config.Server.Prefetch {
+					log.Info("Prefetching enabled!")
+					startPrefetching()
+				}
+			}()
+		}
 	} else if config.Server.Prefetch {
 		log.Warn("Cannot prefetch with Valkey (Redis) disabled!")
-	}
-
-	if purgeCache {
-		err = purgeDatabase()
-		if err == nil {
-			log.Info("Cache purged successfully!")
-		} else {
-			log.Errorf("Error while purging the cache: %v", err)
-		}
+	} else if purgeCache {
+		fmt.Errorf("Cannot purge cache if not configured as Valkey (Redis)!")
 		return
 	}
 
@@ -234,12 +218,12 @@ func startServer() {
 
 func getCacheKey(domain *string) string {
 	hash := sha256.Sum256([]byte(*domain))
-	return CACHE_KEY_PREFIX + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:])
 }
 
 func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string, withTlsRpt *bool) bool {
 	if !config.Redis.Disable {
-		cache, ttl, err := cacheJsonGet(cacheKey)
+		cache, ttl, err := cacheClient.Get(bgCtx, *cacheKey)
 		if err == nil && ttl > PREFETCH_MARGIN {
 			ttl := ttl - PREFETCH_MARGIN
 			switch cache.Result {
@@ -406,7 +390,8 @@ func handleConnection(conn *net.Conn) {
 		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
 		if !config.Redis.Disable {
-			cacheJsonSet(&cacheKey, &CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl})
+			dbTtl := time.Duration(ttl+PREFETCH_MARGIN-rand.Uint32N(60)) * time.Second
+			cacheClient.Set(bgCtx, cacheKey, &cache.CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl}, dbTtl)
 		}
 	}
 }
@@ -436,7 +421,7 @@ func queryDomain(domain *string) (string, string, uint32) {
 	}()
 
 	policy, report := "", ""
-	var ttl uint32 = CACHE_NOTFOUND_TTL
+	var ttl uint32 = cache.CACHE_NOTFOUND_TTL
 	var i uint8 = 0
 	for r := range results {
 		i++
@@ -455,64 +440,10 @@ func queryDomain(domain *string) (string, string, uint32) {
 	}
 
 	if policy == "" {
-		ttl = CACHE_NOTFOUND_TTL
-	} else if policy == "TEMP" || ttl < CACHE_MIN_TTL {
-		ttl = CACHE_MIN_TTL
+		ttl = cache.CACHE_NOTFOUND_TTL
+	} else if policy == "TEMP" || ttl < cache.CACHE_MIN_TTL {
+		ttl = cache.CACHE_MIN_TTL
 	}
 
 	return policy, report, ttl
-}
-
-func cacheJsonGet(cacheKey *string) (CacheStruct, uint32, error) {
-	var data CacheStruct
-
-	jsonData, err := (*dbClient).Cache(CACHE_MIN_TTL*time.Second).Get(bgCtx, *cacheKey).Result()
-	if err != nil {
-		return data, 0, err
-	}
-
-	ttl, err := (*dbClient).Cache(CACHE_MIN_TTL*time.Second).TTL(bgCtx, *cacheKey).Result()
-	if err != nil {
-		log.Warnf("Error getting TTL: %v", err)
-		return data, 0, err
-	}
-
-	return data, uint32(ttl.Seconds()), json.Unmarshal([]byte(jsonData), &data)
-}
-
-func cacheJsonSet(cacheKey *string, data *CacheStruct) error {
-	jsonData, err := json.Marshal(*data)
-	if err != nil {
-		return fmt.Errorf("Error marshaling JSON: %v", err)
-	}
-
-	return (*dbClient).Set(bgCtx, *cacheKey, jsonData, time.Duration(data.Ttl+PREFETCH_MARGIN-rand.Uint32N(60))*time.Second).Err()
-}
-
-func purgeDatabase() error {
-	if config.Redis.Disable {
-		return fmt.Errorf("Cache disabled")
-	}
-	keys, err := (*dbClient).Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
-	if err != nil {
-		return fmt.Errorf("Error fetching keys: %v", err)
-	}
-	for _, key := range keys {
-		(*dbClient).Del(bgCtx, key).Err()
-	}
-	return (*dbClient).Set(bgCtx, CACHE_KEY_PREFIX+"schema", DB_SCHEMA, 0).Err()
-}
-
-func updateDatabase() error {
-	currentSchema, err := (*dbClient).Get(bgCtx, CACHE_KEY_PREFIX+"schema").Result()
-	if err != nil && err != valkey.Nil {
-		return fmt.Errorf("Error getting schema from Valkey (Redis): %v", err)
-	}
-
-	// Check if the schema matches, else clear the database
-	if currentSchema != DB_SCHEMA {
-		return purgeDatabase()
-	}
-
-	return nil
 }
