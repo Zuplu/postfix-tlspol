@@ -52,7 +52,7 @@ func prefetchCachedPolicies() {
 				<-semaphore
 			}()
 			cachedPolicy, ttl, err := cacheClient.Get(bgCtx, key)
-			if err != nil || cachedPolicy.Result == "" {
+			if err != nil || cachedPolicy == nil || cachedPolicy.Result == "" {
 				return
 			}
 			// Check if the original TTL is greater than the margin and within the prefetching range

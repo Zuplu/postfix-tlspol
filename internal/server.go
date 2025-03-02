@@ -170,20 +170,20 @@ func StartDaemon(v *string, licenseText *string) {
 			}
 			return
 		}
-
-		if config.Server.Prefetch {
-			go func() {
-				if config.Server.Prefetch {
-					log.Info("Prefetching enabled!")
-					startPrefetching()
-				}
-			}()
-		}
-	} else if config.Server.Prefetch {
-		log.Warn("Cannot prefetch with Valkey (Redis) disabled!")
 	} else if purgeCache {
 		fmt.Errorf("Cannot purge cache if not configured as Valkey (Redis)!")
 		return
+	} else {
+		cacheClient = cache.NewMemoryCache()
+	}
+
+	if config.Server.Prefetch {
+		go func() {
+			if config.Server.Prefetch {
+				log.Info("Prefetching enabled!")
+				startPrefetching()
+			}
+		}()
 	}
 
 	// Start the socketmap server for Postfix
@@ -222,26 +222,24 @@ func getCacheKey(domain *string) string {
 }
 
 func tryCachedPolicy(conn *net.Conn, domain *string, cacheKey *string, withTlsRpt *bool) bool {
-	if !config.Redis.Disable {
-		cache, ttl, err := cacheClient.Get(bgCtx, *cacheKey)
-		if err == nil && ttl > PREFETCH_MARGIN {
-			ttl := ttl - PREFETCH_MARGIN
-			switch cache.Result {
-			case "":
-				log.Infof("No policy found for %q (from cache, %ds remaining)", *domain, ttl)
-				(*conn).Write(NS_NOTFOUND)
-			case "TEMP":
-				log.Warnf("Evaluating policy for %q failed temporarily (from cache, %ds remaining)", *domain, ttl)
-				(*conn).Write(NS_TEMP)
-			default:
-				log.Infof("Evaluated policy for %q: %s (from cache, %ds remaining)", *domain, cache.Result, ttl)
-				if *withTlsRpt {
-					cache.Result = cache.Result + " " + cache.Report
-				}
-				(*conn).Write(netstring.Marshal("OK " + cache.Result))
+	cache, ttl, err := cacheClient.Get(bgCtx, *cacheKey)
+	if err == nil && cache != nil && ttl > PREFETCH_MARGIN {
+		ttl := ttl - PREFETCH_MARGIN
+		switch cache.Result {
+		case "":
+			log.Infof("No policy found for %q (from cache, %ds remaining)", *domain, ttl)
+			(*conn).Write(NS_NOTFOUND)
+		case "TEMP":
+			log.Warnf("Evaluating policy for %q failed temporarily (from cache, %ds remaining)", *domain, ttl)
+			(*conn).Write(NS_TEMP)
+		default:
+			log.Infof("Evaluated policy for %q: %s (from cache, %ds remaining)", *domain, cache.Result, ttl)
+			if *withTlsRpt {
+				cache.Result = cache.Result + " " + cache.Report
 			}
-			return true
+			(*conn).Write(netstring.Marshal("OK " + cache.Result))
 		}
+		return true
 	}
 	return false
 }
@@ -389,10 +387,8 @@ func handleConnection(conn *net.Conn) {
 
 		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
-		if !config.Redis.Disable {
-			dbTtl := time.Duration(ttl+PREFETCH_MARGIN-rand.Uint32N(60)) * time.Second
-			cacheClient.Set(bgCtx, cacheKey, &cache.CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl}, dbTtl)
-		}
+		dbTtl := time.Duration(ttl+PREFETCH_MARGIN-rand.Uint32N(60)) * time.Second
+		cacheClient.Set(bgCtx, cacheKey, &cache.CacheStruct{Domain: domain, Result: policy, Report: report, Ttl: ttl}, dbTtl)
 	}
 }
 
