@@ -71,7 +71,7 @@ Press _d_ for Docker when prompted or select it if a terminal UI appears.
 
 These requirements only apply if you use the non-Docker variant for installation, i. e. as a systemd service unit.
 
-- A Redis-compatible database (e. g. Valkey, KeyDB, Redis, ...; optional if caching is disabled)
+- A Redis-compatible database (e. g. Valkey, KeyDB, Redis, ...; optional)
 - Postfix
 - Go (latest)
 - DNSSEC-validating DNS server (preferably on localhost)
@@ -157,7 +157,7 @@ dns:
   address: 127.0.0.53:53
 
 redis:
-  # disable caching (default false)
+  # disable redis (will use in-memory cache)
   disable: false
 
   # Redis compatible server:port to act as a cache
