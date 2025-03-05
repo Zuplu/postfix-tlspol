@@ -10,7 +10,7 @@ RUN addgroup -g 1000 default \
 RUN apk add --no-cache git
 
 # Copy postfix-tlspol
-COPY ./postfix-tlspol /build
+COPY . /build
 
 # Build postfix-tlspol
 RUN /build/scripts/build.sh build-only
