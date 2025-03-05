@@ -3,7 +3,7 @@ services:
     image: zuplu/postfix-tlspol
     container_name: postfix-tlspol
     build:
-      context: ../
+      context: ..
       dockerfile: ./deployments/tlspol/Dockerfile
     ports:
       - "8642:8642"
@@ -19,7 +19,7 @@ services:
     image: valkey/valkey:8.1-alpine3.21
     container_name: valkey-tlspol
     build:
-      context: ../
+      context: ..
       dockerfile: ./deployments/valkey/Dockerfile
     restart: unless-stopped
     networks:
@@ -28,7 +28,7 @@ services:
     image: mvance/unbound:1.21.1
     container_name: unbound-tlspol
     build:
-      context: ../
+      context: ..
       dockerfile: ./deployments/unbound/Dockerfile
     restart: unless-stopped
     networks:
