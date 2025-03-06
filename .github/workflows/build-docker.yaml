@@ -146,7 +146,7 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
 
       - name: 🔏 Attest build provenance
-        uses: actions/attest-build-provenance@bd77c077858b8d561b7a36cbe48ef4cc642ca39d # pin@v2
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # pin@v2
         id: attest
         with:
           subject-name: index.docker.io/${{ env.REGISTRY_IMAGE }}
