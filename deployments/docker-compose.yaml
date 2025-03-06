@@ -4,13 +4,39 @@ services:
     container_name: postfix-tlspol
     build:
       context: ..
-      dockerfile: ./deployments/Dockerfile
+      dockerfile: ./deployments/tlspol/Dockerfile
     ports:
-      - "127.0.0.1:8642:8642"
+      - "8642:8642"
     restart: unless-stopped
-    network_mode: bridge
+    networks:
+      - internal
     volumes:
       - postfix-tlspol-data:/data
-
+    depends_on:
+      unbound-tlspol:
+        condition: service_healthy
+  valkey-tlspol:
+    image: valkey/valkey:8.1-alpine3.21
+    container_name: valkey-tlspol
+    build:
+      context: ..
+      dockerfile: ./deployments/valkey/Dockerfile
+    restart: unless-stopped
+    networks:
+      - internal
+  unbound-tlspol:
+    image: mvance/unbound:1.21.1
+    container_name: unbound-tlspol
+    build:
+      context: ..
+      dockerfile: ./deployments/unbound/Dockerfile
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      - valkey-tlspol
 volumes:
   postfix-tlspol-data:
+
+networks:
+  internal:
