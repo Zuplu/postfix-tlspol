@@ -11,17 +11,9 @@ server:
   # prefetch when TTL is about to expire (default true)
   prefetch: true
 
+  # cache file (default cache.db in working directory, i. e. /var/lib/postfix-tlspol)
+  cache-file: cache.db
+
 dns:
   # must support DNSSEC
   address: 127.0.0.53:53
-
-redis:
-  # disable caching (default false)
-  disable: false
-
-  # Redis compatible server:port to act as a cache
-  address: 127.0.0.1:6379
-
-  # select Redis DB number
-  db: 2
-

@@ -6,6 +6,7 @@
 package tlspol
 
 import (
+	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"runtime"
 	"sync"
@@ -14,61 +15,55 @@ import (
 )
 
 const (
-	PREFETCH_INTERVAL float64 = 30
-	PREFETCH_MARGIN           = 300 // seconds
-
-	PREFETCH_FACTOR = (PREFETCH_INTERVAL + 1.0) / float64(PREFETCH_MARGIN)
+	PREFETCH_INTERVAL uint32 = 20
+	PREFETCH_MARGIN   uint32 = 300
 )
+
+var semaphore chan struct{}
 
 func startPrefetching() {
 	ticker := time.NewTicker(time.Duration(PREFETCH_INTERVAL) * time.Second)
+	semaphore = make(chan struct{}, runtime.NumCPU()*8)
 	for range ticker.C {
 		prefetchCachedPolicies()
 	}
 }
 
 func prefetchCachedPolicies() {
-	keys, err := (*dbClient).Keys(bgCtx, CACHE_KEY_PREFIX+"*").Result()
-	if err != nil {
-		log.Errorf("Error fetching keys from Redis: %v", err)
-		return
-	}
-	polCnt := len(keys) - 1
-	if polCnt < 1 {
-		return
-	}
-	semaphore := make(chan struct{}, runtime.NumCPU()*8)
 	var wg sync.WaitGroup
 	var counter atomic.Uint32
-	for _, key := range keys {
-		if key == CACHE_KEY_PREFIX+"version" {
+	items := polCache.Items()
+	itemsCount := len(items)
+	for _, entry := range items {
+		remainingTTL := entry.Value.RemainingTTL()
+		if entry.Value.Policy == "" || entry.Value.TTL < PREFETCH_MARGIN {
+			itemsCount--
+			if remainingTTL == 0 {
+				polCache.Remove(entry.Key)
+			}
+			continue
+		}
+		if remainingTTL != 0 {
 			continue
 		}
 		semaphore <- struct{}{}
 		wg.Add(1)
-		go func(key string) {
+		go func(entry cache.Entry[*CacheStruct]) {
 			defer func() {
 				wg.Done()
 				<-semaphore
 			}()
-			cachedPolicy, ttl, err := cacheJsonGet(&key)
-			if err != nil || cachedPolicy.Result == "" {
-				return
+			// Refresh the cached policy
+			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&entry.Value.Domain)
+			if refreshedPolicy != "" && refreshedPolicy != "TEMP" {
+				counter.Add(1)
+				polCache.Set(entry.Value.Domain, &CacheStruct{Domain: entry.Value.Domain, Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(refreshedTTL) * time.Second)}})
 			}
-			// Check if the original TTL is greater than the margin and within the prefetching range
-			if cachedPolicy.Ttl >= PREFETCH_MARGIN && float64(ttl-PREFETCH_MARGIN) < float64(cachedPolicy.Ttl)*PREFETCH_FACTOR+PREFETCH_INTERVAL {
-				// Refresh the cached policy
-				refreshedResult, refreshedRpt, refreshedTtl := queryDomain(&cachedPolicy.Domain)
-				if refreshedResult != "" && refreshedResult != "TEMP" {
-					counter.Add(1)
-					cacheJsonSet(&key, &CacheStruct{Domain: cachedPolicy.Domain, Result: refreshedResult, Report: refreshedRpt, Ttl: refreshedTtl})
-				}
-			}
-		}(key)
+		}(entry)
 	}
 	wg.Wait()
 	count := counter.Load()
 	if count > 0 {
-		log.Debugf("Prefetched %d of %d policies", count, polCnt)
+		log.Debugf("Prefetched %d of %d policies", count, itemsCount)
 	}
 }

@@ -36,7 +36,7 @@ List of repositories serving prebuilt and packaged versions of postfix-tlspol:
 
 # Install via Docker
 
-Installation with Docker simplifies setup, as it contains its own `Redis` database and a properly configured DNS resolver, `Unbound`. The image itself is only about 25 MB.
+Installation with Docker simplifies setup, as it contains its own properly configured DNS resolver, `Unbound`. The image itself is only about 8 MB (compressed).
 
 ```
 docker volume create postfix-tlspol-data
@@ -71,7 +71,6 @@ Press _d_ for Docker when prompted or select it if a terminal UI appears.
 
 These requirements only apply if you use the non-Docker variant for installation, i. e. as a systemd service unit.
 
-- A Redis-compatible database (e. g. Valkey, KeyDB, Redis, ...; optional if caching is disabled)
 - Postfix
 - Go (latest)
 - DNSSEC-validating DNS server (preferably on localhost)
@@ -152,19 +151,12 @@ server:
   # prefetch when TTL is about to expire (default true)
   prefetch: true
 
+  # cache file (default cache.db in working directory, i. e. /var/lib/postfix-tlspol)
+  cache-file: cache.db
+
 dns:
   # must support DNSSEC
   address: 127.0.0.53:53
-
-redis:
-  # disable caching (default false)
-  disable: false
-
-  # Redis compatible server:port to act as a cache
-  address: 127.0.0.1:6379
-
-  # select Redis DB number
-  db: 2
 ```
 
 # Prefetching

@@ -123,10 +123,10 @@ build_go() {
         # Create scripts/config.yaml from blueprint if it does not exist
         cp -a configs/config.default.yaml configs/config.yaml
       fi
-      install -D configs/config.yaml /etc/postfix-tlspol/config.yaml
+      install -D -m 0644 configs/config.yaml /etc/postfix-tlspol/config.yaml
       rm -f configs/config.yaml
     fi
-    install build/postfix-tlspol /usr/bin/postfix-tlspol
+    install -m 0755 build/postfix-tlspol /usr/bin/postfix-tlspol
   else
     printf "${red}Go toolchain not found. Required unless installing as a Docker container.$rst\n"
     exit 1
@@ -136,7 +136,7 @@ build_go() {
 install_systemd_service() {
   build_go
   if command -v systemctl > /dev/null 2>&1; then
-    install -D init/postfix-tlspol.service /usr/lib/systemd/system/postfix-tlspol.service
+    install -D -m 0644 init/postfix-tlspol.service /usr/lib/systemd/system/postfix-tlspol.service
     systemctl daemon-reload
     if systemctl is-enabled postfix-tlspol.service > /dev/null 2>&1; then
       printf "Restarting service unit...$yellow\n"
@@ -162,12 +162,6 @@ install_docker_app() {
   fi
 }
 
-# Handle "build-only" argument and automated builds
-([ "$act" = "build-only" ] || [ -n "$GITHUB_ACTIONS" ]) && {
-  build_go
-  exit 0
-}
-
 read_char() {
   if command -v whiptail > /dev/null 2>&1; then
     eval "$1=$(whiptail --radiolist 'Please select installation method.\nNote that both are compiled from source.\nCheck the README on how to download prebuilt docker images.' 0 0 0 's' 'systemd service unit' 1 'd' 'Docker container' 0 3>&1 1>&2 2>&3)"
@@ -180,7 +174,25 @@ read_char() {
   fi
 }
 
-read_char choice
+if [ -n "$GITHUB_ACTIONS" ]; then
+  act="${act:-"build-only"}"
+fi
+
+case "$act" in
+  build-only)
+    build_go
+    exit 0
+    ;;
+  systemd)
+    choice=s
+    ;;
+  docker)
+    choice=d
+    ;;
+  *)
+    read_char choice
+    ;;
+esac
 
 case "$choice" in
   [dD])

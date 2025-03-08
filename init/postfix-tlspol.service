@@ -35,12 +35,13 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
-SecureBits=noroot-locked
+SecureBits=noroot noroot-locked
 ReadOnlyPaths=/etc/postfix-tlspol
 UMask=0111
 RuntimeDirectory=postfix-tlspol
 RuntimeDirectoryMode=1755
-BindPaths=/run/postfix-tlspol
+StateDirectory=postfix-tlspol
+WorkingDirectory=/var/lib/postfix-tlspol
 
 [Install]
 WantedBy=multi-user.target
