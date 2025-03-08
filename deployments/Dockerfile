@@ -7,8 +7,8 @@ ARG GITHUB_ACTIONS
 RUN addgroup -g 1000 default \
   && adduser -G default -u 1000 default -D
 
-# Install unbound and valkey (redis)
-RUN apk add --no-cache git unbound valkey
+# Install unbound
+RUN apk add --no-cache git unbound
 
 # Copy postfix-tlspol
 COPY . /build
@@ -94,24 +94,6 @@ EOF
   chown default:default /var/log/unbound.log
 EOR
 
-# Setup valkey (redis)
-RUN <<EOR
-  mkdir -p /etc/valkey
-  cat <<EOF > /etc/valkey/valkey.conf
-bind 127.0.0.1 -::1
-port 6379
-daemonize yes
-pidfile /dev/null
-logfile /var/log/valkey.log
-loglevel notice
-dbfilename cache.rdb
-dir /data
-EOF
-  chown -R default:default /etc/valkey
-  touch /var/log/valkey.log
-  chown default:default /var/log/valkey.log
-EOR
-
 # Setup entrypoint
 RUN <<EOR
   cat <<EOF > /entrypoint.sh
@@ -122,14 +104,12 @@ if [ -e /data/config.yaml ]; then
   mv /data/config.yaml /data/config.yaml.bak
   echo "WARNING: /data/config.yaml is deprecated and removed. See /etc/postfix-tlspol/config.yaml (which will be overriden on each update as it is maintained by the container)"
 fi
-truncate -s0 /var/log/unbound.log /var/log/valkey.log
+truncate -s0 /var/log/unbound.log
 ( cd /etc/unbound ; \
   /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &
-( cd /data ; \
-  /usr/bin/valkey-server /etc/valkey/valkey.conf ) &
 wait
 tail -f /var/log/unbound.log &
-tail -f /var/log/valkey.log &
+cd /data
 exec /usr/bin/postfix-tlspol -config /etc/postfix-tlspol/config.yaml
 EOF
   chmod +x /entrypoint.sh

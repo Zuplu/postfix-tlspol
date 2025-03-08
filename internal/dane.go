@@ -17,9 +17,9 @@ import (
 	"github.com/miekg/dns"
 )
 
-type ResultWithTtl struct {
+type ResultWithTTL struct {
 	Result string
-	Ttl    uint32
+	TTL    uint32
 	Err    error
 }
 
@@ -130,25 +130,25 @@ func isTlsaUsable(r *dns.TLSA) bool {
 	return true
 }
 
-func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
+func checkTlsa(ctx *context.Context, mx *string) ResultWithTTL {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn("_25._tcp."+(*mx)), dns.TypeTLSA)
 	m.SetEdns0(1232, true)
 
 	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {
-		return ResultWithTtl{Result: "", Ttl: 0, Err: err}
+		return ResultWithTTL{Result: "", TTL: 0, Err: err}
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
 		if !r.MsgHdr.AuthenticatedData {
-			return ResultWithTtl{Result: "", Ttl: 0}
+			return ResultWithTTL{Result: "", TTL: 0}
 		}
 	default:
-		return ResultWithTtl{Result: "", Ttl: 0, Err: errors.New(dns.RcodeToString[r.Rcode])}
+		return ResultWithTTL{Result: "", TTL: 0, Err: errors.New(dns.RcodeToString[r.Rcode])}
 	}
 	if len(r.Answer) == 0 {
-		return ResultWithTtl{Result: "", Ttl: 0}
+		return ResultWithTTL{Result: "", TTL: 0}
 	}
 
 	result := ""
@@ -157,7 +157,7 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 		if tlsa, ok := answer.(*dns.TLSA); ok {
 			if isTlsaUsable(tlsa) {
 				// TLSA records are usable, enforce DANE, return directly
-				return ResultWithTtl{Result: "dane-only", Ttl: tlsa.Hdr.Ttl}
+				return ResultWithTTL{Result: "dane-only", TTL: tlsa.Hdr.Ttl}
 			} else {
 				// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not; continue searching
 				result = "dane"
@@ -166,7 +166,7 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTtl {
 		}
 	}
 
-	return ResultWithTtl{Result: result, Ttl: findMin(&ttls)}
+	return ResultWithTTL{Result: result, TTL: findMin(&ttls)}
 }
 
 const (
@@ -188,7 +188,7 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 		return "", 0
 	}
 
-	tlsaResults := make(chan ResultWithTtl)
+	tlsaResults := make(chan ResultWithTTL)
 	for _, mx := range mxRecords {
 		go func(mx string) {
 			tlsaResults <- checkTlsa(ctx, &mx)
@@ -213,7 +213,7 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 			}
 			return "TEMP", 0
 		}
-		ttls = append(ttls, res.Ttl)
+		ttls = append(ttls, res.TTL)
 		switch res.Result {
 		case "dane-only":
 			pols = append(pols, DaneOnly)

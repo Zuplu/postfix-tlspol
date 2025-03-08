@@ -5,6 +5,9 @@ services:
     build:
       context: ..
       dockerfile: ./deployments/Dockerfile
+      args:
+        TARGETPLATFORM: ${TARGETPLATFORM:-}
+        GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
     ports:
       - "127.0.0.1:8642:8642"
     restart: unless-stopped

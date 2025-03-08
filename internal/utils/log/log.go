@@ -36,10 +36,12 @@ const (
 )
 
 var showTimestamp bool = true
+var showColors bool = false
 
 func init() {
 	_, inJournal := os.LookupEnv("JOURNAL_STREAM")
 	showTimestamp = !inJournal
+	showColors = inJournal
 }
 
 // logMutex ensures thread-safe writes to the output
@@ -74,12 +76,16 @@ func logMessage(level LogLevel, message string) {
 		color = colorReset
 	}
 
-	var coloredMsg string
+	var msg string
 	if showTimestamp {
-		coloredMsg = time.Now().Format(time.StampMilli) + " "
+		msg = time.Now().Format(time.StampMilli) + " "
 	}
-	coloredMsg = coloredMsg + color + levelStr + message + colorReset
-	fmt.Fprintln(output, coloredMsg)
+	if showColors {
+		msg = msg + color + levelStr + message + colorReset
+	} else {
+		msg = msg + levelStr + message
+	}
+	fmt.Fprintln(output, msg)
 }
 
 func Debug(v ...interface{}) {

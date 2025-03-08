@@ -12,9 +12,6 @@ func init() {
 		Dns: DnsConfig{
 			Address: "dns.google:53",
 		},
-		Redis: RedisConfig{
-			Disable: true,
-		},
 	}
 }
 

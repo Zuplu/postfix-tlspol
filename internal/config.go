@@ -15,9 +15,10 @@ import (
 var defaultConfig = Config{}
 
 type ServerConfig struct {
-	Address  string `yaml:"address"`
-	TlsRpt   bool   `yaml:"tlsrpt"`
-	Prefetch bool   `yaml:"prefetch"`
+	Address   string `yaml:"address"`
+	TlsRpt    bool   `yaml:"tlsrpt"`
+	Prefetch  bool   `yaml:"prefetch"`
+	CacheFile string `yaml:"cache-file"`
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
@@ -25,6 +26,7 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	c.Address = defaultConfig.Server.Address
 	c.TlsRpt = defaultConfig.Server.TlsRpt
 	c.Prefetch = defaultConfig.Server.Prefetch
+	c.CacheFile = defaultConfig.Server.CacheFile
 	type alias ServerConfig
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
@@ -46,30 +48,9 @@ func (c *DnsConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
-type RedisConfig struct {
-	Disable  bool   `yaml:"disable"`
-	Address  string `yaml:"address"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
-}
-
-func (c *RedisConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	// Set default values
-	c.Disable = defaultConfig.Redis.Disable
-	c.Address = defaultConfig.Redis.Address
-	c.Password = defaultConfig.Redis.Password
-	c.DB = defaultConfig.Redis.DB
-	type alias RedisConfig
-	if err := unmarshal((*alias)(c)); err != nil {
-		return err
-	}
-	return nil
-}
-
 type Config struct {
 	Server ServerConfig `yaml:"server"`
 	Dns    DnsConfig    `yaml:"dns"`
-	Redis  RedisConfig  `yaml:"redis"`
 }
 
 func SetDefaultConfig(data *[]byte) {
