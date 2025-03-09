@@ -28,6 +28,7 @@ else
   rst=""
 fi
 if [ -n "$GITHUB_ACTIONS" ]; then
+  act="${act:-"build-only"}"
   NOTEST="${NOTEST:-1}"
 fi
 
@@ -173,10 +174,6 @@ read_char() {
     stty "$old_stty"
   fi
 }
-
-if [ -n "$GITHUB_ACTIONS" ]; then
-  act="${act:-"build-only"}"
-fi
 
 case "$act" in
   build-only)

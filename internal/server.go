@@ -36,11 +36,9 @@ type CacheStruct struct {
 }
 
 const (
-	DB_SCHEMA          = "3"
-	CACHE_KEY_PREFIX   = "TLSPOL-"
 	CACHE_NOTFOUND_TTL = 600
 	CACHE_MIN_TTL      = 180
-	REQUEST_TIMEOUT    = 5 * time.Second
+	REQUEST_TIMEOUT    = 4 * time.Second
 )
 
 var (
@@ -158,13 +156,29 @@ func StartDaemon(v *string, licenseText *string) {
 		return
 	}
 
-	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(300*time.Second))
+	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
+	go func() {
+		items := polCache.Items()
+		for _, entry := range items {
+			remainingTTL := entry.Value.RemainingTTL()
+			if entry.Value.Policy == "" || entry.Value.TTL <
+				PREFETCH_MARGIN {
+				if remainingTTL == 0 {
+					polCache.Remove(entry.Key)
+				}
+			}
+			// Cleanup v1.8.0 bug that duplicated cache entries
+			if strings.Contains(entry.Value.Policy, "} policy_type") {
+				polCache.Remove(entry.Key)
+			}
+		}
+	}()
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGHUP)
 	go func() {
 		sig := <-signals
-		log.Infof("Received signal: %v, saving cache...\n", sig)
+		log.Infof("Received signal: %v, saving cache...", sig)
 		polCache.Close()
 		os.Exit(0)
 	}()
@@ -233,10 +247,13 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) bool {
 				(*conn).Write(NS_TEMP)
 			default:
 				log.Infof("Evaluated policy for %q: %s (from cache, %ds remaining)", *domain, c.Policy, ttl)
+				var res string
 				if *withTlsRpt {
-					c.Policy = c.Policy + " " + c.Report
+					res = c.Policy + " " + c.Report
+				} else {
+					res = c.Policy
 				}
-				(*conn).Write(netstring.Marshal("OK " + c.Policy))
+				(*conn).Write(netstring.Marshal("OK " + res))
 			}
 			return true
 		}

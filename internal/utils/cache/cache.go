@@ -1,3 +1,8 @@
+/*
+ * MIT License
+ * Copyright (c) 2024-2025 Zuplu
+ */
+
 package cache
 
 import (
@@ -26,7 +31,6 @@ func (e *Expirable) RemainingTTL() uint32 {
 	return uint32(ttl)
 }
 
-// Cache provides a thread-safe cache with persistence.
 type Cache[T Cacheable] struct {
 	mu         sync.RWMutex
 	data       map[string]T
@@ -34,17 +38,14 @@ type Cache[T Cacheable] struct {
 	savePeriod time.Duration
 	quit       chan struct{}
 	wg         sync.WaitGroup
+	dirty      bool
 }
 
-// Entry represents a key/value pair stored in the cache.
 type Entry[T Cacheable] struct {
 	Key   string
 	Value T
 }
 
-// New returns a new Cache instance.
-// filePath: The path to the gob file used for persistence.
-// savePeriod: Duration between periodic auto-saves.
 func New[T Cacheable](_ T, filePath string, savePeriod time.Duration) *Cache[T] {
 	c := &Cache[T]{
 		data:       make(map[string]T),
@@ -53,27 +54,22 @@ func New[T Cacheable](_ T, filePath string, savePeriod time.Duration) *Cache[T] 
 		quit:       make(chan struct{}),
 	}
 
-	// Attempt to load persisted data on start.
 	if err := c.load(); err != nil {
 		log.Errorf("cache: error loading persisted data: %v", err)
 	}
 
-	// Start background worker for periodic saving.
 	c.wg.Add(1)
 	go c.periodicSave()
 	return c
 }
 
-// Set stores the given value with the specified key.
-// If the key already exists, it overwrites the previous value.
 func (c *Cache[T]) Set(key string, value T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data[key] = value
+	c.dirty = true
 }
 
-// Get retrieves the value for the specified key.
-// The second return value indicates whether the key was found.
 func (c *Cache[T]) Get(key string) (T, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -81,23 +77,20 @@ func (c *Cache[T]) Get(key string) (T, bool) {
 	return val, ok
 }
 
-// Remove deletes the key-value pair for the specified key.
 func (c *Cache[T]) Remove(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.data, key)
+	c.dirty = true
 }
 
-// Purge removes all entries from the cache.
 func (c *Cache[T]) Purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data = make(map[string]T)
-	c.save()
+	c.dirty = true
 }
 
-// Items returns a slice of all the cache entries as key/value pairs.
-// This allows you to safely iterate over a snapshot of the cache.
 func (c *Cache[T]) Items() []Entry[T] {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -108,17 +101,14 @@ func (c *Cache[T]) Items() []Entry[T] {
 	return entries
 }
 
-// Close stops the periodic saving goroutine and performs a final save.
 func (c *Cache[T]) Close() {
 	close(c.quit)
 	c.wg.Wait()
-	// Final save before exit.
 	if err := c.save(); err != nil {
 		log.Errorf("cache: error during final save: %v", err)
 	}
 }
 
-// periodicSave runs a loop that saves the cache periodically until closed.
 func (c *Cache[T]) periodicSave() {
 	defer c.wg.Done()
 	ticker := time.NewTicker(c.savePeriod)
@@ -136,20 +126,19 @@ func (c *Cache[T]) periodicSave() {
 	}
 }
 
-// save persists the current state of the cache to the gob file.
-// It serializes the internal map into a byte buffer before writing the file.
 func (c *Cache[T]) save() error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// Encode the map to a buffer.
+	if !c.dirty {
+		return nil
+	}
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(c.data); err != nil {
 		return err
 	}
 
-	// Write to file.
 	f, err := os.Create(c.filePath)
 	if err != nil {
 		return err
@@ -164,15 +153,13 @@ func (c *Cache[T]) save() error {
 	if _, err := g.Write(buf.Bytes()); err != nil {
 		return err
 	}
+	c.dirty = false
 	return nil
 }
 
-// load restores the cache state from the gob file.
-// If the file does not exist, load simply returns without error.
 func (c *Cache[T]) load() error {
 	f, err := os.Open(c.filePath)
 	if err != nil {
-		// If file doesn't exist, nothing to load.
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -186,7 +173,6 @@ func (c *Cache[T]) load() error {
 	}
 	defer g.Close()
 
-	// Decode the file into a map.
 	dec := gob.NewDecoder(g)
 	var stored map[string]T
 	if err := dec.Decode(&stored); err != nil {
@@ -195,6 +181,7 @@ func (c *Cache[T]) load() error {
 
 	c.mu.Lock()
 	c.data = stored
+	c.dirty = false
 	c.mu.Unlock()
 	return nil
 }
