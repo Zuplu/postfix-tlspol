@@ -169,7 +169,7 @@ func StartDaemon(v *string, licenseText *string) {
 				}
 			}
 			// Cleanup v1.8.0 bug that duplicated cache entries
-			if strings.Contains(entry.Value.Policy, "} policy_type") {
+			if strings.Contains(entry.Value.Policy, "policy_type") {
 				polCache.Remove(entry.Key)
 			}
 		}
