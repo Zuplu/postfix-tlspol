@@ -141,7 +141,8 @@ install_systemd_service() {
     systemctl daemon-reload
     if systemctl is-enabled postfix-tlspol.service > /dev/null 2>&1; then
       printf "Restarting service unit...$yellow\n"
-      systemctl reenable --now postfix-tlspol.service
+      systemctl reenable postfix-tlspol.service
+      systemctl restart postfix-tlspol.service
     else
       printf "Enabling and starting service unit...$yellow\n"
       systemctl enable --now postfix-tlspol.service

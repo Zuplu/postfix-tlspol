@@ -240,13 +240,13 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) bool {
 		if ttl > 0 {
 			switch c.Policy {
 			case "":
-				log.Infof("No policy found for %q (from cache, %ds remaining)", *domain, ttl)
+				log.Infof("No policy found for %q (from cache, %s remaining)", *domain, time.Duration(ttl)*time.Second)
 				(*conn).Write(NS_NOTFOUND)
 			case "TEMP":
-				log.Warnf("Evaluating policy for %q failed temporarily (from cache, %ds remaining)", *domain, ttl)
+				log.Warnf("Evaluating policy for %q failed temporarily (from cache, %s remaining)", *domain, time.Duration(ttl)*time.Second)
 				(*conn).Write(NS_TEMP)
 			default:
-				log.Infof("Evaluated policy for %q: %s (from cache, %ds remaining)", *domain, c.Policy, ttl)
+				log.Infof("Evaluated policy for %q: %s (from cache, %s remaining)", *domain, c.Policy, time.Duration(ttl)*time.Second)
 				var res string
 				if *withTlsRpt {
 					res = c.Policy + " " + c.Report
@@ -331,13 +331,13 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
 	switch *policy {
 	case "":
-		log.Infof("No policy found for %q (cached for %ds)", *domain, *ttl)
+		log.Infof("No policy found for %q (cached for %s)", *domain, time.Duration(*ttl)*time.Second)
 		(*conn).Write(NS_NOTFOUND)
 	case "TEMP":
-		log.Warnf("Evaluating policy for %q failed temporarily (cached for %ds)", *domain, *ttl)
+		log.Warnf("Evaluating policy for %q failed temporarily (cached for %s)", *domain, time.Duration(*ttl)*time.Second)
 		(*conn).Write(NS_TEMP)
 	default:
-		log.Infof("Evaluated policy for %q: %s (cached for %ds)", *domain, *policy, *ttl)
+		log.Infof("Evaluated policy for %q: %s (cached for %s)", *domain, *policy, time.Duration(*ttl)*time.Second)
 		res := *policy
 		if *withTlsRpt {
 			res = res + " " + (*report)
