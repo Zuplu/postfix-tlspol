@@ -29,11 +29,15 @@ jobs:
       annotations: ${{ toJSON(steps.metadata.outputs.annotations) }}
       json: ${{ toJSON(steps.metadata.outputs.json) }}
     steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4
+
       - id: metadata
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # pin@v5
         env:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: index
         with:
+          context: git
           images: ${{ env.REGISTRY_IMAGE }}
           tags: |
             type=semver,pattern=v{{version}}
@@ -87,6 +91,9 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           platforms: ${{ matrix.platform }}
+          build-args: |
+            GITHUB_ACTIONS=1
+            VERSION="${{ fromJSON(needs.metadata.outputs.json).labels['org.opencontainers.image.version'] }}"
           context: .
           file: deployments/Dockerfile
           push: true
