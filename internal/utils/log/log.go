@@ -7,6 +7,7 @@ package log
 
 import (
 	"fmt"
+	"golang.org/x/term"
 	"os"
 	"sync"
 	"time"
@@ -35,20 +36,23 @@ const (
 	colorGrey   = "\033[90m"
 )
 
-var showTimestamp bool = true
-var showColors bool = false
-
-func init() {
-	_, inJournal := os.LookupEnv("JOURNAL_STREAM")
-	showTimestamp = !inJournal
-	showColors = inJournal
-}
-
 // logMutex ensures thread-safe writes to the output
 var logMutex sync.Mutex
 
 // output is the writer where logs are written. Defaults to os.Stderr
 var output = os.Stderr
+
+var showTimestamp bool = false
+var showColors bool = false
+
+func init() {
+	_, isJournal := os.LookupEnv("JOURNAL_STREAM")
+	_, noColor := os.LookupEnv("NO_COLOR")
+	_, noTimestamp := os.LookupEnv("NO_TIMESTAMP")
+	isTerminal := term.IsTerminal(int(output.Fd()))
+	showTimestamp = !noTimestamp && (!isJournal || isTerminal)
+	showColors = !noColor && (isJournal || isTerminal)
+}
 
 // logMessage formats and outputs the log message with the appropriate color
 func logMessage(level LogLevel, message string) {

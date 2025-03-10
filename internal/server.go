@@ -125,7 +125,7 @@ func StartDaemon(v *string, licenseText *string) {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("%s\n", Version)
+		fmt.Printf("postfix-tlspol v%s\n", Version)
 		return
 	}
 
@@ -149,7 +149,7 @@ func StartDaemon(v *string, licenseText *string) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — %s\nThis program is licensed under the MIT License.\n\n", curYear, Version)
+	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n\n", curYear, Version)
 
 	if err != nil {
 		log.Errorf("Error loading config: %v", err)

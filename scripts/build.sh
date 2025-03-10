@@ -85,6 +85,13 @@ if [ -z "$NOOPT" ]; then
   fi
 fi
 
+if command -v git > /dev/null 2>&1; then
+  VERSION="$(git describe --abbrev=0 --match 'v*')"
+else
+  VERSION="${VERSION:-undefined}"
+fi
+VERSION="${VERSION#v}"
+
 cd "$(dirname "$(dirname "$(readlink -f "$0")")")"
 
 build_go() {
@@ -92,7 +99,6 @@ build_go() {
   if command -v go > /dev/null 2>&1; then
     export GOTOOLCHAIN=auto
     export CGO_ENABLED=0
-    VERSION="$(git describe --always --tags --match='v*' --abbrev=7 --dirty=-modified)"
     printf "${cyanbg}Version: $VERSION$rst\n"
     printf "${green}Testing basic functionality...$rst\n"
     # We are only doing a short test here, run scripts/test.sh for a detailed test
@@ -110,7 +116,7 @@ build_go() {
     if [ -n "$GOAMD64" ]; then
       printf "${cyanbg}(Optimized for x86_64-$GOAMD64)$rst\n"
     fi
-    if go build -buildmode=exe -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
+    if go build -buildmode=exe -trimpath -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
       printf "${green}Build succeeded!$rst\n"
     else
       printf "${red}Build failed!$rst\n"

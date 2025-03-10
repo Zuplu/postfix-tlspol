@@ -2,13 +2,14 @@ FROM golang:1.24.1-alpine3.21@sha256:43c094ad24b6ac0546c62193baeb3e6e49ce14d3250
 
 ARG TARGETPLATFORM
 ARG GITHUB_ACTIONS
+ARG VERSION
 
 # Create a non-root user
 RUN addgroup -g 1000 default \
   && adduser -G default -u 1000 default -D
 
 # Install unbound
-RUN apk add --no-cache git unbound
+RUN apk add --no-cache unbound
 
 # Copy postfix-tlspol
 COPY . /build
@@ -22,7 +23,7 @@ RUN go clean -cache -modcache \
   && rm -rf /usr/local/go \
   && rm -rf /go \
   && rm -rf /home \
-  && apk --purge del git apk-tools
+  && apk --purge del apk-tools
 
 # Create data dir
 RUN mkdir -p /data \
