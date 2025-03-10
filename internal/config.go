@@ -15,15 +15,17 @@ import (
 var defaultConfig = Config{}
 
 type ServerConfig struct {
-	Address   string `yaml:"address"`
-	TlsRpt    bool   `yaml:"tlsrpt"`
-	Prefetch  bool   `yaml:"prefetch"`
-	CacheFile string `yaml:"cache-file"`
+	Address           string      `yaml:"address"`
+	SocketPermissions os.FileMode `yaml:"socket-permissions"`
+	TlsRpt            bool        `yaml:"tlsrpt"`
+	Prefetch          bool        `yaml:"prefetch"`
+	CacheFile         string      `yaml:"cache-file"`
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	// Set default values
 	c.Address = defaultConfig.Server.Address
+	c.SocketPermissions = defaultConfig.Server.SocketPermissions
 	c.TlsRpt = defaultConfig.Server.TlsRpt
 	c.Prefetch = defaultConfig.Server.Prefetch
 	c.CacheFile = defaultConfig.Server.CacheFile
