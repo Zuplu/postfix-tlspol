@@ -148,6 +148,9 @@ server:
   # or unix:/run/postfix-tlspol/tlspol.sock for Unix Domain Socket
   address: 127.0.0.1:8642
 
+  # socket file permissions if Unix Domain Sockets are used
+  socket-permissions: 0666
+
   # prefetch when TTL is about to expire (default true)
   prefetch: true
 

@@ -3,6 +3,9 @@ server:
   # or unix:/run/postfix-tlspol/tlspol.sock for Unix Domain Socket
   address: 127.0.0.1:8642
 
+  # socket file permissions if Unix Domain Sockets are used
+  socket-permissions: 0666
+
   # DEPRECATED: use QUERYwithTLSRPT instead of QUERY in Postfix main.cf
   # to enable Postfix 3.10+ TLSRPT support
   # setting this to true with reply with TLSRPT to both commands
