@@ -116,7 +116,7 @@ build_go() {
     if [ -n "$GOAMD64" ]; then
       printf "${cyanbg}(Optimized for x86_64-$GOAMD64)$rst\n"
     fi
-    if go build -buildmode=exe -trimpath -tags netgo -ldflags "-d -extldflags '-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
+    if go build -buildmode=exe -trimpath -tags netgo -ldflags="-d -extldflags='-static' -s -X 'main.Version=$VERSION'" -o build/postfix-tlspol .; then
       printf "${green}Build succeeded!$rst\n"
     else
       printf "${red}Build failed!$rst\n"

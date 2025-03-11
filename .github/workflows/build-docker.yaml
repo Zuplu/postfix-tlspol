@@ -32,6 +32,20 @@ jobs:
       - name: 📦 Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4
 
+      - name: ✨ Detect Version Tag
+        run: |
+          VERSION="$(git describe --abbrev=0 --match 'v*')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          BRANCH="$(git branch --show-current)"
+          IS_LATEST="false"
+          if [ "$BRANCH" -eq "main" ]; then
+            NEW_COMMITS="$(git rev-list HEAD...origin/"$BRANCH" --count)"
+            if [ "$NEW_COMMITS" -eq "0" ]; then
+              IS_LATEST="true"
+            fi
+          fi
+          echo "IS_LATEST=$IS_LATEST" >> "$GITHUB_ENV"
+
       - id: metadata
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # pin@v5
         env:
@@ -40,10 +54,10 @@ jobs:
           context: git
           images: ${{ env.REGISTRY_IMAGE }}
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern=v{{version}},value=${{ env.VERSION }}
+            type=semver,pattern=v{{major}}.{{minor}},value=${{ env.VERSION }}
+            type=semver,pattern=v{{major}},value=${{ env.VERSION }}
+            type=raw,value=latest,enable=${{ env.IS_LATEST }}
 
   build:
     name: 🚧 Build Docker Images
@@ -93,7 +107,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             GITHUB_ACTIONS=1
-            VERSION="${{ fromJSON(needs.metadata.outputs.json).labels['org.opencontainers.image.version'] }}"
+            VERSION="${{ fromJSON(fromJSON(needs.metadata.outputs.json)).labels['org.opencontainers.image.version'] }}"
           context: .
           file: deployments/Dockerfile
           push: true
