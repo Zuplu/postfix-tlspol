@@ -16,10 +16,10 @@ var defaultConfig = Config{}
 
 type ServerConfig struct {
 	Address           string      `yaml:"address"`
+	CacheFile         string      `yaml:"cache-file"`
 	SocketPermissions os.FileMode `yaml:"socket-permissions"`
 	TlsRpt            bool        `yaml:"tlsrpt"`
 	Prefetch          bool        `yaml:"prefetch"`
-	CacheFile         string      `yaml:"cache-file"`
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
@@ -51,8 +51,8 @@ func (c *DnsConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 }
 
 type Config struct {
-	Server ServerConfig `yaml:"server"`
 	Dns    DnsConfig    `yaml:"dns"`
+	Server ServerConfig `yaml:"server"`
 }
 
 func SetDefaultConfig(data *[]byte) {

@@ -267,14 +267,14 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) bool {
 
 type DanePolicy struct {
 	Policy string `json:"policy"`
-	TTL    uint32 `json:"ttl"`
 	Time   string `json:"time"`
+	TTL    uint32 `json:"ttl"`
 }
 type MtaStsPolicy struct {
 	Policy string `json:"policy"`
-	TTL    uint32 `json:"ttl"`
 	Report string `json:"report"`
 	Time   string `json:"time"`
+	TTL    uint32 `json:"ttl"`
 }
 type Result struct {
 	Version string       `json:"version"`
@@ -401,10 +401,10 @@ func handleConnection(conn *net.Conn) {
 }
 
 type PolicyResult struct {
-	IsDane bool
 	Policy string
 	Report string
 	TTL    uint32
+	IsDane bool
 }
 
 func queryDomain(domain *string) (string, string, uint32) {
