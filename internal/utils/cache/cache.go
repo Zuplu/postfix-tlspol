@@ -127,17 +127,19 @@ func (c *Cache[T]) periodicSave() {
 }
 
 func (c *Cache[T]) save() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
 
 	if !c.dirty {
+		c.mu.RUnlock()
 		return nil
 	}
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(c.data); err != nil {
+		c.mu.RUnlock()
 		return err
 	}
+	c.mu.RUnlock()
 
 	f, err := os.Create(c.filePath)
 	if err != nil {
@@ -153,7 +155,10 @@ func (c *Cache[T]) save() error {
 	if _, err := g.Write(buf.Bytes()); err != nil {
 		return err
 	}
+
+	c.mu.Lock()
 	c.dirty = false
+	c.mu.Unlock()
 	return nil
 }
 
