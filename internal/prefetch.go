@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	PREFETCH_INTERVAL uint32 = 20
+	PREFETCH_INTERVAL uint32 = 15
 	PREFETCH_MARGIN   uint32 = 300
 )
 
@@ -23,7 +23,7 @@ var semaphore chan struct{}
 
 func startPrefetching() {
 	ticker := time.NewTicker(time.Duration(PREFETCH_INTERVAL) * time.Second)
-	semaphore = make(chan struct{}, runtime.NumCPU()*8)
+	semaphore = make(chan struct{}, runtime.NumCPU()*4)
 	for range ticker.C {
 		prefetchCachedPolicies()
 	}

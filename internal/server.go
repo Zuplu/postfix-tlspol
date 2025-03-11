@@ -38,7 +38,7 @@ type CacheStruct struct {
 const (
 	CACHE_NOTFOUND_TTL = 600
 	CACHE_MIN_TTL      = 180
-	REQUEST_TIMEOUT    = 4 * time.Second
+	REQUEST_TIMEOUT    = 2 * time.Second
 )
 
 var (
@@ -246,9 +246,6 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) bool {
 			case "":
 				log.Infof("No policy found for %q (from cache, %s remaining)", *domain, time.Duration(ttl)*time.Second)
 				(*conn).Write(NS_NOTFOUND)
-			case "TEMP":
-				log.Warnf("Evaluating policy for %q failed temporarily (from cache, %s remaining)", *domain, time.Duration(ttl)*time.Second)
-				(*conn).Write(NS_TEMP)
 			default:
 				log.Infof("Evaluated policy for %q: %s (from cache, %s remaining)", *domain, c.Policy, time.Duration(ttl)*time.Second)
 				var res string
@@ -396,7 +393,9 @@ func handleConnection(conn *net.Conn) {
 
 		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
-		polCache.Set(domain, &CacheStruct{Domain: domain, Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl) * time.Second)}})
+		if ttl != 0 {
+			polCache.Set(domain, &CacheStruct{Domain: domain, Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(30)) * time.Second)}})
+		}
 	}
 }
 
@@ -443,10 +442,13 @@ func queryDomain(domain *string) (string, string, uint32) {
 		}
 	}
 
+	if ttl < CACHE_MIN_TTL {
+		ttl = CACHE_MIN_TTL
+	}
 	if policy == "" {
 		ttl = CACHE_NOTFOUND_TTL
-	} else if policy == "TEMP" || ttl < CACHE_MIN_TTL {
-		ttl = CACHE_MIN_TTL
+	} else if policy == "TEMP" {
+		ttl = 0
 	}
 
 	return policy, report, ttl
