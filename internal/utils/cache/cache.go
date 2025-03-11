@@ -32,18 +32,18 @@ func (e *Expirable) RemainingTTL() uint32 {
 }
 
 type Cache[T Cacheable] struct {
-	mu         sync.RWMutex
 	data       map[string]T
-	filePath   string
-	savePeriod time.Duration
 	quit       chan struct{}
+	filePath   string
 	wg         sync.WaitGroup
+	savePeriod time.Duration
+	mu         sync.RWMutex
 	dirty      bool
 }
 
 type Entry[T Cacheable] struct {
-	Key   string
 	Value T
+	Key   string
 }
 
 func New[T Cacheable](_ T, filePath string, savePeriod time.Duration) *Cache[T] {

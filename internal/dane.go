@@ -18,9 +18,9 @@ import (
 )
 
 type ResultWithTTL struct {
+	Err    error
 	Result string
 	TTL    uint32
-	Err    error
 }
 
 func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error, bool) {
