@@ -9,11 +9,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
+	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"os/signal"
@@ -51,13 +54,14 @@ var (
 	NS_TEMP     = netstring.Marshal("TEMP ")
 	NS_PERM     = netstring.Marshal("PERM ")
 	NS_TIMEOUT  = netstring.Marshal("TIMEOUT ")
+	listener    net.Listener
+	serverWg    sync.WaitGroup
+	showVersion = false
+	showLicense = false
+	configFile  string
+	queryMode   = false
+	purgeCache  = false
 )
-
-var showVersion = false
-var showLicense = false
-var configFile string
-var queryMode = false
-var purgeCache = false
 
 func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
@@ -180,6 +184,10 @@ func StartDaemon(v *string, licenseText *string) {
 		sig := <-signals
 		log.Infof("Received signal: %v, saving cache...", sig)
 		polCache.Close()
+		if listener != nil {
+			listener.Close()
+			serverWg.Wait()
+		}
 		os.Exit(0)
 	}()
 
@@ -204,11 +212,12 @@ func StartDaemon(v *string, licenseText *string) {
 	}
 
 	// Start the socketmap server for Postfix
-	startServer()
+	go startServer()
+
+	select {}
 }
 
 func startServer() {
-	var listener net.Listener
 	var err error
 	if strings.HasPrefix(config.Server.Address, "unix:") {
 		socketPath := config.Server.Address[5:]
@@ -223,18 +232,27 @@ func startServer() {
 		log.Errorf("Error starting socketmap server: %v", err)
 		return
 	}
-	defer listener.Close()
+	serverWg.Add(1)
+	defer func() {
+		listener = nil
+		serverWg.Done()
+	}()
 
 	log.Infof("Listening on %s...", config.Server.Address)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				break
+			}
 			log.Errorf("Error accepting connection: %v", err)
-			continue
+			break
 		}
 		go handleConnection(&conn)
 	}
+
+	log.Info("Socketmap server terminated.")
 }
 
 func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) bool {
