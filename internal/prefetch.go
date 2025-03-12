@@ -22,6 +22,10 @@ const (
 var semaphore chan struct{}
 
 func startPrefetching() {
+	if !config.Server.Prefetch {
+		return
+	}
+	log.Info("Prefetching enabled!")
 	ticker := time.NewTicker(time.Duration(PREFETCH_INTERVAL) * time.Second)
 	semaphore = make(chan struct{}, runtime.NumCPU()*4)
 	for range ticker.C {
@@ -54,10 +58,10 @@ func prefetchCachedPolicies() {
 				<-semaphore
 			}()
 			// Refresh the cached policy
-			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&entry.Value.Domain)
+			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&entry.Key)
 			if refreshedPolicy != "" && refreshedPolicy != "TEMP" {
 				counter.Add(1)
-				polCache.Set(entry.Value.Domain, &CacheStruct{Domain: entry.Value.Domain, Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(refreshedTTL) * time.Second)}})
+				polCache.Set(entry.Key, &CacheStruct{Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(refreshedTTL) * time.Second)}})
 			}
 		}(entry)
 	}
