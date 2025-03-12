@@ -38,9 +38,10 @@ type CacheStruct struct {
 }
 
 const (
-	CACHE_NOTFOUND_TTL = 600
-	CACHE_MIN_TTL      = 180
-	REQUEST_TIMEOUT    = 2 * time.Second
+	CACHE_NOTFOUND_TTL uint32 = 600
+	CACHE_MIN_TTL      uint32 = 180
+	CACHE_MAX_AGE      uint32 = 86400
+	REQUEST_TIMEOUT           = 2 * time.Second
 )
 
 var (
@@ -163,22 +164,7 @@ func StartDaemon(v *string, licenseText *string) {
 
 	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
-	go func() {
-		items := polCache.Items()
-		for _, entry := range items {
-			remainingTTL := entry.Value.RemainingTTL()
-			if entry.Value.Policy == "" || entry.Value.TTL <
-				PREFETCH_MARGIN {
-				if remainingTTL == 0 {
-					polCache.Remove(entry.Key)
-				}
-			}
-			// Cleanup v1.8.0 bug that duplicated cache entries
-			if strings.Contains(entry.Value.Policy, "policy_type") {
-				polCache.Remove(entry.Key)
-			}
-		}
-	}()
+	tidyCache()
 	listenForSignals()
 
 	if dumpCache {
@@ -208,6 +194,7 @@ func listenForSignals() {
 			sig := <-signals
 			log.Infof("Received signal: %v, saving cache...", sig)
 			if sig == syscall.SIGHUP {
+				tidyCache()
 				polCache.Save()
 				continue
 			}
@@ -428,7 +415,7 @@ func handleConnection(conn *net.Conn) {
 		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
 		if ttl != 0 {
-			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second)}})
+			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second), LastUpdate: time.Now()}})
 		}
 	}
 }
@@ -497,4 +484,30 @@ func dumpCachedPolicies() {
 		}
 		fmt.Printf("%-18s %s\n", entry.Key, entry.Value.Policy)
 	}
+}
+
+func tidyCache() {
+	items := polCache.Items()
+	itemsCount := len(items)
+	freshCount := itemsCount
+	for _, entry := range items {
+		// Cleanup v1.8.0 bug that duplicated cache entries
+		if strings.Contains(entry.Value.Policy, "policy_type") {
+			polCache.Remove(entry.Key)
+			itemsCount--
+			freshCount--
+			continue
+		}
+		remainingTTL := entry.Value.RemainingTTL()
+		if entry.Value.Policy == "" || entry.Value.Age() >= CACHE_MAX_AGE {
+			itemsCount--
+			freshCount--
+			continue
+		}
+		if remainingTTL == 0 {
+			freshCount--
+			polCache.Remove(entry.Key)
+		}
+	}
+	log.Infof("Cache consists of %d policies, of which %d are expired.", itemsCount, itemsCount-freshCount)
 }
