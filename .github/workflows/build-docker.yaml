@@ -31,10 +31,13 @@ jobs:
     steps:
       - name: 📦 Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: ✨ Detect Version Tag
         run: |
-          VERSION="$(git describe --abbrev=0 --match 'v*')"
+          VERSION="$(git describe --tags --abbrev=0 --match 'v*')"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           BRANCH="$(git branch --show-current)"
           IS_LATEST="false"
