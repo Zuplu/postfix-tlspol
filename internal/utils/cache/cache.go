@@ -20,7 +20,19 @@ type Cacheable interface {
 }
 
 type Expirable struct {
-	ExpiresAt time.Time
+	ExpiresAt  time.Time
+	LastUpdate time.Time
+}
+
+func (e *Expirable) Age() uint32 {
+	if e.LastUpdate.IsZero() {
+		e.LastUpdate = time.Now()
+	}
+	age := time.Until(e.LastUpdate).Seconds() * -1
+	if age < 0 {
+		age = 0
+	}
+	return uint32(age)
 }
 
 func (e *Expirable) RemainingTTL() uint32 {
