@@ -428,7 +428,7 @@ func handleConnection(conn *net.Conn) {
 		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
 		if ttl != 0 {
-			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(30)) * time.Second)}})
+			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second)}})
 		}
 	}
 }
