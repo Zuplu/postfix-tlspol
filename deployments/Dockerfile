@@ -30,7 +30,10 @@ RUN mkdir -p /data \
   && chown default:default /data
 
 # Setup postfix-tlspol
-RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" -e "s/127\.0\.0\.53:53/127\.0\.0\.1:8053/" /etc/postfix-tlspol/config.yaml \
+RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" \
+  -e "s/127\.0\.0\.53:53/127\.0\.0\.1:8053/" \
+  -e "s!: /var/lib/postfix-tlspol/!: !" \
+  /etc/postfix-tlspol/config.yaml \
   && chown -R default:default /etc/postfix-tlspol
 
 # Setup unbound

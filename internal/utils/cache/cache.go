@@ -104,7 +104,7 @@ func (c *Cache[T]) Items() []Entry[T] {
 func (c *Cache[T]) Close() {
 	close(c.quit)
 	c.wg.Wait()
-	if err := c.save(); err != nil {
+	if err := c.Save(); err != nil {
 		log.Errorf("cache: error during final save: %v", err)
 	}
 }
@@ -117,7 +117,7 @@ func (c *Cache[T]) periodicSave() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := c.save(); err != nil {
+			if err := c.Save(); err != nil {
 				log.Errorf("cache: error saving cache: %v", err)
 			}
 		case <-c.quit:
@@ -126,7 +126,7 @@ func (c *Cache[T]) periodicSave() {
 	}
 }
 
-func (c *Cache[T]) save() error {
+func (c *Cache[T]) Save() error {
 	c.mu.RLock()
 
 	if !c.dirty {

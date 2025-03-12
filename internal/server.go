@@ -32,7 +32,6 @@ import (
 
 type CacheStruct struct {
 	*cache.Expirable
-	Domain string
 	Policy string
 	Report string
 	TTL    uint32
@@ -60,6 +59,7 @@ var (
 	showLicense = false
 	configFile  string
 	queryMode   = false
+	dumpCache   = false
 	purgeCache  = false
 )
 
@@ -68,6 +68,7 @@ func init() {
 	flag.BoolVar(&showLicense, "license", false, "Show LICENSE")
 	flag.StringVar(&configFile, "config", "/etc/postfix-tlspol/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
+	flag.BoolVar(&dumpCache, "dump", false, "Dump cache")
 	flag.BoolVar(&purgeCache, "purge", false, "Manually clear the cache")
 }
 
@@ -178,31 +179,11 @@ func StartDaemon(v *string, licenseText *string) {
 			}
 		}
 	}()
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGHUP)
-	go func() {
-		sig := <-signals
-		log.Infof("Received signal: %v, saving cache...", sig)
-		polCache.Close()
-		if listener != nil {
-			listener.Close()
-			serverWg.Wait()
-		}
-		os.Exit(0)
-	}()
+	listenForSignals()
 
-	envPrefetch, envExists := os.LookupEnv("TLSPOL_PREFETCH")
-	if envExists {
-		config.Server.Prefetch = envPrefetch == "1"
-	}
-	envTlsRpt, envExists := os.LookupEnv("TLSPOL_TLSRPT")
-	if envExists {
-		config.Server.TlsRpt = envTlsRpt == "1"
-	}
-
-	if config.Server.Prefetch {
-		log.Info("Prefetching enabled!")
-		go startPrefetching()
+	if dumpCache {
+		dumpCachedPolicies()
+		return
 	}
 
 	if purgeCache {
@@ -211,10 +192,45 @@ func StartDaemon(v *string, licenseText *string) {
 		return
 	}
 
-	// Start the socketmap server for Postfix
+	readEnv()
+
+	go startPrefetching()
 	go startServer()
 
 	select {}
+}
+
+func listenForSignals() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGHUP)
+	go func() {
+		for {
+			sig := <-signals
+			log.Infof("Received signal: %v, saving cache...", sig)
+			if sig == syscall.SIGHUP {
+				polCache.Save()
+				continue
+			}
+			polCache.Close()
+			if listener != nil {
+				listener.Close()
+				serverWg.Wait()
+			}
+			os.Exit(0)
+			break
+		}
+	}()
+}
+
+func readEnv() {
+	envPrefetch, envExists := os.LookupEnv("TLSPOL_PREFETCH")
+	if envExists {
+		config.Server.Prefetch = envPrefetch == "1"
+	}
+	envTlsRpt, envExists := os.LookupEnv("TLSPOL_TLSRPT")
+	if envExists {
+		config.Server.TlsRpt = envTlsRpt == "1"
+	}
 }
 
 func startServer() {
@@ -412,7 +428,7 @@ func handleConnection(conn *net.Conn) {
 		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
 		if ttl != 0 {
-			polCache.Set(domain, &CacheStruct{Domain: domain, Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(30)) * time.Second)}})
+			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(30)) * time.Second)}})
 		}
 	}
 }
@@ -470,4 +486,15 @@ func queryDomain(domain *string) (string, string, uint32) {
 	}
 
 	return policy, report, ttl
+}
+
+func dumpCachedPolicies() {
+	items := polCache.Items()
+	for _, entry := range items {
+		remainingTTL := entry.Value.RemainingTTL()
+		if entry.Value.Policy == "" || remainingTTL == 0 {
+			continue
+		}
+		fmt.Printf("%-18s %s\n", entry.Key, entry.Value.Policy)
+	}
 }
