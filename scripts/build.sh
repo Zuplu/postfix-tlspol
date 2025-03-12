@@ -86,7 +86,7 @@ if [ -z "$NOOPT" ]; then
 fi
 
 if command -v git > /dev/null 2>&1; then
-  VERSION="$(git describe --abbrev=0 --match 'v*')"
+  VERSION="$(git describe --tags --abbrev=0 --match 'v*')"
 else
   VERSION="${VERSION:-undefined}"
 fi
