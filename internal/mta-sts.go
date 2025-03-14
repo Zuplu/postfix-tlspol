@@ -21,7 +21,7 @@ import (
 
 func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn("_mta-sts."+(*domain)), dns.TypeTXT)
+	m.SetQuestion(dns.Fqdn("_mta-sts."+*domain), dns.TypeTXT)
 	m.SetEdns0(1232, false)
 
 	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
@@ -86,13 +86,13 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 		return true // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
 	}
 	(*existingKeys)[key] = true
-	*report = (*report) + " { policy_string = " + key + ": " + val + " }"
+	*report = *report + " { policy_string = " + key + ": " + val + " }"
 	switch key {
 	case "mx":
 		if !valid.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
 			return false // invalid policy
 		}
-		*mxHosts = (*mxHosts) + " mx_host_pattern=" + val
+		*mxHosts = *mxHosts + " mx_host_pattern=" + val
 		if strings.HasPrefix(val, "*.") {
 			val = val[1:]
 		}
@@ -121,7 +121,7 @@ func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) 
 		return "", "", 0
 	}
 
-	mtaSTSURL := "https://mta-sts." + (*domain) + "/.well-known/mta-sts.txt"
+	mtaSTSURL := "https://mta-sts." + *domain + "/.well-known/mta-sts.txt"
 	req, err := http.NewRequestWithContext(*ctx, http.MethodGet, mtaSTSURL, nil)
 	if err != nil {
 		return "", "", 0
@@ -145,7 +145,7 @@ func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) 
 			return "", "", 0
 		}
 	}
-	report = "policy_type=sts policy_domain=" + (*domain) + mxHosts + report
+	report = "policy_type=sts policy_domain=" + *domain + mxHosts + report
 
 	if mode == "enforce" {
 		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"

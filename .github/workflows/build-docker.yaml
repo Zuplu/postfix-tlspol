@@ -110,7 +110,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             GITHUB_ACTIONS=1
-            VERSION="${{ fromJSON(fromJSON(needs.metadata.outputs.json)).labels['org.opencontainers.image.version'] }}"
+            VERSION=${{ fromJSON(fromJSON(needs.metadata.outputs.json)).labels['org.opencontainers.image.version'] }}
           context: .
           file: deployments/Dockerfile
           push: true

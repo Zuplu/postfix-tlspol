@@ -108,7 +108,7 @@ func flagQueryFunc(f *flag.Flag) {
 		return
 	}
 	o, err := os.Stdout.Stat()
-	if err == nil && (o.Mode()&os.ModeCharDevice) != 0 {
+	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
 		enc := jsoncolor.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.SetColors(jsoncolor.DefaultColors())
@@ -362,7 +362,7 @@ func replySocketmap(conn *net.Conn, domain *string, policy *string, report *stri
 		log.Infof("Evaluated policy for %q: %s (cached for %s)", *domain, *policy, time.Duration(*ttl)*time.Second)
 		res := *policy
 		if *withTlsRpt {
-			res = res + " " + (*report)
+			res = res + " " + *report
 		}
 		(*conn).Write(netstring.Marshal("OK " + res))
 	}
@@ -482,32 +482,20 @@ func dumpCachedPolicies() {
 		if entry.Value.Policy == "" || remainingTTL == 0 {
 			continue
 		}
-		fmt.Printf("%-18s %s\n", entry.Key, entry.Value.Policy)
+		fmt.Printf("%-24s  %s\n", entry.Key, entry.Value.Policy)
 	}
 }
 
 func tidyCache() {
 	items := polCache.Items()
-	itemsCount := len(items)
-	freshCount := itemsCount
 	for _, entry := range items {
 		// Cleanup v1.8.0 bug that duplicated cache entries
 		if strings.Contains(entry.Value.Policy, "policy_type") {
 			polCache.Remove(entry.Key)
-			itemsCount--
-			freshCount--
 			continue
 		}
-		remainingTTL := entry.Value.RemainingTTL()
-		if entry.Value.Policy == "" || entry.Value.Age() >= CACHE_MAX_AGE {
-			itemsCount--
-			freshCount--
-			continue
-		}
-		if remainingTTL == 0 {
-			freshCount--
+		if (entry.Value.Policy == "" || entry.Value.Age() >= CACHE_MAX_AGE) && entry.Value.RemainingTTL() == 0 {
 			polCache.Remove(entry.Key)
 		}
 	}
-	log.Infof("Cache consists of %d policies, of which %d are expired.", itemsCount, itemsCount-freshCount)
 }
