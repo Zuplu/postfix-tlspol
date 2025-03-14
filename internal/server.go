@@ -316,12 +316,12 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		dPol, dTTL = checkDane(ctx, domain)
+		dPol, dTTL = checkDane(ctx, domain, true)
 		tb = time.Now()
 	}()
 	go func() {
 		defer wg.Done()
-		msPol, msRpt, msTTL = checkMtaSts(ctx, domain)
+		msPol, msRpt, msTTL = checkMtaSts(ctx, domain, true)
 		tc = time.Now()
 	}()
 	wg.Wait()
@@ -434,13 +434,13 @@ func queryDomain(domain *string) (string, string, uint32) {
 
 	// DANE query
 	go func() {
-		policy, ttl := checkDane(&ctx, domain)
+		policy, ttl := checkDane(&ctx, domain, true)
 		results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}
 	}()
 
 	// MTA-STS query
 	go func() {
-		policy, rpt, ttl := checkMtaSts(&ctx, domain)
+		policy, rpt, ttl := checkMtaSts(&ctx, domain, true)
 		results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}
 	}()
 

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"slices"
+	"time"
 
 	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
@@ -175,10 +176,14 @@ const (
 	DaneOnly
 )
 
-func checkDane(ctx *context.Context, domain *string) (string, uint32) {
+func checkDane(ctx *context.Context, domain *string, mayRetry bool) (string, uint32) {
 	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
+			if mayRetry {
+				time.Sleep(500 * time.Millisecond)
+				return checkDane(ctx, domain, false)
+			}
 			log.Warnf("DNS error during MX lookup for %q: %v", *domain, err)
 		}
 		return "TEMP", 0
@@ -187,14 +192,16 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 	if numRecords == 0 {
 		return "", 0
 	}
-
 	tlsaResults := make(chan ResultWithTTL)
 	for _, mx := range mxRecords {
 		go func(mx string) {
 			tlsaResults <- checkTlsa(ctx, &mx)
 		}(mx)
 	}
+	return getDanePolicy(ctx, domain, mayRetry, ttl, incompl, numRecords, &tlsaResults)
+}
 
+func getDanePolicy(ctx *context.Context, domain *string, mayRetry bool, ttl uint32, incompl bool, numRecords int, tlsaResults *chan ResultWithTTL) (string, uint32) {
 	var ttls []uint32
 	ttls = append(ttls, ttl)
 	var i int = 0
@@ -202,13 +209,17 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 	if incompl {
 		pols = append(pols, NoDane)
 	}
-	for res := range tlsaResults {
+	for res := range *tlsaResults {
 		i++
 		if i >= numRecords {
-			close(tlsaResults)
+			close(*tlsaResults)
 		}
 		if res.Err != nil {
-			if !errors.Is(err, context.Canceled) {
+			if !errors.Is(res.Err, context.Canceled) {
+				if mayRetry {
+					time.Sleep(500 * time.Millisecond)
+					return checkDane(ctx, domain, false)
+				}
 				log.Warnf("DNS error during TLSA lookup for %q: %v", *domain, res.Err)
 			}
 			return "TEMP", 0
@@ -223,7 +234,6 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 			pols = append(pols, NoDane)
 		}
 	}
-
 	pol := ""
 	if findMax(&pols) >= Dane {
 		if findMin(&pols) <= Dane {
@@ -232,7 +242,6 @@ func checkDane(ctx *context.Context, domain *string) (string, uint32) {
 			pol = "dane-only"
 		}
 	}
-
 	return pol, findMin(&ttls)
 }
 

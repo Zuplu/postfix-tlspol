@@ -10,7 +10,7 @@ func init() {
 	config = Config{
 		Server: ServerConfig{},
 		Dns: DnsConfig{
-			Address: "dns.google:53",
+			Address: "8.8.8.8:53",
 		},
 	}
 }
@@ -27,7 +27,7 @@ func TestMtaSts(t *testing.T) {
 					t.SkipNow()
 					return
 				}
-				policy, _, _ := checkMtaSts(&bgCtx, &domain)
+				policy, _, _ := checkMtaSts(&bgCtx, &domain, true)
 				if !strings.HasPrefix(policy, "secure ") {
 					t.Skipf("Expected MTA-STS for %q, but not detected", domain)
 				} else if !passedOnce {
