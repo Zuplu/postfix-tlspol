@@ -132,7 +132,7 @@ func isTlsaUsable(r *dns.TLSA) bool {
 
 func checkTlsa(ctx *context.Context, mx *string) ResultWithTTL {
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn("_25._tcp."+(*mx)), dns.TypeTLSA)
+	m.SetQuestion(dns.Fqdn("_25._tcp."+*mx), dns.TypeTLSA)
 	m.SetEdns0(1232, true)
 
 	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
