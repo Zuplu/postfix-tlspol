@@ -6,7 +6,6 @@
 package tlspol
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,7 +26,6 @@ import (
 
 	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
-	"github.com/neilotoole/jsoncolor"
 )
 
 type CacheStruct struct {
@@ -59,8 +57,7 @@ var (
 	showVersion = false
 	showLicense = false
 	configFile  string
-	queryMode   = false
-	dumpCache   = false
+	cliConnMode = false
 	purgeCache  = false
 )
 
@@ -69,59 +66,8 @@ func init() {
 	flag.BoolVar(&showLicense, "license", false, "Show LICENSE")
 	flag.StringVar(&configFile, "config", "/etc/postfix-tlspol/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
-	flag.BoolVar(&dumpCache, "dump", false, "Dump cache")
+	flag.Bool("dump", false, "Dump cache")
 	flag.BoolVar(&purgeCache, "purge", false, "Manually clear the cache")
-}
-
-func flagQueryFunc(f *flag.Flag) {
-	if (*f).Name != "query" {
-		return
-	}
-	queryMode = true
-	domain := (*f).Value.String()
-	if len(domain) == 0 || !valid.IsDNSName(domain) {
-		log.Errorf("Invalid domain: %q", domain)
-		return
-	}
-	var conn net.Conn
-	var err error
-	if strings.HasPrefix(config.Server.Address, "unix:") {
-		conn, err = net.Dial("unix", config.Server.Address[5:])
-	} else {
-		conn, err = net.Dial("tcp", config.Server.Address)
-	}
-	if err != nil {
-		log.Errorf("Could not query domain %q. Is postfix-tlspol running? (%v)", domain, err)
-		return
-	}
-	defer conn.Close()
-	conn.Write(netstring.Marshal("JSON " + domain))
-	raw, err := bufio.NewReader(conn).ReadBytes('\n')
-	if err != nil {
-		log.Errorf("Could not query domain %q. (%v)", domain, err)
-		return
-	}
-	result := new(Result)
-	err = json.Unmarshal(raw, &result)
-	if err != nil {
-		log.Errorf("Could not query domain %q. (%v)", domain, err)
-		return
-	}
-	o, err := os.Stdout.Stat()
-	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
-		enc := jsoncolor.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		enc.SetColors(jsoncolor.DefaultColors())
-		err = enc.Encode(result)
-	} else {
-		enc := json.NewEncoder(os.Stdout)
-		err = enc.Encode(result)
-	}
-	if err != nil {
-		log.Errorf("Could not query domain %q. (%v)", domain, err)
-		return
-	}
-	return
 }
 
 func StartDaemon(v *string, licenseText *string) {
@@ -144,9 +90,9 @@ func StartDaemon(v *string, licenseText *string) {
 	var err error
 	config, err = loadConfig(configFile)
 
-	flag.Visit(flagQueryFunc)
+	flag.Visit(flagCliConnFunc)
 
-	if queryMode {
+	if cliConnMode {
 		return
 	}
 
@@ -166,11 +112,6 @@ func StartDaemon(v *string, licenseText *string) {
 	defer polCache.Close()
 	tidyCache()
 	listenForSignals()
-
-	if dumpCache {
-		dumpCachedPolicies()
-		return
-	}
 
 	if purgeCache {
 		polCache.Purge()
@@ -382,6 +323,9 @@ func handleConnection(conn *net.Conn) {
 		case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
 			withTlsRpt = true
 		case "QUERY", "JSON":
+		case "DUMP":
+			dumpCachedPolicies(conn)
+			return
 		default:
 			log.Warnf("Unknown command: %q", query)
 			(*conn).Write(NS_PERM)
@@ -475,14 +419,14 @@ func queryDomain(domain *string) (string, string, uint32) {
 	return policy, report, ttl
 }
 
-func dumpCachedPolicies() {
+func dumpCachedPolicies(conn *net.Conn) {
 	items := polCache.Items()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL()
 		if entry.Value.Policy == "" || remainingTTL == 0 {
 			continue
 		}
-		fmt.Printf("%-24s  %s\n", entry.Key, entry.Value.Policy)
+		fmt.Fprintf(*conn, "%-24s  %s\n", entry.Key, entry.Value.Policy)
 	}
 }
 
