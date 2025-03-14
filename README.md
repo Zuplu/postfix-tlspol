@@ -154,8 +154,8 @@ server:
   # prefetch when TTL is about to expire (default true)
   prefetch: true
 
-  # cache file (default cache.db in working directory, i. e. /var/lib/postfix-tlspol)
-  cache-file: cache.db
+  # cache file (default /var/lib/postfix-tlspol/cache.db)
+  cache-file: /var/lib/postfix-tlspol/cache.db
 
 dns:
   # must support DNSSEC
