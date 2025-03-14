@@ -9,7 +9,7 @@ func init() {
 	config = Config{
 		Server: ServerConfig{},
 		Dns: DnsConfig{
-			Address: "dns.google:53",
+			Address: "8.8.8.8:53",
 		},
 	}
 }
@@ -26,7 +26,7 @@ func TestDane(t *testing.T) {
 					t.SkipNow()
 					return
 				}
-				policy, _ := checkDane(&bgCtx, &domain)
+				policy, _ := checkDane(&bgCtx, &domain, true)
 				if policy != "dane-only" {
 					t.Skipf("Expected DANE for %q, but not detected", domain)
 				} else if !passedOnce {

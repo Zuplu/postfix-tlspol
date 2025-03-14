@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	valid "github.com/asaskevich/govalidator/v11"
 	"github.com/miekg/dns"
@@ -109,10 +110,14 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 	return true
 }
 
-func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) {
+func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, string, uint32) {
 	hasRecord, err := checkMtaStsRecord(ctx, domain)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
+			if mayRetry {
+				time.Sleep(500 * time.Millisecond)
+				return checkMtaSts(ctx, domain, false)
+			}
 			log.Warnf("DNS error during MTA-STS lookup for %q: %v", *domain, err)
 		}
 		return "", "", 0
@@ -124,11 +129,19 @@ func checkMtaSts(ctx *context.Context, domain *string) (string, string, uint32) 
 	mtaSTSURL := "https://mta-sts." + *domain + "/.well-known/mta-sts.txt"
 	req, err := http.NewRequestWithContext(*ctx, http.MethodGet, mtaSTSURL, nil)
 	if err != nil {
+		if !errors.Is(err, context.Canceled) && mayRetry {
+			time.Sleep(500 * time.Millisecond)
+			return checkMtaSts(ctx, domain, false)
+		}
 		return "", "", 0
 	}
 	req.Header.Set("User-Agent", "postfix-tlspol/"+Version)
 	resp, err := httpClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
+		if !errors.Is(err, context.Canceled) && mayRetry {
+			time.Sleep(500 * time.Millisecond)
+			return checkMtaSts(ctx, domain, false)
+		}
 		return "", "", 0
 	}
 	defer resp.Body.Close()

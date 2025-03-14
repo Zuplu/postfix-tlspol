@@ -9,7 +9,7 @@ func init() {
 	config = Config{
 		Server: ServerConfig{},
 		Dns: DnsConfig{
-			Address: "dns.google:53",
+			Address: "8.8.8.8:53",
 		},
 	}
 }
