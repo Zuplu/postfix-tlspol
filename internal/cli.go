@@ -92,7 +92,7 @@ func cliDump(f *flag.Flag, conn *net.Conn) {
 	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
 		if _, err := exec.LookPath("less"); err == nil {
 			less := exec.Command("less")
-			less.Env = append(os.Environ(), "LESS=-S -F")
+			less.Env = append(os.Environ(), "LESS=-S --use-color --prompt=postfix-tlspol\\ in-memory\\ cache")
 			less.Stdin = *conn
 			less.Stdout = os.Stdout
 			less.Stderr = os.Stderr

@@ -38,7 +38,8 @@ type CacheStruct struct {
 const (
 	CACHE_NOTFOUND_TTL uint32 = 600
 	CACHE_MIN_TTL      uint32 = 180
-	CACHE_MAX_AGE      uint32 = 86400
+	CACHE_MAX_TTL      uint32 = 2592000
+	CACHE_MAX_AGE      uint32 = 86400 // max age for stale queries (only for prefetching, not served)
 	REQUEST_TIMEOUT           = 2 * time.Second
 )
 
@@ -134,9 +135,8 @@ func listenForSignals() {
 		for {
 			sig := <-signals
 			log.Infof("Received signal: %v, saving cache...", sig)
+			tidyCache()
 			if sig == syscall.SIGHUP {
-				tidyCache()
-				polCache.Save()
 				continue
 			}
 			polCache.Close()
@@ -339,7 +339,7 @@ func handleConnection(conn *net.Conn) {
 		domain := strings.ToLower(strings.TrimSpace(parts[1]))
 
 		if cmd == "JSON" {
-			ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
+			ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
 			defer cancel()
 			replyJson(&ctx, conn, &domain)
 			continue
@@ -373,7 +373,7 @@ type PolicyResult struct {
 
 func queryDomain(domain *string) (string, string, uint32) {
 	results := make(chan PolicyResult)
-	ctx, cancel := context.WithTimeout(bgCtx, REQUEST_TIMEOUT)
+	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
 	defer cancel()
 
 	// DANE query
@@ -409,6 +409,8 @@ func queryDomain(domain *string) (string, string, uint32) {
 
 	if ttl < CACHE_MIN_TTL {
 		ttl = CACHE_MIN_TTL
+	} else if ttl > CACHE_MAX_TTL {
+		ttl = CACHE_MAX_TTL
 	}
 	if policy == "" {
 		ttl = CACHE_NOTFOUND_TTL
@@ -420,6 +422,7 @@ func queryDomain(domain *string) (string, string, uint32) {
 }
 
 func dumpCachedPolicies(conn *net.Conn) {
+	tidyCache()
 	items := polCache.Items()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL()
@@ -431,6 +434,7 @@ func dumpCachedPolicies(conn *net.Conn) {
 }
 
 func tidyCache() {
+	defer polCache.Save()
 	items := polCache.Items()
 	for _, entry := range items {
 		// Cleanup v1.8.0 bug that duplicated cache entries

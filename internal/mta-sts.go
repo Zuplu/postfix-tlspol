@@ -102,9 +102,10 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 		*mode = val
 	case "max_age":
 		age, err := strconv.ParseUint(val, 10, 32)
-		if err == nil {
-			*maxAge = uint32(age)
+		if err != nil {
+			return false
 		}
+		*maxAge = uint32(age)
 	default:
 	}
 	return true
