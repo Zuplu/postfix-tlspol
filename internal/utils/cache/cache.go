@@ -16,7 +16,8 @@ import (
 )
 
 type Cacheable interface {
-	RemainingTTL() uint32
+	RemainingTTL(...time.Time) uint32
+	Age(...time.Time) uint32
 }
 
 type Expirable struct {
@@ -24,19 +25,31 @@ type Expirable struct {
 	LastUpdate time.Time
 }
 
-func (e *Expirable) Age() uint32 {
-	if e.LastUpdate.IsZero() {
-		e.LastUpdate = time.Now()
+func (e *Expirable) Age(t ...time.Time) uint32 {
+	var now time.Time
+	if len(t) == 0 {
+		now = time.Now()
+	} else {
+		now = t[0]
 	}
-	age := time.Until(e.LastUpdate).Seconds() * -1
+	if e.LastUpdate.IsZero() {
+		e.LastUpdate = now
+	}
+	age := e.LastUpdate.Sub(now).Seconds() * -1
 	if age < 0 {
 		age = 0
 	}
 	return uint32(age)
 }
 
-func (e *Expirable) RemainingTTL() uint32 {
-	ttl := time.Until(e.ExpiresAt).Seconds()
+func (e *Expirable) RemainingTTL(t ...time.Time) uint32 {
+	var now time.Time
+	if len(t) == 0 {
+		now = time.Now()
+	} else {
+		now = t[0]
+	}
+	ttl := e.ExpiresAt.Sub(now).Seconds()
 	if ttl < 0 {
 		ttl = 0
 	}

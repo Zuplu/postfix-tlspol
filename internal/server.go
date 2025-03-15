@@ -359,7 +359,8 @@ func handleConnection(conn *net.Conn) {
 		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
 
 		if ttl != 0 {
-			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second), LastUpdate: time.Now()}})
+			now := time.Now()
+			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second), LastUpdate: now}})
 		}
 	}
 }
@@ -424,25 +425,27 @@ func queryDomain(domain *string) (string, string, uint32) {
 func dumpCachedPolicies(conn *net.Conn) {
 	tidyCache()
 	items := polCache.Items()
+	now := time.Now()
 	for _, entry := range items {
-		remainingTTL := entry.Value.RemainingTTL()
+		remainingTTL := entry.Value.RemainingTTL(now)
 		if entry.Value.Policy == "" || remainingTTL == 0 {
 			continue
 		}
-		fmt.Fprintf(*conn, "%-24s  %s\n", entry.Key, entry.Value.Policy)
+		fmt.Fprintf(*conn, "%-21s %s\n", entry.Key, entry.Value.Policy)
 	}
 }
 
 func tidyCache() {
 	defer polCache.Save()
 	items := polCache.Items()
+	now := time.Now()
 	for _, entry := range items {
 		// Cleanup v1.8.0 bug that duplicated cache entries
 		if strings.Contains(entry.Value.Policy, "policy_type") {
 			polCache.Remove(entry.Key)
 			continue
 		}
-		if (entry.Value.Policy == "" || entry.Value.Age() >= CACHE_MAX_AGE) && entry.Value.RemainingTTL() == 0 {
+		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now) == 0 {
 			polCache.Remove(entry.Key)
 		}
 	}
