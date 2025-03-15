@@ -59,7 +59,6 @@ var (
 	showLicense = false
 	configFile  string
 	cliConnMode = false
-	purgeCache  = false
 )
 
 func init() {
@@ -68,7 +67,7 @@ func init() {
 	flag.StringVar(&configFile, "config", "/etc/postfix-tlspol/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
 	flag.Bool("dump", false, "Dump cache")
-	flag.BoolVar(&purgeCache, "purge", false, "Manually clear the cache")
+	flag.Bool("purge", false, "Manually clear the cache")
 }
 
 func StartDaemon(v *string, licenseText *string) {
@@ -113,12 +112,6 @@ func StartDaemon(v *string, licenseText *string) {
 	defer polCache.Close()
 	tidyCache()
 	listenForSignals()
-
-	if purgeCache {
-		polCache.Purge()
-		log.Info("Cache purged!")
-		return
-	}
 
 	readEnv()
 
@@ -326,6 +319,9 @@ func handleConnection(conn *net.Conn) {
 		case "DUMP":
 			dumpCachedPolicies(conn)
 			return
+		case "PURGE":
+			purgeCache(conn)
+			return
 		default:
 			log.Warnf("Unknown command: %q", query)
 			(*conn).Write(NS_PERM)
@@ -433,6 +429,11 @@ func dumpCachedPolicies(conn *net.Conn) {
 		}
 		fmt.Fprintf(*conn, "%-21s %s\n", entry.Key, entry.Value.Policy)
 	}
+}
+
+func purgeCache(conn *net.Conn) {
+	polCache.Purge()
+	fmt.Fprintln(*conn, "OK")
 }
 
 func tidyCache() {

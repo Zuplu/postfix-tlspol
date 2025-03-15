@@ -31,7 +31,7 @@ func flagCliConnFunc(f *flag.Flag) {
 			log.Errorf("Invalid domain: %q", value)
 			return
 		}
-	case "dump":
+	case "dump", "purge":
 		cliConnMode = true
 	default:
 		return
@@ -53,6 +53,8 @@ func flagCliConnFunc(f *flag.Flag) {
 		cliQuery(f, &conn, &value)
 	case "dump":
 		cliDump(f, &conn)
+	case "purge":
+		cliPurge(f, &conn)
 	}
 }
 
@@ -100,5 +102,10 @@ func cliDump(f *flag.Flag, conn *net.Conn) {
 			return
 		}
 	}
+	io.Copy(os.Stdout, *conn)
+}
+
+func cliPurge(f *flag.Flag, conn *net.Conn) {
+	(*conn).Write(netstring.Marshal("PURGE"))
 	io.Copy(os.Stdout, *conn)
 }

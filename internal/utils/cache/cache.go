@@ -111,9 +111,10 @@ func (c *Cache[T]) Remove(key string) {
 
 func (c *Cache[T]) Purge() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.data = make(map[string]T)
 	c.dirty = true
+	c.mu.Unlock()
+	c.Save()
 }
 
 func (c *Cache[T]) Items() []Entry[T] {
