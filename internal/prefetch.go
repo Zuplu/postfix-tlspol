@@ -39,9 +39,10 @@ func prefetchCachedPolicies() {
 	var counter atomic.Uint32
 	items := polCache.Items()
 	itemsCount := len(items)
+	now := time.Now()
 	for _, entry := range items {
-		remainingTTL := entry.Value.RemainingTTL()
-		if entry.Value.Policy == "" || entry.Value.TTL < PREFETCH_MARGIN || entry.Value.Age() >= CACHE_MAX_AGE {
+		remainingTTL := entry.Value.RemainingTTL(now)
+		if entry.Value.Policy == "" || entry.Value.TTL < PREFETCH_MARGIN || entry.Value.Age(now) >= CACHE_MAX_AGE {
 			itemsCount--
 			if remainingTTL == 0 {
 				polCache.Remove(entry.Key)
@@ -62,7 +63,7 @@ func prefetchCachedPolicies() {
 			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&entry.Key)
 			if refreshedPolicy != "" && refreshedPolicy != "TEMP" {
 				counter.Add(1)
-				polCache.Set(entry.Key, &CacheStruct{Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Duration(refreshedTTL+rand.Uint32N(15)) * time.Second), LastUpdate: time.Now()}})
+				polCache.Set(entry.Key, &CacheStruct{Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(refreshedTTL+rand.Uint32N(15)) * time.Second), LastUpdate: now}})
 			}
 		}(entry)
 	}
