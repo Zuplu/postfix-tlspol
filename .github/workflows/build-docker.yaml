@@ -41,7 +41,7 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           BRANCH="$(git branch --show-current)"
           IS_LATEST="false"
-          if [ "$BRANCH" -eq "main" ]; then
+          if [ "$BRANCH" = "main" ]; then
             NEW_COMMITS="$(git rev-list HEAD...origin/"$BRANCH" --count)"
             if [ "$NEW_COMMITS" -eq "0" ]; then
               IS_LATEST="true"

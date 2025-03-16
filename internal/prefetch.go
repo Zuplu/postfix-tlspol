@@ -30,7 +30,7 @@ func startPrefetching() {
 	ticker := time.NewTicker(time.Duration(PREFETCH_INTERVAL) * time.Second)
 	semaphore = make(chan struct{}, runtime.NumCPU()*4)
 	for range ticker.C {
-		prefetchCachedPolicies()
+		go prefetchCachedPolicies()
 	}
 }
 

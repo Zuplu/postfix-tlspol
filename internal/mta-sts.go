@@ -116,7 +116,7 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			if mayRetry {
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(750 * time.Millisecond)
 				return checkMtaSts(ctx, domain, false)
 			}
 			log.Warnf("DNS error during MTA-STS lookup for %q: %v", *domain, err)
@@ -131,7 +131,7 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 	req, err := http.NewRequestWithContext(*ctx, http.MethodGet, mtaSTSURL, nil)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && mayRetry {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(750 * time.Millisecond)
 			return checkMtaSts(ctx, domain, false)
 		}
 		return "", "", 0
@@ -140,7 +140,7 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 	resp, err := httpClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if !errors.Is(err, context.Canceled) && mayRetry {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(750 * time.Millisecond)
 			return checkMtaSts(ctx, domain, false)
 		}
 		return "", "", 0

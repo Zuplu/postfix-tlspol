@@ -307,56 +307,69 @@ func handleConnection(conn *net.Conn) {
 
 	ns := netstring.NewScanner(*conn)
 
+	workChan := make(chan bool, 1)
 	for ns.Scan() {
-		query := ns.Text()
-		parts := strings.SplitN(query, " ", 2)
-		cmd := strings.ToUpper(parts[0])
-		withTlsRpt := config.Server.TlsRpt
-		switch cmd {
-		case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
-			withTlsRpt = true
-		case "QUERY", "JSON":
-		case "DUMP":
-			dumpCachedPolicies(conn)
+		go func(query string) {
+			parts := strings.SplitN(query, " ", 2)
+			cmd := strings.ToUpper(parts[0])
+			withTlsRpt := config.Server.TlsRpt
+			switch cmd {
+			case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
+				withTlsRpt = true
+			case "QUERY", "JSON":
+			case "DUMP":
+				dumpCachedPolicies(conn)
+				workChan <- false
+				return
+			case "PURGE":
+				purgeCache(conn)
+				workChan <- false
+				return
+			default:
+				log.Warnf("Unknown command: %q", query)
+				(*conn).Write(NS_PERM)
+				workChan <- false
+				return
+			}
+			if len(parts) != 2 { // empty query
+				(*conn).Write(NS_NOTFOUND)
+				workChan <- true
+				return
+			}
+
+			domain := strings.ToLower(strings.TrimSpace(parts[1]))
+
+			if cmd == "JSON" {
+				ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
+				defer cancel()
+				replyJson(&ctx, conn, &domain)
+				workChan <- true
+				return
+			}
+
+			if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
+				(*conn).Write(NS_NOTFOUND)
+				workChan <- true
+				return
+			}
+
+			if tryCachedPolicy(conn, &domain, &withTlsRpt) {
+				workChan <- true
+				return
+			}
+
+			policy, report, ttl := queryDomain(&domain)
+
+			replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
+
+			if ttl != 0 {
+				now := time.Now()
+				polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second), LastUpdate: now}})
+			}
+			workChan <- true
+		}(ns.Text())
+		if !<-workChan {
 			return
-		case "PURGE":
-			purgeCache(conn)
-			return
-		default:
-			log.Warnf("Unknown command: %q", query)
-			(*conn).Write(NS_PERM)
-			return
-		}
-		if len(parts) != 2 { // empty query
-			(*conn).Write(NS_NOTFOUND)
-			continue
-		}
-
-		domain := strings.ToLower(strings.TrimSpace(parts[1]))
-
-		if cmd == "JSON" {
-			ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
-			defer cancel()
-			replyJson(&ctx, conn, &domain)
-			continue
-		}
-
-		if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
-			(*conn).Write(NS_NOTFOUND)
-			continue
-		}
-
-		if tryCachedPolicy(conn, &domain, &withTlsRpt) {
-			continue
-		}
-
-		policy, report, ttl := queryDomain(&domain)
-
-		replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
-
-		if ttl != 0 {
-			now := time.Now()
-			polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second), LastUpdate: now}})
 		}
 	}
 }
