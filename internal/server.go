@@ -337,7 +337,7 @@ func handleConnection(conn *net.Conn) {
 				return
 			}
 
-			domain := strings.ToLower(strings.TrimSpace(parts[1]))
+			domain := normalizeDomain(parts[1])
 
 			if cmd == "JSON" {
 				ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
@@ -379,6 +379,10 @@ type PolicyResult struct {
 	Report string
 	TTL    uint32
 	IsDane bool
+}
+
+func normalizeDomain(domain string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 }
 
 func queryDomain(domain *string) (string, string, uint32) {
@@ -455,7 +459,7 @@ func tidyCache() {
 	now := time.Now()
 	for _, entry := range items {
 		// Cleanup v1.8.0 bug that duplicated cache entries
-		if strings.Contains(entry.Value.Policy, "policy_type") {
+		if strings.Contains(entry.Value.Policy, "policy_type") || normalizeDomain(entry.Key) != entry.Key {
 			polCache.Remove(entry.Key)
 			continue
 		}
