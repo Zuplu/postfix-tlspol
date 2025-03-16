@@ -181,7 +181,7 @@ func checkDane(ctx *context.Context, domain *string, mayRetry bool) (string, uin
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			if mayRetry {
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(750 * time.Millisecond)
 				return checkDane(ctx, domain, false)
 			}
 			log.Warnf("DNS error during MX lookup for %q: %v", *domain, err)
@@ -217,7 +217,7 @@ func getDanePolicy(ctx *context.Context, domain *string, mayRetry bool, ttl uint
 		if res.Err != nil {
 			if !errors.Is(res.Err, context.Canceled) {
 				if mayRetry {
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(750 * time.Millisecond)
 					return checkDane(ctx, domain, false)
 				}
 				log.Warnf("DNS error during TLSA lookup for %q: %v", *domain, res.Err)
