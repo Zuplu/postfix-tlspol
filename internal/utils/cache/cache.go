@@ -78,11 +78,9 @@ func New[T Cacheable](_ T, filePath string, savePeriod time.Duration) *Cache[T] 
 		savePeriod: savePeriod,
 		quit:       make(chan struct{}),
 	}
-
 	if err := c.load(); err != nil {
 		log.Errorf("cache: error loading persisted data: %v", err)
 	}
-
 	c.wg.Add(1)
 	go c.periodicSave()
 	return c

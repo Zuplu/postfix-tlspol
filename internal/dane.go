@@ -27,7 +27,7 @@ type ResultWithTTL struct {
 func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error, bool) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(*domain), dns.TypeMX)
-	m.SetEdns0(1232, true)
+	m.SetEdns0(4096, true)
 
 	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {
@@ -76,7 +76,7 @@ ipCheck:
 	for _, t := range types {
 		m := new(dns.Msg)
 		m.SetQuestion(dns.Fqdn(*mx), t)
-		m.SetEdns0(1232, true)
+		m.SetEdns0(4096, true)
 
 		r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 		if err != nil {
@@ -134,7 +134,7 @@ func isTlsaUsable(r *dns.TLSA) bool {
 func checkTlsa(ctx *context.Context, mx *string) ResultWithTTL {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn("_25._tcp."+*mx), dns.TypeTLSA)
-	m.SetEdns0(1232, true)
+	m.SetEdns0(4096, true)
 
 	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {

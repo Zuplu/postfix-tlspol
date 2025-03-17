@@ -46,7 +46,7 @@ const (
 var (
 	Version     = "undefined"
 	bgCtx       = context.Background()
-	client      = dns.Client{Timeout: REQUEST_TIMEOUT}
+	client      = dns.Client{UDPSize: 4096, Timeout: REQUEST_TIMEOUT}
 	config      Config
 	polCache    *cache.Cache[*CacheStruct]
 	NS_NOTFOUND = netstring.Marshal("NOTFOUND ")
@@ -101,7 +101,7 @@ func StartDaemon(v *string, licenseText *string) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n\n", curYear, Version)
+	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n", curYear, Version)
 
 	if err != nil {
 		log.Errorf("Error loading config: %v", err)

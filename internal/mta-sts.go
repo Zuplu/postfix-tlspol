@@ -23,7 +23,7 @@ import (
 func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn("_mta-sts."+*domain), dns.TypeTXT)
-	m.SetEdns0(1232, false)
+	m.SetEdns0(4096, false)
 
 	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
 	if err != nil {
@@ -138,7 +138,7 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 	}
 	req.Header.Set("User-Agent", "postfix-tlspol/"+Version)
 	resp, err := httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
 		if !errors.Is(err, context.Canceled) && mayRetry {
 			time.Sleep(750 * time.Millisecond)
 			return checkMtaSts(ctx, domain, false)
@@ -146,6 +146,9 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 		return "", "", 0
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", 0
+	}
 
 	var mxServers []string
 	mode := ""
