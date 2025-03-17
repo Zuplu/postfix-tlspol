@@ -58,10 +58,15 @@ var httpClient = &http.Client{
 	},
 	Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,            // Ensure SSL certificate validation
-			MinVersion:         tls.VersionTLS12, // set minimum to TLSv1.2
+			InsecureSkipVerify:     false,            // Ensure SSL certificate validation
+			MinVersion:             tls.VersionTLS12, // set minimum to TLSv1.2
+			SessionTicketsDisabled: true,
+			ClientSessionCache:     nil,
 		},
+		IdleConnTimeout:   1 * time.Second,
+		MaxIdleConns:      1,
 		DisableKeepAlives: true,
+		ForceAttemptHTTP2: true,
 	},
 	Timeout: REQUEST_TIMEOUT, // Set a timeout for the request
 }
