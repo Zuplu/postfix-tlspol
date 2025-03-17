@@ -35,7 +35,7 @@ func (e *Expirable) Age(t ...time.Time) uint32 {
 	if e.LastUpdate.IsZero() {
 		e.LastUpdate = now
 	}
-	age := now.Sub(e.LastUpdate).Seconds()
+	age := now.Sub(e.LastUpdate).Seconds() - e.ExpiresAt.Sub(e.LastUpdate).Seconds()
 	if age < 0 {
 		age = 0
 	}

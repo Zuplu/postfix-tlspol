@@ -15,8 +15,8 @@ var (
 )
 
 func main() {
-    debug.SetGCPercent(-1) // disable opportunistic GC, save CPU cycles
-    debug.SetMemoryLimit(24 * 1024 * 1024) // set soft memory limit when to trigger GC
+    debug.SetGCPercent(300) // make GC run less often, save CPU cycles
+    debug.SetMemoryLimit(32 * 1024 * 1024) // set soft memory limit when to trigger GC
 	tlspol.SetDefaultConfig(&defaultConfigYaml)
 	tlspol.StartDaemon(&Version, &LicenseText)
 }
