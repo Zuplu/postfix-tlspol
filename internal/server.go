@@ -39,7 +39,7 @@ const (
 	CACHE_NOTFOUND_TTL uint32 = 600
 	CACHE_MIN_TTL      uint32 = 180
 	CACHE_MAX_TTL      uint32 = 2592000
-	CACHE_MAX_AGE      uint32 = 86400 // max age for stale queries (only for prefetching, not served)
+	CACHE_MAX_AGE      uint32 = 600 // max age for stale queries (only for prefetching, not served)
 	REQUEST_TIMEOUT           = 2 * time.Second
 )
 
