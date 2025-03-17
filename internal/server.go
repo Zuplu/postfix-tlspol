@@ -386,20 +386,23 @@ func normalizeDomain(domain string) string {
 }
 
 func queryDomain(domain *string) (string, string, uint32) {
-	results := make(chan PolicyResult)
+	results := make(chan PolicyResult, 2)
 	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
-	defer cancel()
 
 	// DANE query
 	go func() {
 		policy, ttl := checkDane(&ctx, domain, true)
-		results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}
+		if ctx.Err() == nil {
+			results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}
+		}
 	}()
 
 	// MTA-STS query
 	go func() {
 		policy, rpt, ttl := checkMtaSts(&ctx, domain, true)
-		results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}
+		if ctx.Err() == nil {
+			results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}
+		}
 	}()
 
 	policy, report := "", ""
@@ -419,6 +422,10 @@ func queryDomain(domain *string) (string, string, uint32) {
 		if r.IsDane {
 			break
 		}
+	}
+	cancel()
+	if i < 2 {
+		close(results)
 	}
 
 	if ttl < CACHE_MIN_TTL {
