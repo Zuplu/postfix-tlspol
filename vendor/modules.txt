@@ -1,8 +1,8 @@
 # github.com/asaskevich/govalidator/v11 v11.0.2-0.20250122183457-e11347878e23
 ## explicit; go 1.13
 github.com/asaskevich/govalidator/v11
-# github.com/miekg/dns v1.1.63
-## explicit; go 1.19
+# github.com/miekg/dns v1.1.64
+## explicit; go 1.22.0
 github.com/miekg/dns
 # github.com/neilotoole/jsoncolor v0.7.1
 ## explicit; go 1.16
