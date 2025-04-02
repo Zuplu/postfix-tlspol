@@ -129,7 +129,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: 📤 Upload digest
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # pin@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # pin@v4
         with:
           name: digest-${{ env.PLATFORM }}
           path: ${{ runner.temp }}/digests/*
@@ -148,7 +148,7 @@ jobs:
       METADATA: ${{ fromJSON(needs.metadata.outputs.json) }}
     steps:
       - name: 📥 Download digests
-        uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # pin@v4
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # pin@v4
         with:
           path: ${{ runner.temp }}/digests
           pattern: digest-*
