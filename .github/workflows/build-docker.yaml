@@ -6,11 +6,11 @@ name: 🚀 Build and Deploy Docker Images
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 env:
-  REGISTRY_IMAGE: 'zuplu/postfix-tlspol'
+  REGISTRY_IMAGE: "zuplu/postfix-tlspol"
 
 permissions: read-all
 
@@ -64,7 +64,7 @@ jobs:
 
   build:
     name: 🚧 Build Docker Images
-    needs: [ test, metadata ]
+    needs: [test, metadata]
     strategy:
       matrix:
         platform:
@@ -139,7 +139,7 @@ jobs:
 
   bundle:
     name: 📦 Bundle and Deploy ✨
-    needs: [ metadata, build ]
+    needs: [metadata, build]
     runs-on: ubuntu-latest
     permissions:
       id-token: write

@@ -141,9 +141,11 @@ func (c *Cache[T]) periodicSave() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := c.Save(); err != nil {
-				log.Errorf("cache: error saving cache: %v", err)
-			}
+			go func() {
+				if err := c.Save(); err != nil {
+					log.Errorf("cache: error saving cache: %v", err)
+				}
+			}()
 		case <-c.quit:
 			return
 		}

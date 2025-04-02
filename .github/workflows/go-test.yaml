@@ -5,7 +5,7 @@ name: 🧪 Run unit tests
 
 on:
   push:
-    paths: '**/*.go'
+    paths: "**/*.go"
   pull_request:
   workflow_call:
 
