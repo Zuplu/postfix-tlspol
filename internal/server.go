@@ -89,6 +89,10 @@ func StartDaemon(v *string, licenseText *string) {
 	// Read config.yaml
 	var err error
 	config, err = loadConfig(configFile)
+	if err != nil {
+		log.Errorf("Error loading config: %v", err)
+		return
+	}
 
 	flag.Visit(flagCliConnFunc)
 
@@ -102,11 +106,7 @@ func StartDaemon(v *string, licenseText *string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n", curYear, Version)
-
-	if err != nil {
-		log.Errorf("Error loading config: %v", err)
-		return
-	}
+	log.SetLevel(config.Server.LogLevel)
 
 	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
