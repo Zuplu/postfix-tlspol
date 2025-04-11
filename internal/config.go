@@ -7,6 +7,7 @@ package tlspol
 
 import (
 	"os"
+	"strings"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"gopkg.in/yaml.v3"
@@ -20,19 +21,23 @@ type ServerConfig struct {
 	SocketPermissions os.FileMode `yaml:"socket-permissions"`
 	TlsRpt            bool        `yaml:"tlsrpt"`
 	Prefetch          bool        `yaml:"prefetch"`
+	NamedLogLevel     string      `yaml:"log-level"`
+	LogLevel          log.LogLevel
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	// Set default values
 	c.Address = defaultConfig.Server.Address
 	c.SocketPermissions = defaultConfig.Server.SocketPermissions
-	c.TlsRpt = defaultConfig.Server.TlsRpt
+	c.NamedLogLevel = defaultConfig.Server.NamedLogLevel
+	c.TlsRpt = false
 	c.Prefetch = defaultConfig.Server.Prefetch
 	c.CacheFile = defaultConfig.Server.CacheFile
 	type alias ServerConfig
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
 	}
+	c.LogLevel = log.LogLevels[strings.ToLower(c.NamedLogLevel)]
 	return nil
 }
 

@@ -27,6 +27,13 @@ const (
 	ERROR
 )
 
+var LogLevels = map[string]LogLevel{
+	"debug": DEBUG,
+	"info":  INFO,
+	"warn":  WARN,
+	"error": ERROR,
+}
+
 // color codes for different log levels.
 const (
 	colorReset  = "\033[0m"
@@ -36,14 +43,16 @@ const (
 	colorGrey   = "\033[90m"
 )
 
+var minLevel = DEBUG
+
 // logMutex ensures thread-safe writes to the output
 var logMutex sync.Mutex
 
 // output is the writer where logs are written. Defaults to os.Stderr
 var output = os.Stderr
 
-var showTimestamp bool = false
-var showColors bool = false
+var showTimestamp = false
+var showColors = false
 
 func init() {
 	_, isJournal := os.LookupEnv("JOURNAL_STREAM")
@@ -61,6 +70,10 @@ func logMessage(level LogLevel, message string) {
 
 	var levelStr string
 	var color string
+
+	if level < minLevel {
+		return
+	}
 
 	switch level {
 	case DEBUG:
@@ -122,4 +135,9 @@ func Error(v ...interface{}) {
 
 func Errorf(format string, v ...interface{}) {
 	logMessage(ERROR, fmt.Sprintf(format, v...))
+}
+
+func SetLevel(level LogLevel) {
+	minLevel = level
+	logMessage(999, fmt.Sprintf("LOG   Set log level to %v", level))
 }

@@ -6,10 +6,8 @@ server:
   # socket file permissions if Unix Domain Sockets are used (default 0666)
   socket-permissions: 0666
 
-  # DEPRECATED: use QUERYwithTLSRPT instead of QUERY in Postfix main.cf
-  # to enable Postfix 3.10+ TLSRPT support
-  # setting this to true with reply with TLSRPT to both commands
-  tlsrpt: false
+  # log level (debug, info, warn, error)
+  log-level: info
 
   # prefetch when TTL is about to expire (default true)
   prefetch: true
