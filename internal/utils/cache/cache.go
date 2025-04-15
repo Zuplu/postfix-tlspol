@@ -137,7 +137,6 @@ func (c *Cache[T]) periodicSave() {
 	defer c.wg.Done()
 	ticker := time.NewTicker(c.savePeriod)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ticker.C:
@@ -154,7 +153,6 @@ func (c *Cache[T]) periodicSave() {
 
 func (c *Cache[T]) Save() error {
 	c.mu.RLock()
-
 	if !c.dirty {
 		c.mu.RUnlock()
 		return nil
@@ -166,13 +164,11 @@ func (c *Cache[T]) Save() error {
 		return err
 	}
 	c.mu.RUnlock()
-
 	f, err := os.Create(c.filePath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-
 	g, err := gzip.NewWriterLevel(f, gzip.BestSpeed)
 	if err != nil {
 		return err
@@ -181,7 +177,6 @@ func (c *Cache[T]) Save() error {
 	if _, err := g.Write(buf.Bytes()); err != nil {
 		return err
 	}
-
 	c.mu.Lock()
 	c.dirty = false
 	c.mu.Unlock()
@@ -197,19 +192,16 @@ func (c *Cache[T]) load() error {
 		return err
 	}
 	defer f.Close()
-
 	g, err := gzip.NewReader(f)
 	if err != nil {
 		return err
 	}
 	defer g.Close()
-
 	dec := gob.NewDecoder(g)
 	var stored map[string]T
 	if err := dec.Decode(&stored); err != nil {
 		return err
 	}
-
 	c.mu.Lock()
 	c.data = stored
 	c.dirty = false

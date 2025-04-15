@@ -13,17 +13,12 @@ import (
 	"time"
 )
 
-// LogLevel represents the severity of the log message.
 type LogLevel int
 
 const (
-	// DEBUG level for detailed debug information.
 	DEBUG LogLevel = iota
-	// INFO level for general informational messages.
 	INFO
-	// WARN level for warning messages.
 	WARN
-	// ERROR level for error messages.
 	ERROR
 )
 
@@ -34,7 +29,6 @@ var LogLevels = map[string]LogLevel{
 	"error": ERROR,
 }
 
-// color codes for different log levels.
 const (
 	colorReset  = "\033[0m"
 	colorRed    = "\033[91m"
@@ -44,13 +38,8 @@ const (
 )
 
 var minLevel = DEBUG
-
-// logMutex ensures thread-safe writes to the output
 var logMutex sync.Mutex
-
-// output is the writer where logs are written. Defaults to os.Stderr
 var output = os.Stderr
-
 var showTimestamp = false
 var showColors = false
 
@@ -63,18 +52,14 @@ func init() {
 	showColors = !noColor && (isJournal || isTerminal)
 }
 
-// logMessage formats and outputs the log message with the appropriate color
 func logMessage(level LogLevel, message string) {
 	logMutex.Lock()
 	defer logMutex.Unlock()
-
 	var levelStr string
 	var color string
-
 	if level < minLevel {
 		return
 	}
-
 	switch level {
 	case DEBUG:
 		levelStr = "DEBUG "
@@ -92,7 +77,6 @@ func logMessage(level LogLevel, message string) {
 		levelStr = ""
 		color = colorReset
 	}
-
 	var msg string
 	if showTimestamp {
 		msg = time.Now().Format(time.StampMilli) + " "
