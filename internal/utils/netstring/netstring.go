@@ -29,7 +29,6 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 	if len(data) == 0 {
 		return 0, nil, nil
 	}
-
 	colonPos := bytes.IndexByte(data, ':')
 	if colonPos == -1 {
 		if atEOF {
@@ -37,7 +36,6 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 		}
 		return 0, nil, nil
 	}
-
 	lengthStr := data[:colonPos]
 	if len(lengthStr) == 0 {
 		return 0, nil, errors.New("netstring: empty length")
@@ -50,7 +48,6 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 			return 0, nil, errors.New("netstring: invalid length character")
 		}
 	}
-
 	length, err := strconv.Atoi(string(lengthStr))
 	if err != nil {
 		return 0, nil, errors.New("netstring: invalid length")
@@ -58,7 +55,6 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 	if length < 0 {
 		return 0, nil, errors.New("netstring: negative length")
 	}
-
 	commaPos := colonPos + 1 + length
 	if commaPos >= len(data) {
 		if atEOF {
@@ -66,11 +62,9 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 		}
 		return 0, nil, nil
 	}
-
 	if data[commaPos] != ',' {
 		return 0, nil, errors.New("netstring: missing comma terminator")
 	}
-
 	return commaPos + 1, data[colonPos+1 : commaPos], nil
 }
 
