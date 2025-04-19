@@ -34,54 +34,57 @@ fi
 
 if [ -z "$NOOPT" ]; then
   if [ "$(uname -m)" = "x86_64" ]; then
-    MAX_GOAMD64="v1"
-    check_level() {
-      level="$1"
-      flags=$(sed -n '/^flags[[:space:]]*:/{s/^flags[[:space:]]*:[[:space:]]*//; p; q}' /proc/cpuinfo)
-      shift
-      for flag in "$@"; do
-        found=0
-        for alt in $(echo "$flag" | tr '|' ' '); do
-          case "$flags" in
-            *"$alt"*)
-              found=1
-              break
-              ;;
-          esac
+    detect_goamd64() {
+      cpu_flags=$(
+        sed -n -e '/^flags[[:blank:]]*:/ {
+        s/^flags[[:blank:]]*:[[:blank:]]*//
+        p
+        q
+      }' /proc/cpuinfo
+      )
+      v2_flags="cx16 lahf_lm popcnt sse3|pni sse4_1 sse4_2 ssse3"
+      v3_flags="avx avx2 bmi1 bmi2 f16c fma lzcnt|abm movbe xsave"
+      v4_flags="avx512f avx512bw avx512cd avx512dq avx512vl"
+      max="v1"
+      for level in v2 v3 v4; do
+        case "$level" in
+          v2) req="$v2_flags" ;;
+          v3) req="$v2_flags $v3_flags" ;;
+          v4) req="$v2_flags $v3_flags $v4_flags" ;;
+        esac
+        fail=0
+        for fg in $req; do
+          ok=0
+          for alt in $(printf '%s' "$fg" | tr '|' ' '); do
+            case " $cpu_flags " in
+              *" $alt "*)
+                ok=1
+                break
+                ;;
+            esac
+          done
+          [ "$ok" -eq 1 ] || {
+            fail=1
+            break
+          }
         done
-        [ "$found" -eq 0 ] && return 1
+        [ "$fail" -eq 0 ] || break
+        max="$level"
       done
-      return 0
-    }
-    v2_flags="cx16 lahf_lm popcnt sse3 sse4_1 sse4_2 ssse3"
-    v3_flags="avx avx2 bmi1 bmi2 f16c fma lzcnt|abm movbe xsave"
-    v4_flags="avx512f avx512bw avx512cd avx512dq avx512vl"
-    for level in v2 v3 v4; do
-      eval "current_flags=\"\$${level}_flags\""
-      set -- $current_flags
-      if check_level "$level" "$@"; then
-        MAX_GOAMD64="$level"
+      if [ -n "$TARGETPLATFORM" ]; then
+        case "$TARGETPLATFORM" in
+          linux/amd64/v[1234])
+            req="${TARGETPLATFORM##*/}"
+            if [ "${req#v}" -le "${max#v}" ]; then
+              echo "$req"
+              return
+            fi
+            ;;
+        esac
       fi
-    done
-    if [ -n "$TARGETPLATFORM" ]; then
-      level="v1"
-      case "$TARGETPLATFORM" in
-        "linux/amd64/"*)
-          reqLevel="$(echo "$TARGETPLATFORM" | awk -F/ '{print $NF}')"
-          if [ "${reqLevel#v}" -le "${MAX_GOAMD64#v}" ]; then
-            level="$reqLevel"
-          else
-            level="$MAX_GOAMD64"
-          fi
-          ;;
-        *) ;;
-
-      esac
-      export GOAMD64="$level"
-    fi
-    if [ -z "$GOAMD64" ]; then
-      export GOAMD64="$MAX_GOAMD64"
-    fi
+      echo "$max"
+    }
+    export GOAMD64="$(detect_goamd64)"
   fi
 fi
 
@@ -101,10 +104,10 @@ build_go() {
     export CGO_ENABLED=0
     printf "${cyanbg}Version: $VERSION$rst\n"
     printf "${green}Testing basic functionality...$rst\n"
-    # We are only doing a short test here, run scripts/test.sh for a detailed test
     if [ -n "$NOTEST" ]; then
       printf "${yellow}Test skipped.$rst\n"
     else
+      # We are only doing a short test here, run scripts/test.sh for a detailed test
       if go test -tags netgo -failfast -short ./...; then
         printf "${green}Test succeeded.$rst\n"
       else
