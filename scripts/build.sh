@@ -174,7 +174,7 @@ read_char() {
   if command -v whiptail > /dev/null 2>&1; then
     eval "$1=$(whiptail --radiolist 'Please select installation method.\nNote that both are compiled from source.\nCheck the README on how to download prebuilt docker images.' 0 0 0 's' 'systemd service unit' 1 'd' 'Docker container' 0 3>&1 1>&2 2>&3)"
   else
-    echo "Do you want to install a Docker container or a systemd service? Both a compiled from source. (d/s)"
+    echo "Do you want to install a Docker container or a systemd service? Both are compiled from source. (d/s)"
     old_stty=$(stty -g)
     stty raw -echo min 0 time 150
     eval "$1=$(dd bs=1 count=1 2> /dev/null)"
