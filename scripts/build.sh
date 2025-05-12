@@ -72,6 +72,9 @@ if [ -z "$NOOPT" ]; then
         max="$level"
       done
       if [ -n "$TARGETPLATFORM" ]; then
+        if [ "$TARGETPLATFORM" = "linux/amd64" ]; then
+          TARGETPLATFORM="linux/amd64/v1"
+        fi
         case "$TARGETPLATFORM" in
           linux/amd64/v[1234])
             req="${TARGETPLATFORM##*/}"
