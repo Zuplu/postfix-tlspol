@@ -92,7 +92,7 @@ jobs:
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # pin@v3
 
       - name: 🛠️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # pin@v3
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # pin@v3
 
       - name: 🔐 Login to Docker Hub
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # pin@v3
@@ -170,7 +170,7 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
 
       - name: 🔏 Attest build provenance
-        uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd # pin@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # pin@v2
         id: attest
         with:
           subject-name: index.docker.io/${{ env.REGISTRY_IMAGE }}
