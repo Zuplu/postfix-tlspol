@@ -17,7 +17,7 @@ var (
 )
 
 func cleanVersion(raw string) string {
-	re := regexp.MustCompile(`^v?(\d+\.\d+\.\d+)(?:-[\d.]+-[a-f0-9]+)?(?:\+dirty)?$`)
+	re := regexp.MustCompile(`^v?(\d+\.\d+\.\d+)(?:-[\d.]+-[a-f0-9]+)?(?:\+.*dirty)?$`)
 	match := re.FindStringSubmatch(raw)
 	if len(match) >= 2 {
 		base := match[1]
