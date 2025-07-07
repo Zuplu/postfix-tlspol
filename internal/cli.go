@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	valid "github.com/asaskevich/govalidator/v11"
-	"github.com/neilotoole/jsoncolor"
 )
 
 func flagCliConnFunc(f *flag.Flag) {
@@ -73,10 +72,20 @@ func cliQuery(f *flag.Flag, conn *net.Conn, value *string) {
 	}
 	o, err := os.Stdout.Stat()
 	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
-		enc := jsoncolor.NewEncoder(os.Stdout)
+		var buf io.WriteCloser
+		if _, err := exec.LookPath("jq"); err == nil {
+			jq := exec.Command("jq")
+			buf, _ = jq.StdinPipe()
+			jq.Stdout = os.Stdout
+			jq.Stderr = os.Stderr
+			defer jq.Run()
+		} else {
+			buf = os.Stdout
+		}
+		enc := json.NewEncoder(buf)
 		enc.SetIndent("", "  ")
-		enc.SetColors(jsoncolor.DefaultColors())
 		err = enc.Encode(result)
+		defer buf.Close()
 	} else {
 		enc := json.NewEncoder(os.Stdout)
 		err = enc.Encode(result)
