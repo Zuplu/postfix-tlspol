@@ -7,7 +7,6 @@ toolchain go1.24.4
 require (
 	github.com/asaskevich/govalidator/v11 v11.0.2-0.20250122183457-e11347878e23
 	github.com/miekg/dns v1.1.66
-	github.com/neilotoole/jsoncolor v0.7.1
 	golang.org/x/term v0.32.0
 	gopkg.in/yaml.v3 v3.0.1
 )

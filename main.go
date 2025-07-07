@@ -26,7 +26,7 @@ func cleanVersion(raw string) string {
 		}
 		return base
 	}
-	return "0.0.0"
+	return raw
 }
 
 func init() {
