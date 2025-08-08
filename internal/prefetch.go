@@ -63,7 +63,7 @@ func prefetchCachedPolicies() {
 			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&entry.Key)
 			if refreshedPolicy != "" && refreshedPolicy != "TEMP" {
 				counter.Add(1)
-				polCache.Set(entry.Key, &CacheStruct{Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(refreshedTTL+rand.Uint32N(15)) * time.Second), LastUpdate: now}})
+				polCache.Set(entry.Key, &CacheStruct{Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Counter: entry.Value.Counter, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(refreshedTTL+rand.Uint32N(20)) * time.Second)}})
 			}
 		}(entry)
 	}

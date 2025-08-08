@@ -21,8 +21,7 @@ type Cacheable interface {
 }
 
 type Expirable struct {
-	ExpiresAt  time.Time
-	LastUpdate time.Time
+	ExpiresAt time.Time
 }
 
 func (e *Expirable) Age(t ...time.Time) uint32 {
@@ -32,10 +31,7 @@ func (e *Expirable) Age(t ...time.Time) uint32 {
 	} else {
 		now = t[0]
 	}
-	if e.LastUpdate.IsZero() {
-		e.LastUpdate = now
-	}
-	age := now.Sub(e.LastUpdate).Seconds() - e.ExpiresAt.Sub(e.LastUpdate).Seconds()
+	age := now.Sub(e.ExpiresAt).Seconds()
 	if age < 0 {
 		age = 0
 	}

@@ -19,6 +19,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,17 +31,18 @@ import (
 
 type CacheStruct struct {
 	*cache.Expirable
-	Policy string
-	Report string
-	TTL    uint32
+	Policy  string
+	Report  string
+	TTL     uint32
+	Counter uint32
 }
 
 const (
 	CACHE_NOTFOUND_TTL uint32 = 600
 	CACHE_MIN_TTL      uint32 = 180
 	CACHE_MAX_TTL      uint32 = 2592000
-	CACHE_MAX_AGE      uint32 = 600 // max age for stale queries (only for prefetching, not served)
-	REQUEST_TIMEOUT           = 2 * time.Second
+	CACHE_MAX_AGE      uint32 = 1800 // max age for stale queries (only for prefetching, not served to postfix)
+	REQUEST_TIMEOUT           = 3 * time.Second
 )
 
 var (
@@ -192,7 +194,7 @@ func startServer() {
 	log.Info("Socketmap server terminated.")
 }
 
-func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) bool {
+func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheStruct, bool) {
 	c, found := polCache.Get(*domain)
 	if found {
 		ttl := c.RemainingTTL()
@@ -211,10 +213,11 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) bool {
 				}
 				(*conn).Write(netstring.Marshal("OK " + res))
 			}
-			return true
+			c.Counter++
+			return c, true
 		}
 	}
-	return false
+	return c, false
 }
 
 type DanePolicy struct {
@@ -353,7 +356,8 @@ func handleConnection(conn *net.Conn) {
 				return
 			}
 
-			if tryCachedPolicy(conn, &domain, &withTlsRpt) {
+			c, found := tryCachedPolicy(conn, &domain, &withTlsRpt)
+			if found {
 				workChan <- true
 				return
 			}
@@ -364,7 +368,11 @@ func handleConnection(conn *net.Conn) {
 
 			if ttl != 0 {
 				now := time.Now()
-				polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(ttl+rand.Uint32N(15)) * time.Second), LastUpdate: now}})
+				var cnt uint32 = 0
+				if found && c != nil {
+					cnt = c.Counter
+				}
+				polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Counter: cnt + 1, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(ttl+rand.Uint32N(20)) * time.Second)}})
 			}
 			workChan <- true
 		}(ns.Text())
@@ -445,13 +453,19 @@ func queryDomain(domain *string) (string, string, uint32) {
 func dumpCachedPolicies(conn *net.Conn) {
 	tidyCache()
 	items := polCache.Items()
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Value.Counter != items[j].Value.Counter {
+			return items[i].Value.Counter > items[j].Value.Counter
+		}
+		return items[i].Key < items[j].Key
+	})
 	now := time.Now()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL(now)
 		if entry.Value.Policy == "" || remainingTTL == 0 {
 			continue
 		}
-		fmt.Fprintf(*conn, "%-21s %s\n", entry.Key, entry.Value.Policy)
+		fmt.Fprintf(*conn, "%-32s %s # n=%d\n", entry.Key, entry.Value.Policy, entry.Value.Counter)
 	}
 }
 
@@ -465,11 +479,6 @@ func tidyCache() {
 	items := polCache.Items()
 	now := time.Now()
 	for _, entry := range items {
-		// Cleanup v1.8.0 bug that duplicated cache entries
-		if strings.Contains(entry.Value.Policy, "policy_type") || normalizeDomain(entry.Key) != entry.Key {
-			polCache.Remove(entry.Key)
-			continue
-		}
 		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now) == 0 {
 			polCache.Remove(entry.Key)
 		}
