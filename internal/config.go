@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 var defaultConfig = Config{}
