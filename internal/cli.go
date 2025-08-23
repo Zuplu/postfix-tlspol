@@ -11,13 +11,12 @@ import (
 	"flag"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
-
-	valid "github.com/asaskevich/govalidator/v11"
 )
 
 func flagCliConnFunc(f *flag.Flag) {

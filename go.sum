@@ -1,5 +1,3 @@
-github.com/asaskevich/govalidator/v11 v11.0.2-0.20250122183457-e11347878e23 h1:I+Cy77zrFmVWIHOZaxiNV4L7w9xuVux9LMqAblGzvdE=
-github.com/asaskevich/govalidator/v11 v11.0.2-0.20250122183457-e11347878e23/go.mod h1:S7DsXubvw3xBC8rSI+qmzcTNw7xEND0ojHPqglh/whY=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
 github.com/miekg/dns v1.1.68 h1:jsSRkNozw7G/mnmXULynzMNIsgY2dHC8LO6U6Ij2JEA=

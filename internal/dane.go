@@ -11,11 +11,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
+	"github.com/miekg/dns"
 	"slices"
 	"time"
-
-	valid "github.com/asaskevich/govalidator/v11"
-	"github.com/miekg/dns"
 )
 
 type ResultWithTTL struct {

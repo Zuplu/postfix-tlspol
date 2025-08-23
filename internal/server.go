@@ -14,6 +14,8 @@ import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
+	"github.com/miekg/dns"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -24,9 +26,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	valid "github.com/asaskevich/govalidator/v11"
-	"github.com/miekg/dns"
 )
 
 type CacheStruct struct {

@@ -11,13 +11,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
+	"github.com/miekg/dns"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-
-	valid "github.com/asaskevich/govalidator/v11"
-	"github.com/miekg/dns"
 )
 
 func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
@@ -77,10 +76,10 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 	if lineLen == 0 {
 		return true
 	}
-	if !valid.IsPrintableASCII(line) && !valid.IsUTFLetterNumeric(line) {
+	if !valid.IsPrintableASCII(line) && !valid.IsUTF8(line) {
 		return false // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
 	}
-	if lineLen != len(valid.BlackList(line, "{}")) {
+	if strings.ContainsAny(line, "{}") {
 		return true // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
 	}
 	keyValPair := strings.SplitN(line, ":", 2)
