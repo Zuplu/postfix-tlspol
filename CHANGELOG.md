@@ -1,6 +1,6 @@
 # Changelog
 
-## What's Changed in v1.8.13
+## What's Changed in v1.8.13 (2025-08-08)
 * Bump docker/metadata-action from 5.7.0 to 5.8.0 in the github-actions group by @dependabot[bot] in [#61](https://github.com/Zuplu/postfix-tlspol/pull/61)
 * Bump golang from `ddf5200` to `daae04e` in /deployments in the docker group by @dependabot[bot] in [#62](https://github.com/Zuplu/postfix-tlspol/pull/62)
 * Bump the go-modules group with 2 updates by @dependabot[bot] in [#63](https://github.com/Zuplu/postfix-tlspol/pull/63)
@@ -12,7 +12,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.12...v1.8.13
 
-## What's Changed in v1.8.12
+## What's Changed in v1.8.12 (2025-07-09)
 * Bump the github-actions group with 2 updates by @dependabot[bot] in [#58](https://github.com/Zuplu/postfix-tlspol/pull/58)
 * Bump golang from 1.24.3-alpine3.21 to 1.24.4-alpine3.21 in /deployments in the docker group by @dependabot[bot] in [#57](https://github.com/Zuplu/postfix-tlspol/pull/57)
 * Update and reduce dependencies by @DragonWork
@@ -22,18 +22,18 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.11...v1.8.12
 
-## What's Changed in v1.8.11
+## What's Changed in v1.8.11 (2025-06-04)
 * Bump docker/build-push-action from 6.16.0 to 6.18.0 in the github-actions group by @dependabot[bot] in [#53](https://github.com/Zuplu/postfix-tlspol/pull/53)
 * Fix version tag regression by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.10...v1.8.11
 
-## What's Changed in v1.8.10
+## What's Changed in v1.8.10 (2025-05-12)
 * Fix automated Docker build for x86-64-v1 by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.9...v1.8.10
 
-## What's Changed in v1.8.9
+## What's Changed in v1.8.9 (2025-05-08)
 * Make log level (verbosity) configurable by @DragonWork
 * Code cleanup by @DragonWork
 * Finetune x86_64 feature level detection in build.sh by @DragonWork
@@ -47,7 +47,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.8...v1.8.9
 
-## What's Changed in v1.8.8
+## What's Changed in v1.8.8 (2025-04-09)
 * Bump the github-actions group with 3 updates by @dependabot[bot] in [#41](https://github.com/Zuplu/postfix-tlspol/pull/41)
 * Bump github.com/miekg/dns from 1.1.63 to 1.1.64 in the go-modules group by @dependabot[bot] in [#42](https://github.com/Zuplu/postfix-tlspol/pull/42)
 * Bump golang from 1.24.1-alpine3.21 to 1.24.2-alpine3.21 in /deployments in the docker group by @dependabot[bot] in [#43](https://github.com/Zuplu/postfix-tlspol/pull/43)
@@ -55,18 +55,18 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.7...v1.8.8
 
-## What's Changed in v1.8.7
+## What's Changed in v1.8.7 (2025-03-17)
 * Bump docker/login-action from 3.3.0 to 3.4.0 in the github-actions group by @dependabot[bot] in [#40](https://github.com/Zuplu/postfix-tlspol/pull/40)
 * Further optimizations, eliminate dangling goroutines and remove GC hacks by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.6...v1.8.7
 
-## What's Changed in v1.8.6
+## What's Changed in v1.8.6 (2025-03-17)
 * Fix for wrong age calculation of cached entries by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.5...v1.8.6
 
-## What's Changed in v1.8.5
+## What's Changed in v1.8.5 (2025-03-17)
 * Fix ever-increasing memory utilization by spawning ephemeral goroutines by @DragonWork
 * Minor fix by @DragonWork
 * Fix memory leak and further decrease memory usage down to ~10-15 MB by @DragonWork
@@ -74,7 +74,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.4...v1.8.5
 
-## What's Changed in v1.8.4
+## What's Changed in v1.8.4 (2025-03-15)
 * Dump cache into pager when in terminal by @DragonWork
 * Set maximum cache TTL to 30d and reject invalid format (overflowing uint32 considered invalid) in `max_age` attribute in MTA-STS policy by @DragonWork
 * Minor bug fix and optimizations by @DragonWork
@@ -82,7 +82,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.3...v1.8.4
 
-## What's Changed in v1.8.3
+## What's Changed in v1.8.3 (2025-03-14)
 * Fix missing version tag in automated Docker build by @DragonWork
 * (Micro-)Optimize field alignment for better memory utilization by @DragonWork
 * Disable caching of temporary errors and let Postfix decide when to retry by @DragonWork
@@ -97,7 +97,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.2...v1.8.3
 
-## What's Changed in v1.8.2
+## What's Changed in v1.8.2 (2025-03-10)
 * Minor fix by @DragonWork
 * Fix restarting systemd after build by @DragonWork
 * Allow `NO_COLOR` and `NO_TIMESTAMP` environment variables for logging by @DragonWork
@@ -106,12 +106,12 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.1...v1.8.2
 
-## What's Changed in v1.8.1
+## What's Changed in v1.8.1 (2025-03-09)
 * Hotfix for duplicated TLSRPT extensions by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.0...v1.8.1
 
-## What's Changed in v1.8.0
+## What's Changed in v1.8.0 (2025-03-08)
 * Bump the github-actions group with 5 updates by @dependabot[bot] in [#21](https://github.com/Zuplu/postfix-tlspol/pull/21)
 * Update README.md by @DragonWork
 * Replace stuck dependency status badge by @DragonWork
@@ -125,7 +125,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.7.3...v1.8.0
 
-## What's Changed in v1.7.3
+## What's Changed in v1.7.3 (2025-03-01)
 * Don‘t serve stale DNS answers in Docker image by @DragonWork
 * Expired records break DNSSEC, thus DANE detection by @DragonWork
 * Add packaging repositories to README.md by @DragonWork
@@ -139,12 +139,12 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.7.2...v1.7.3
 
-## What's Changed in v1.7.2
+## What's Changed in v1.7.2 (2025-02-22)
 * Drop root permissions for Unbound in Docker build by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.7.1...v1.7.2
 
-## What's Changed in v1.7.1
+## What's Changed in v1.7.1 (2025-02-21)
 * Bump golang from `3d74d23` to `2d40d4f` in /deployments by @dependabot[bot]
 * Update README.md by @DragonWork
 * Reduced cache latency by utilizing client-side caching of subsequent queries by @DragonWork
@@ -160,14 +160,14 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.6.4...v1.7.1
 
-## What's Changed in v1.6.4
+## What's Changed in v1.6.4 (2025-02-17)
 * Update README.md by @DragonWork
 * Switch to Redis-compatible and open-source Valkey (Redis and KeyDB backends still work) by @DragonWork
 * Update go-test.yaml by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.6.3...v1.6.4
 
-## What's Changed in v1.6.3
+## What's Changed in v1.6.3 (2025-02-15)
 * Update GitHub Actions workflows by @DragonWork
 * Add provenance attestation for built Docker images to harden supply chain by @DragonWork
 * Update dependencies, including several security bug fixes within Docker base image by @DragonWork
@@ -177,7 +177,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.6.2...v1.6.3
 
-## What's Changed in v1.6.2
+## What's Changed in v1.6.2 (2025-02-12)
 * Update build-docker.yaml by @DragonWork
 * Parallelize multi-arch building for automated Docker releases by @DragonWork
 * Update build-docker.yaml by @DragonWork
@@ -189,7 +189,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.6.1...v1.6.2
 
-## What's Changed in v1.6.1
+## What's Changed in v1.6.1 (2025-02-10)
 * Support listening on Unix Domain Sockets by @DragonWork
 * Remove deprecated `policy_ttl` from TLSRPT extension by @DragonWork
 * Code simplification by @DragonWork
@@ -204,7 +204,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.6.0...v1.6.1
 
-## What's Changed in v1.6.0
+## What's Changed in v1.6.0 (2025-02-06)
 * Fixed an issue of premature closing of the connection to Postfix after each request by @DragonWork
 * Improved query parsing by @DragonWork
 * Updated toolchain to go1.23.6 (includes security fixes) by @DragonWork
@@ -212,7 +212,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.5.5...v1.6.0
 
-## What's Changed in v1.5.5
+## What's Changed in v1.5.5 (2025-02-05)
 * GitHub repository maintenance by @DragonWork
 * Further cleanup by @DragonWork
 * Fixes a MTA-STS policy parsing bug by @DragonWork
@@ -220,7 +220,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.5.4...v1.5.5
 
-## What's Changed in v1.5.4
+## What's Changed in v1.5.4 (2025-02-04)
 * Return `dane` instead of `dane-only` when only some MX servers support DANE by @DragonWork
 * Minor bug fix by @DragonWork
 * Consider DANE-supporting MX records of a non-DNSSEC domain, and return `dane` (according to RFC 7672 Section 2.2.1 Paragraph 4) -> More DANE 🎉 by @DragonWork
@@ -228,7 +228,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.5.2...v1.5.4
 
-## What's Changed in v1.5.2
+## What's Changed in v1.5.2 (2025-02-03)
 * Add automated testing workflow for GitHub by @DragonWork
 * Update go-test.yaml by @DragonWork
 * Better testing by @DragonWork
@@ -245,7 +245,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.4.4...v1.5.2
 
-## What's Changed in v1.4.4
+## What's Changed in v1.4.4 (2025-01-25)
 * Added unit testing to ensure the core functions work before building (to prevent malfunction through a buggy version) by @DragonWork
 * Reduced cyclomatic complexity for readability by @DragonWork
 * Optimized prefetching by distributing the requests over time by @DragonWork
@@ -254,7 +254,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.4.3...v1.4.4
 
-## What's Changed in v1.4.3
+## What's Changed in v1.4.3 (2025-01-23)
 * Build static binary by @DragonWork
 * Replace mutex locking with channels by @DragonWork
 * Fix wrong remaining TTL in logs for failing queries by @DragonWork
@@ -269,7 +269,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.4.0...v1.4.3
 
-## What's Changed in v1.4.0
+## What's Changed in v1.4.0 (2025-01-21)
 * Restructured project to follow Go best practices by @DragonWork
 * Added colored logging to stderr by @DragonWork
 * More verbose error messages (e. g. details of DNS errors) by @DragonWork
@@ -279,7 +279,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.3.1...v1.4.0
 
-## What's Changed in v1.3.1
+## What's Changed in v1.3.1 (2025-01-20)
 * Optimize prefetching algorithm by @DragonWork
 * Enable prefetching by default by @DragonWork
 * Update dependencies by @DragonWork
@@ -287,7 +287,7 @@
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.3.0...v1.3.1
 
-## All Other Changes from the initial upload until v1.3.0
+## All Other Changes from the initial upload until v1.3.0 (2025-01-17)
 * Initial commit by @DragonWork
 * Fix shell script permissions by @DragonWork
 * Create FUNDING.yml by @DragonWork
