@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	PREFETCH_INTERVAL uint32 = 15
-	PREFETCH_MARGIN   uint32 = 300
+	PREFETCH_INTERVAL uint32 = 30
+	PREFETCH_MARGIN   uint32 = 180
 )
 
 var semaphore chan struct{}
@@ -42,14 +42,14 @@ func prefetchCachedPolicies() {
 	now := time.Now()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL(now)
-		if entry.Value.Policy == "" || entry.Value.TTL < PREFETCH_MARGIN || entry.Value.Age(now) >= CACHE_MAX_AGE {
+		if entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE {
 			itemsCount--
 			if remainingTTL == 0 {
 				polCache.Remove(entry.Key)
 			}
 			continue
 		}
-		if remainingTTL != 0 {
+		if remainingTTL > PREFETCH_INTERVAL {
 			continue
 		}
 		semaphore <- struct{}{}
