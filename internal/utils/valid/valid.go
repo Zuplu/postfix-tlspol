@@ -6,14 +6,14 @@ import (
 )
 
 func isHexByte(b byte) bool {
-	return (b >= '0' && b <= '9') ||
-		(b|0x20 >= 'a' && b|0x20 <= 'f')
+	return b >= '0' && b <= '9' ||
+		b|0x20 >= 'a' && b|0x20 <= 'f'
 }
 
 func isLDH(b byte) bool {
-	return (b >= 'a' && b <= 'z') ||
-		(b >= 'A' && b <= 'Z') ||
-		(b >= '0' && b <= '9') ||
+	return b >= 'a' && b <= 'z' ||
+		b >= 'A' && b <= 'Z' ||
+		b >= '0' && b <= '9' ||
 		b == '-'
 }
 
@@ -41,48 +41,43 @@ func IsDNSName(s string) bool {
 	if s == "" {
 		return false
 	}
+	m := len(s)
 	if s[len(s)-1] == '.' {
 		s = s[:len(s)-1]
 		if s == "" {
 			return false
 		}
+		m--
 	}
-	if len(s) > 253 {
+	if m > 253 {
 		return false
 	}
 	labelLen := 0
 	startOfLabel := true
-	for i := 0; i < len(s); i++ {
+	for i := 0; i < m; i++ {
 		c := s[i]
 		switch c {
 		case '.':
-			if labelLen == 0 || labelLen > 63 {
-				return false
-			}
-			if s[i-1] == '-' {
+			if isInvalidLabel(&s, labelLen, i) {
 				return false
 			}
 			labelLen = 0
 			startOfLabel = true
 		default:
-			if !isLDH(c) {
-				return false
-			}
-			if startOfLabel && c == '-' {
+			if !isLDH(c) || startOfLabel && c == '-' {
 				return false
 			}
 			labelLen++
 			startOfLabel = false
 		}
 	}
-	if labelLen == 0 || labelLen > 63 {
-		return false
-	}
-	if s[len(s)-1] == '-' {
+	if isInvalidLabel(&s, labelLen, m) {
 		return false
 	}
 	return true
 }
+
+func isInvalidLabel(s *string, l, m int) bool { return l == 0 || l > 63 || (*s)[m-1] == '-' }
 
 func IsPrintableASCII(s string) bool {
 	for i := 0; i < len(s); i++ {

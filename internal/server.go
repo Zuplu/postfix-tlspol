@@ -461,7 +461,7 @@ func dumpCachedPolicies(conn *net.Conn) {
 	now := time.Now()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL(now)
-		if entry.Value.Policy == "" || remainingTTL == 0 {
+		if entry.Value.Policy == "" || remainingTTL < PREFETCH_INTERVAL {
 			continue
 		}
 		fmt.Fprintf(*conn, "%-32s %s # n=%d\n", entry.Key, entry.Value.Policy, entry.Value.Counter)
