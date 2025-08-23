@@ -6,11 +6,10 @@
 package tlspol
 
 import (
-	"os"
-	"strings"
-
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"go.yaml.in/yaml/v4"
+	"os"
+	"strings"
 )
 
 var defaultConfig = Config{}

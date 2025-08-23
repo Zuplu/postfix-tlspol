@@ -5,7 +5,6 @@ go 1.23.0
 toolchain go1.25.0
 
 require (
-	github.com/asaskevich/govalidator/v11 v11.0.2-0.20250122183457-e11347878e23
 	github.com/miekg/dns v1.1.68
 	go.yaml.in/yaml/v4 v4.0.0-rc.1
 	golang.org/x/term v0.34.0
