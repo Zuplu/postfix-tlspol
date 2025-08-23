@@ -1,5 +1,17 @@
 # Changelog
 
+## What's Changed in v1.8.14 (2025-08-23)
+
+* Add CHANGELOG.md by @DragonWork
+* Add release dates to CHANGELOG.md by @DragonWork
+* Update toolchain to go1.25.0 by @DragonWork
+* Remove external govalidator lib and use faster vanilla code by @DragonWork
+* Fix DANE domains escaping prefetch algorithm because of low TTL returned from DNS resolver by @DragonWork
+* Bump golang from 1.24.6-alpine3.22 to 1.25.0-alpine3.22 in /deployments in the docker group by @dependabot[bot] in [#68](https://github.com/Zuplu/postfix-tlspol/pull/68)
+* Bump actions/checkout from 4.2.2 to 5.0.0 in the github-actions group by @dependabot[bot] in [#69](https://github.com/Zuplu/postfix-tlspol/pull/69)
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.13...v1.8.14
+
 ## What's Changed in v1.8.13 (2025-08-08)
 * Bump docker/metadata-action from 5.7.0 to 5.8.0 in the github-actions group by @dependabot[bot] in [#61](https://github.com/Zuplu/postfix-tlspol/pull/61)
 * Bump golang from `ddf5200` to `daae04e` in /deployments in the docker group by @dependabot[bot] in [#62](https://github.com/Zuplu/postfix-tlspol/pull/62)
