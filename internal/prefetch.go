@@ -42,7 +42,7 @@ func prefetchCachedPolicies() {
 	now := time.Now()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL(now)
-		if entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE {
+		if entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE && remainingTTL+PREFETCH_INTERVAL <= 0 {
 			itemsCount--
 			if remainingTTL == 0 {
 				polCache.Remove(entry.Key)

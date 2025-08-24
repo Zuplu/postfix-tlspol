@@ -487,7 +487,7 @@ func tidyCache() {
 	items := polCache.Items()
 	now := time.Now()
 	for _, entry := range items {
-		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now) == 0 {
+		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now)+PREFETCH_INTERVAL <= 0 {
 			polCache.Remove(entry.Key)
 		}
 	}
