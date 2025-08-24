@@ -29,7 +29,7 @@ func flagCliConnFunc(f *flag.Flag) {
 			log.Errorf("Invalid domain: %q", value)
 			return
 		}
-	case "dump", "purge":
+	case "dump", "export", "purge":
 		cliConnMode = true
 	default:
 		return
@@ -50,7 +50,9 @@ func flagCliConnFunc(f *flag.Flag) {
 	case "query":
 		cliQuery(f, &conn, &value)
 	case "dump":
-		cliDump(f, &conn)
+		cliDump(f, &conn, false)
+	case "export":
+		cliDump(f, &conn, true)
 	case "purge":
 		cliPurge(f, &conn)
 	}
@@ -96,18 +98,22 @@ func cliQuery(f *flag.Flag, conn *net.Conn, value *string) {
 	return
 }
 
-func cliDump(f *flag.Flag, conn *net.Conn) {
-	(*conn).Write(netstring.Marshal("DUMP"))
-	o, err := os.Stdout.Stat()
-	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
-		if _, err := exec.LookPath("less"); err == nil {
-			less := exec.Command("less")
-			less.Env = append(os.Environ(), "LESS=-S --use-color --prompt=postfix-tlspol\\ in-memory\\ cache")
-			less.Stdin = *conn
-			less.Stdout = os.Stdout
-			less.Stderr = os.Stderr
-			less.Run()
-			return
+func cliDump(f *flag.Flag, conn *net.Conn, export bool) {
+	if export {
+		(*conn).Write(netstring.Marshal("EXPORT"))
+	} else {
+		(*conn).Write(netstring.Marshal("DUMP"))
+		o, err := os.Stdout.Stat()
+		if err == nil && o.Mode()&os.ModeCharDevice != 0 {
+			if _, err := exec.LookPath("less"); err == nil {
+				less := exec.Command("less")
+				less.Env = append(os.Environ(), "LESS=-S --use-color --prompt=postfix-tlspol\\ in-memory\\ cache")
+				less.Stdin = *conn
+				less.Stdout = os.Stdout
+				less.Stderr = os.Stderr
+				less.Run()
+				return
+			}
 		}
 	}
 	io.Copy(os.Stdout, *conn)

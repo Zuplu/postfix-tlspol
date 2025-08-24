@@ -67,7 +67,8 @@ func init() {
 	flag.BoolVar(&showLicense, "license", false, "Show LICENSE")
 	flag.StringVar(&configFile, "config", "/etc/postfix-tlspol/config.yaml", "Path to the config.yaml")
 	flag.String("query", "", "Query a domain")
-	flag.Bool("dump", false, "Dump cache")
+	flag.Bool("dump", false, "Dump cache with query counter")
+	flag.Bool("export", false, "Dump cache in postfix hash format")
 	flag.Bool("purge", false, "Manually clear the cache")
 }
 
@@ -320,7 +321,11 @@ func handleConnection(conn *net.Conn) {
 				withTlsRpt = true
 			case "QUERY", "JSON":
 			case "DUMP":
-				dumpCachedPolicies(conn)
+				dumpCachedPolicies(conn, false)
+				workChan <- false
+				return
+			case "EXPORT":
+				dumpCachedPolicies(conn, true)
 				workChan <- false
 				return
 			case "PURGE":
@@ -449,7 +454,7 @@ func queryDomain(domain *string) (string, string, uint32) {
 	return policy, report, ttl
 }
 
-func dumpCachedPolicies(conn *net.Conn) {
+func dumpCachedPolicies(conn *net.Conn, export bool) {
 	tidyCache()
 	items := polCache.Items()
 	sort.Slice(items, func(i, j int) bool {
@@ -461,10 +466,14 @@ func dumpCachedPolicies(conn *net.Conn) {
 	now := time.Now()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL(now)
-		if entry.Value.Policy == "" || remainingTTL < PREFETCH_INTERVAL {
+		if entry.Value.Policy == "" || remainingTTL < PREFETCH_INTERVAL+1 {
 			continue
 		}
-		fmt.Fprintf(*conn, "%-32s %s # n=%d\n", entry.Key, entry.Value.Policy, entry.Value.Counter)
+		if export {
+			fmt.Fprintf(*conn, "%-28s %s\n", entry.Key, entry.Value.Policy)
+		} else {
+			fmt.Fprintf(*conn, "%-28s  %6d  %s\n", entry.Key, entry.Value.Counter, entry.Value.Policy)
+		}
 	}
 }
 
