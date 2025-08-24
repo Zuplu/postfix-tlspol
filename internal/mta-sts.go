@@ -13,6 +13,7 @@ import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 	"github.com/miekg/dns"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -106,11 +107,15 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 	case "mode":
 		*mode = val
 	case "max_age":
-		age, err := strconv.ParseUint(val, 10, 32)
+		age, err := strconv.ParseUint(val, 10, 64)
 		if err != nil {
 			return false
 		}
-		*maxAge = uint32(age)
+		if age > math.MaxUint32 {
+			*maxAge = math.MaxUint32
+		} else {
+			*maxAge = uint32(age)
+		}
 	default:
 	}
 	return true
