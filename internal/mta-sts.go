@@ -97,6 +97,7 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 		if !valid.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
 			return false // invalid policy
 		}
+		val = strings.ToLower(val)
 		*mxHosts = *mxHosts + " mx_host_pattern=" + val
 		if strings.HasPrefix(val, "*.") {
 			val = val[1:]
