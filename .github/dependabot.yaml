@@ -1,29 +1,22 @@
 version: 2
-
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
-    groups:
-      github-actions:
-        patterns:
-          - "*"
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
 
   - package-ecosystem: docker
     directory: /deployments
     schedule:
-      interval: monthly
-    groups:
-      docker:
-        patterns:
-          - "*"
+      interval: weekly
+    commit-message:
+      prefix: "build(docker)"
 
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: monthly
-    groups:
-      go-modules:
-        patterns:
-          - "*"
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
