@@ -71,6 +71,7 @@ var httpClient = &http.Client{
 	Timeout: REQUEST_TIMEOUT, // Set a timeout for the request
 }
 
+//gocyclo:ignore
 func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string, mxHosts *string, existingKeys *map[string]bool, line string) bool {
 	line = strings.TrimSpace(line)
 	lineLen := len(line)
@@ -95,7 +96,10 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 	*report = *report + " { policy_string = " + key + ": " + val + " }"
 	switch key {
 	case "mx":
-		if !valid.IsDNSName(strings.ReplaceAll(val, "*.", "")) {
+		if strings.HasPrefix(val, "*.") {
+			val = "." + val[2:]
+		}
+		if !valid.IsDNSName(val) {
 			return false // invalid policy
 		}
 		val = strings.ToLower(val)

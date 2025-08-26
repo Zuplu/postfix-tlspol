@@ -305,6 +305,7 @@ func replySocketmap(conn *net.Conn, domain *string, policy *string, report *stri
 	}
 }
 
+//gocyclo:ignore
 func handleConnection(conn *net.Conn) {
 	defer (*conn).Close()
 

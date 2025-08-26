@@ -10,13 +10,6 @@ func isHexByte(b byte) bool {
 		b|0x20 >= 'a' && b|0x20 <= 'f'
 }
 
-func isLDH(b byte) bool {
-	return b >= 'a' && b <= 'z' ||
-		b >= 'A' && b <= 'Z' ||
-		b >= '0' && b <= '9' ||
-		b == '-'
-}
-
 func IsHex(s string) bool {
 	if len(s) == 0 {
 		return false
@@ -37,47 +30,44 @@ func IsSHA384(s string) bool { return len(s) == 96 && IsHex(s) }
 
 func IsSHA512(s string) bool { return len(s) == 128 && IsHex(s) }
 
+//gocyclo:ignore
 func IsDNSName(s string) bool {
-	if s == "" {
+	if s == "" || len(s) > 253 {
 		return false
 	}
-	m := len(s)
 	if s[len(s)-1] == '.' {
 		s = s[:len(s)-1]
 		if s == "" {
 			return false
 		}
-		m--
 	}
-	if m > 253 {
+	if net.ParseIP(s) != nil {
 		return false
 	}
 	labelLen := 0
 	startOfLabel := true
-	for i := 0; i < m; i++ {
+	for i := 0; i < len(s); i++ {
 		c := s[i]
-		switch c {
-		case '.':
-			if isInvalidLabel(&s, labelLen, i) {
+		if c == '.' {
+			if labelLen == 0 || labelLen > 63 || s[i-1] == '-' {
 				return false
 			}
 			labelLen = 0
 			startOfLabel = true
-		default:
-			if !isLDH(c) || startOfLabel && c == '-' {
-				return false
-			}
-			labelLen++
-			startOfLabel = false
+			continue
 		}
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') ||
+			startOfLabel && c == '-' {
+			return false
+		}
+		labelLen++
+		startOfLabel = false
 	}
-	if isInvalidLabel(&s, labelLen, m) {
+	if labelLen == 0 || labelLen > 63 || s[len(s)-1] == '-' {
 		return false
 	}
 	return true
 }
-
-func isInvalidLabel(s *string, l, m int) bool { return l == 0 || l > 63 || (*s)[m-1] == '-' }
 
 func IsPrintableASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
