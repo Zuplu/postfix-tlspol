@@ -1,5 +1,16 @@
 # Changelog
 
+## What's Changed in v1.8.15 (2025-08-26)
+
+* feat: allow `-export`ing in-memory database in postfix hash format
+* refactor: lowercase domain names to standardize data as they are case-insensitive per RFC 4343
+* fix: fine-tune prefetch algorithm
+* fix: cap `max_age` to `math.MaxUint32` to prevent overflow
+* chore: update dependabot.yaml
+* fix: reject literal IP addresses in MTA-STS policy validation
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.14...v1.8.15
+
 ## What's Changed in v1.8.14 (2025-08-23)
 
 * Add CHANGELOG.md by @DragonWork
