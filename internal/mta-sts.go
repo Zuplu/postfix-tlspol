@@ -13,12 +13,13 @@ import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 	"github.com/miekg/dns"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var MTASTS_MAX_AGE uint64 = 31557600 // RFC 8461, 3.2
 
 func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
 	m := new(dns.Msg)
@@ -111,12 +112,12 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 	case "mode":
 		*mode = val
 	case "max_age":
-		age, err := strconv.ParseUint(val, 10, 64)
+		age, err := strconv.ParseUint(val, 10, 64) // 10-digit value allowed despite upper limit fitting in 32 bits (see RFC Errata 7282)
 		if err != nil {
 			return false
 		}
-		if age > math.MaxUint32 {
-			*maxAge = math.MaxUint32
+		if age > MTASTS_MAX_AGE { // cap to upper limit in RFC 8461
+			*maxAge = uint32(MTASTS_MAX_AGE)
 		} else {
 			*maxAge = uint32(age)
 		}
