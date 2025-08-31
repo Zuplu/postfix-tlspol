@@ -1,4 +1,17 @@
-# Changelog
+## What's Changed in v1.8.16 (2025-08-31)
+
+* fix: correctly cap 10-digit values (which are valid since 9ad53de) to upper limit in MTA-STS `max_age` per RFC 8461, 3.2 by @DragonWork
+* feat: fallback to system resolver without dns.address by @mweinelt in [#73](https://github.com/Zuplu/postfix-tlspol/pull/73)
+* refactor: rearrange imports by @DragonWork
+* fix: fix MTA-STS policy parsing by @DragonWork
+* chore(deps): bump actions/attest-build-provenance from 2.4.0 to 3.0.0 by @dependabot[bot] in [#75](https://github.com/Zuplu/postfix-tlspol/pull/75)
+* build(deps): bump go.yaml.in/yaml/v4 from 4.0.0-rc.1 to 4.0.0-rc.2 by @dependabot[bot] in [#74](https://github.com/Zuplu/postfix-tlspol/pull/74)
+* chore(release): update CHANGELOG.md by @DragonWork
+
+## New Contributors
+* @mweinelt made their first contribution in [#73](https://github.com/Zuplu/postfix-tlspol/pull/73)
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.15...v1.8.16
 
 ## What's Changed in v1.8.15 (2025-08-26)
 
@@ -9,7 +22,7 @@
 * chore: update dependabot.yaml
 * fix: reject literal IP addresses in MTA-STS policy validation
 
-**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.14...v1.8.15
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/7f83569...v1.8.15
 
 ## What's Changed in v1.8.14 (2025-08-23)
 
