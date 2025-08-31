@@ -28,7 +28,11 @@ func getMxRecords(ctx *context.Context, domain *string) ([]string, uint32, error
 	m.SetQuestion(dns.Fqdn(*domain), dns.TypeMX)
 	m.SetEdns0(4096, true)
 
-	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
+	resolverAddress, err := config.Dns.GetResolverAddress()
+	if err != nil {
+		return nil, 0, err, false
+	}
+	r, _, err := client.ExchangeContext(*ctx, m, resolverAddress)
 	if err != nil {
 		return nil, 0, err, false
 	}
@@ -77,7 +81,11 @@ ipCheck:
 		m.SetQuestion(dns.Fqdn(*mx), t)
 		m.SetEdns0(4096, true)
 
-		r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
+		resolverAddress, err := config.Dns.GetResolverAddress()
+		if err != nil {
+			return MxFail
+		}
+		r, _, err := client.ExchangeContext(*ctx, m, resolverAddress)
 		if err != nil {
 			return MxFail
 		}
@@ -135,7 +143,11 @@ func checkTlsa(ctx *context.Context, mx *string) ResultWithTTL {
 	m.SetQuestion(dns.Fqdn("_25._tcp."+*mx), dns.TypeTLSA)
 	m.SetEdns0(4096, true)
 
-	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
+	resolverAddress, err := config.Dns.GetResolverAddress()
+	if err != nil {
+		return ResultWithTTL{Result: "", TTL: 0, Err: err}
+	}
+	r, _, err := client.ExchangeContext(*ctx, m, resolverAddress)
 	if err != nil {
 		return ResultWithTTL{Result: "", TTL: 0, Err: err}
 	}

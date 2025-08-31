@@ -26,7 +26,11 @@ func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
 	m.SetQuestion(dns.Fqdn("_mta-sts."+*domain), dns.TypeTXT)
 	m.SetEdns0(4096, false)
 
-	r, _, err := client.ExchangeContext(*ctx, m, config.Dns.Address)
+	resolverAddress, err := config.Dns.GetResolverAddress()
+	if err != nil {
+		return false, err
+	}
+	r, _, err := client.ExchangeContext(*ctx, m, resolverAddress)
 	if err != nil {
 		return false, err
 	}

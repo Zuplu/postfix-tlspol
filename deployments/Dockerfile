@@ -31,6 +31,7 @@ RUN mkdir -p /data \
 
 # Setup postfix-tlspol
 RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" \
+  -e "s/#address:/address:/" \
   -e "s/127\.0\.0\.53:53/127\.0\.0\.1:8053/" \
   -e "s!: /var/lib/postfix-tlspol/!: !" \
   /etc/postfix-tlspol/config.yaml \
