@@ -1,11 +1,18 @@
+/*
+ * MIT License
+ * Copyright (c) 2024-2025 Zuplu
+ */
+
 package main
 
 import (
 	_ "embed"
-	"github.com/Zuplu/postfix-tlspol/internal"
+
 	"regexp"
 	"runtime/debug"
 	"strings"
+
+	"github.com/Zuplu/postfix-tlspol/internal"
 )
 
 var (

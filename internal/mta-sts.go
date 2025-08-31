@@ -10,13 +10,15 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
-	"github.com/miekg/dns"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
+
+	"github.com/miekg/dns"
 )
 
 var MTASTS_MAX_AGE uint64 = 31557600 // RFC 8461, 3.2

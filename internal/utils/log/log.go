@@ -7,10 +7,11 @@ package log
 
 import (
 	"fmt"
-	"golang.org/x/term"
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/term"
 )
 
 type LogLevel int

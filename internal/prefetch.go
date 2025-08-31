@@ -6,13 +6,14 @@
 package tlspol
 
 import (
-	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"math/rand/v2"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 )
 
 const (

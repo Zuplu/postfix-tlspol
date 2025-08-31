@@ -9,10 +9,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/gob"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 )
 
 type Cacheable interface {

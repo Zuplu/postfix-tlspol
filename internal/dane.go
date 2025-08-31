@@ -10,11 +10,13 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
-	"github.com/miekg/dns"
 	"slices"
 	"time"
+
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
+
+	"github.com/miekg/dns"
 )
 
 type ResultWithTTL struct {

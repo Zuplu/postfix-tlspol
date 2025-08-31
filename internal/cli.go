@@ -9,14 +9,15 @@ import (
 	"bufio"
 	"encoding/json"
 	"flag"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
+	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 )
 
 func flagCliConnFunc(f *flag.Flag) {
