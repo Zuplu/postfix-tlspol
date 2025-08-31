@@ -7,7 +7,9 @@ package tlspol
 
 import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
+	"github.com/miekg/dns"
 	"go.yaml.in/yaml/v4"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -41,7 +43,21 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 }
 
 type DnsConfig struct {
-	Address string `yaml:"address"`
+	Address *string `yaml:"address"`
+}
+
+func (c *DnsConfig) GetResolverAddress() (string, error) {
+	if c.Address == nil {
+		config, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+		if err != nil {
+			return "", fmt.Errorf("failed to read /etc/resolv.conf: %w", err)
+		}
+		if len(config.Servers) == 0 {
+			return "", fmt.Errorf("no nameservers found in /etc/resolv.conf")
+		}
+		return config.Servers[0] + ":53", nil
+	}
+	return *c.Address, nil
 }
 
 func (c *DnsConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {

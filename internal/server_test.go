@@ -6,10 +6,11 @@ import (
 )
 
 func init() {
+	address := "8.8.8.8:53"
 	config = Config{
 		Server: ServerConfig{},
 		Dns: DnsConfig{
-			Address: "8.8.8.8:53",
+			Address: &address,
 		},
 	}
 }

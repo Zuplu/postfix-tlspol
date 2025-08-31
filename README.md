@@ -158,8 +158,8 @@ server:
   cache-file: /var/lib/postfix-tlspol/cache.db
 
 dns:
-  # must support DNSSEC
-  address: 127.0.0.53:53
+  # must support DNSSEC, uses /etc/resolv.conf if unset
+  #address: 127.0.0.53:53
 ```
 
 # Prefetching
