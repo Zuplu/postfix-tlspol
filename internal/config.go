@@ -9,23 +9,25 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 
 	"github.com/miekg/dns"
 	"go.yaml.in/yaml/v4"
+	"golang.org/x/sys/unix"
 )
 
 var defaultConfig = Config{}
 
 type ServerConfig struct {
-	Address           string      `yaml:"address"`
-	CacheFile         string      `yaml:"cache-file"`
+	Address           string `yaml:"address"`
+	CacheFile         string `yaml:"cache-file"`
+	NamedLogLevel     string `yaml:"log-level"`
+	LogLevel          log.LogLevel
 	SocketPermissions os.FileMode `yaml:"socket-permissions"`
 	TlsRpt            bool        `yaml:"tlsrpt"`
 	Prefetch          bool        `yaml:"prefetch"`
-	NamedLogLevel     string      `yaml:"log-level"`
-	LogLevel          log.LogLevel
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
@@ -48,12 +50,75 @@ type DnsConfig struct {
 	Address *string `yaml:"address"`
 }
 
+type ResolvConf struct {
+	config *dns.ClientConfig
+	path   string
+	sync.RWMutex
+}
+
+var resolvConf = sync.OnceValue(func() *ResolvConf {
+	return NewResolvConf("/etc/resolv.conf")
+})
+
+func NewResolvConf(path string) *ResolvConf {
+	cfg, err := dns.ClientConfigFromFile(path)
+	if err != nil {
+		log.Errorf("Reading from %q failed: %v", path, err)
+		return nil
+	}
+	log.Infof("Read DNS configuration from %q", path)
+	rc := &ResolvConf{
+		config: cfg,
+		path:   path,
+	}
+	go rc.watch()
+	return rc
+}
+
+func (rc *ResolvConf) Get() *dns.ClientConfig {
+	rc.RLock()
+	defer rc.RUnlock()
+	return rc.config
+}
+
+func (rc *ResolvConf) watch() {
+	fd, err := unix.InotifyInit()
+	if err != nil {
+		log.Errorf("InotifyInit() for /etc/resolv.conf failed: %v", err)
+		return
+	}
+	_, err = unix.InotifyAddWatch(fd, rc.path, unix.IN_CLOSE_WRITE)
+	if err != nil {
+		log.Errorf("InotifyAddWatch() for /etc/resolv.conf failed: %v", err)
+		return
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, err := unix.Read(fd, buf)
+		if err != nil {
+			continue
+		}
+		if n > 0 {
+			cfg, err := dns.ClientConfigFromFile(rc.path)
+			if err == nil {
+				rc.Lock()
+				rc.config = cfg
+				rc.Unlock()
+				log.Infof("Reloaded %q", rc.path)
+			} else {
+				log.Errorf("Failed to reload %q: %v", rc.path, err)
+			}
+		}
+	}
+}
+
 func (c *DnsConfig) GetResolverAddress() (string, error) {
 	if c.Address == nil {
-		config, err := dns.ClientConfigFromFile("/etc/resolv.conf")
-		if err != nil {
-			return "", fmt.Errorf("failed to read /etc/resolv.conf: %w", err)
+		rc := resolvConf()
+		if rc == nil {
+			return "", fmt.Errorf("could not load /etc/resolv.conf")
 		}
+		config := rc.Get()
 		if len(config.Servers) == 0 {
 			return "", fmt.Errorf("no nameservers found in /etc/resolv.conf")
 		}
