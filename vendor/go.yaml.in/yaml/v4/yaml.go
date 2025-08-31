@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -38,7 +39,7 @@ type Unmarshaler interface {
 }
 
 type obsoleteUnmarshaler interface {
-	UnmarshalYAML(unmarshal func(interface{}) error) error
+	UnmarshalYAML(unmarshal func(any) error) error
 }
 
 // The Marshaler interface may be implemented by types to customize their
@@ -48,7 +49,7 @@ type obsoleteUnmarshaler interface {
 // If an error is returned by MarshalYAML, the marshaling procedure stops
 // and returns with the provided error.
 type Marshaler interface {
-	MarshalYAML() (interface{}, error)
+	MarshalYAML() (any, error)
 }
 
 // Unmarshal decodes the first document found within the in byte slice
@@ -84,7 +85,7 @@ type Marshaler interface {
 //
 // See the documentation of Marshal for the format of tags and a list of
 // supported tag options.
-func Unmarshal(in []byte, out interface{}) (err error) {
+func Unmarshal(in []byte, out any) (err error) {
 	return unmarshal(in, out, false)
 }
 
@@ -115,7 +116,7 @@ func (dec *Decoder) KnownFields(enable bool) {
 //
 // See the documentation for Unmarshal for details about the
 // conversion of YAML into a Go value.
-func (dec *Decoder) Decode(v interface{}) (err error) {
+func (dec *Decoder) Decode(v any) (err error) {
 	d := newDecoder()
 	d.knownFields = dec.knownFields
 	defer handleErr(&err)
@@ -138,7 +139,7 @@ func (dec *Decoder) Decode(v interface{}) (err error) {
 //
 // See the documentation for Unmarshal for details about the
 // conversion of YAML into a Go value.
-func (n *Node) Decode(v interface{}) (err error) {
+func (n *Node) Decode(v any) (err error) {
 	d := newDecoder()
 	defer handleErr(&err)
 	out := reflect.ValueOf(v)
@@ -152,7 +153,7 @@ func (n *Node) Decode(v interface{}) (err error) {
 	return nil
 }
 
-func unmarshal(in []byte, out interface{}, strict bool) (err error) {
+func unmarshal(in []byte, out any, strict bool) (err error) {
 	defer handleErr(&err)
 	d := newDecoder()
 	p := newParser(in)
@@ -213,7 +214,7 @@ func unmarshal(in []byte, out interface{}, strict bool) (err error) {
 //	}
 //	yaml.Marshal(&T{B: 2}) // Returns "b: 2\n"
 //	yaml.Marshal(&T{F: 1}} // Returns "a: 1\nb: 0\n"
-func Marshal(in interface{}) (out []byte, err error) {
+func Marshal(in any) (out []byte, err error) {
 	defer handleErr(&err)
 	e := newEncoder()
 	defer e.destroy()
@@ -244,7 +245,7 @@ func NewEncoder(w io.Writer) *Encoder {
 //
 // See the documentation for Marshal for details about the conversion of Go
 // values to YAML.
-func (e *Encoder) Encode(v interface{}) (err error) {
+func (e *Encoder) Encode(v any) (err error) {
 	defer handleErr(&err)
 	e.encoder.marshalDoc("", reflect.ValueOf(v))
 	return nil
@@ -254,7 +255,7 @@ func (e *Encoder) Encode(v interface{}) (err error) {
 //
 // See the documentation for Marshal for details about the
 // conversion of Go values into YAML.
-func (n *Node) Encode(v interface{}) (err error) {
+func (n *Node) Encode(v any) (err error) {
 	defer handleErr(&err)
 	e := newEncoder()
 	defer e.destroy()
@@ -312,7 +313,7 @@ func fail(err error) {
 	panic(&yamlError{err})
 }
 
-func failf(format string, args ...interface{}) {
+func failf(format string, args ...any) {
 	panic(&yamlError{fmt.Errorf("yaml: "+format, args...)})
 }
 
@@ -367,12 +368,28 @@ func (e *TypeError) Error() string {
 	return b.String()
 }
 
-func (e *TypeError) Unwrap() []error {
-	errs := make([]error, 0, len(e.Errors))
+// Is checks if the error is equal to any of the errors in the TypeError.
+//
+// [errors.Is] will call this method when unwrapping errors.
+func (e *TypeError) Is(target error) bool {
 	for _, err := range e.Errors {
-		errs = append(errs, err)
+		if errors.Is(err, target) {
+			return true
+		}
 	}
-	return errs
+	return false
+}
+
+// As checks if the error is equal to any of the errors in the TypeError.
+//
+// [errors.As] will call this method when unwrapping errors.
+func (e *TypeError) As(target any) bool {
+	for _, err := range e.Errors {
+		if errors.As(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 type Kind uint32
@@ -402,9 +419,9 @@ const (
 // control over the content being decoded or encoded.
 //
 // It's worth noting that although Node offers access into details such as
-// line numbers, colums, and comments, the content when re-encoded will not
+// line numbers, columns, and comments, the content when re-encoded will not
 // have its original textual representation preserved. An effort is made to
-// render the data plesantly, and to preserve comments near the data they
+// render the data pleasantly, and to preserve comments near the data they
 // describe, though.
 //
 // Values that make use of the Node type interact with the yaml package in the
@@ -429,7 +446,7 @@ type Node struct {
 	// scalar nodes may be obtained via the ShortTag and LongTag methods.
 	Kind Kind
 
-	// Style allows customizing the apperance of the node in the tree.
+	// Style allows customizing the appearance of the node in the tree.
 	Style Style
 
 	// Tag holds the YAML tag defining the data type for the value.
@@ -441,7 +458,7 @@ type Node struct {
 	// the implicit tag diverges from the provided one.
 	Tag string
 
-	// Value holds the unescaped and unquoted represenation of the value.
+	// Value holds the unescaped and unquoted representation of the value.
 	Value string
 
 	// Anchor holds the anchor name for this node, which allows aliases to point to it.
@@ -519,6 +536,23 @@ func (n *Node) indicatedString() bool {
 			(n.Tag == "" || n.Tag == "!") && n.Style&(SingleQuotedStyle|DoubleQuotedStyle|LiteralStyle|FoldedStyle) != 0)
 }
 
+// shouldUseLiteralStyle determines if a string should use literal style.
+// It returns true if the string contains newlines AND meets additional criteria:
+// - is at least 2 characters long
+// - contains at least one non-whitespace character
+func shouldUseLiteralStyle(s string) bool {
+	if !strings.Contains(s, "\n") || len(s) < 2 {
+		return false
+	}
+	// Must contain at least one non-whitespace character
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // SetString is a convenience function that sets the node to a string value
 // and defines its style in a pleasant way depending on its content.
 func (n *Node) SetString(s string) {
@@ -530,7 +564,7 @@ func (n *Node) SetString(s string) {
 		n.Value = encodeBase64(s)
 		n.Tag = binaryTag
 	}
-	if strings.Contains(n.Value, "\n") {
+	if shouldUseLiteralStyle(n.Value) {
 		n.Style = LiteralStyle
 	}
 }
