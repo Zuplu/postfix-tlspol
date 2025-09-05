@@ -7,6 +7,7 @@ package tlspol
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -122,7 +123,7 @@ func (c *DnsConfig) GetResolverAddress() (string, error) {
 		if len(config.Servers) == 0 {
 			return "", fmt.Errorf("no nameservers found in /etc/resolv.conf")
 		}
-		return config.Servers[0] + ":53", nil
+		return net.JoinHostPort(config.Servers[0], "53"), nil
 	}
 	return *c.Address, nil
 }

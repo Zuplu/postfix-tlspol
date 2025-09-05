@@ -1,3 +1,9 @@
+## What's Changed in v1.8.18 (2025-09-05)
+
+* fix: fix IPv6 nameserver setup from `/etc/resolv.conf` by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.17...v1.8.18
+
 ## What's Changed in v1.8.17 (2025-09-05)
 
 * fix: do not re-read `/etc/resolv.conf` on every single DNS request by @DragonWork
