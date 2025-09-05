@@ -1,3 +1,10 @@
+## What's Changed in v1.8.17 (2025-09-05)
+
+* fix: do not re-read `/etc/resolv.conf` on every single DNS request by @DragonWork
+* build(deps): update toolchain to go1.25.1 by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.16...v1.8.17
+
 ## What's Changed in v1.8.16 (2025-08-31)
 
 * fix: correctly cap 10-digit values (which are valid since 9ad53de) to upper limit in MTA-STS `max_age` per RFC 8461, 3.2 by @DragonWork
