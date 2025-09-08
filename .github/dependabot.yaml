@@ -6,6 +6,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
     directory: /deployments
@@ -20,3 +24,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build(deps)"
+    groups:
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
