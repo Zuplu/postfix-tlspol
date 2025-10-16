@@ -18,7 +18,6 @@ import (
 
 const (
 	PREFETCH_INTERVAL uint32 = 30
-	PREFETCH_MARGIN   uint32 = 180
 )
 
 var semaphore chan struct{}
@@ -29,7 +28,7 @@ func startPrefetching() {
 	}
 	log.Info("Prefetching enabled!")
 	ticker := time.NewTicker(time.Duration(PREFETCH_INTERVAL) * time.Second)
-	semaphore = make(chan struct{}, runtime.NumCPU()*4)
+	semaphore = make(chan struct{}, runtime.NumCPU()*4+2)
 	for range ticker.C {
 		go prefetchCachedPolicies()
 	}
@@ -38,7 +37,7 @@ func startPrefetching() {
 func prefetchCachedPolicies() {
 	var wg sync.WaitGroup
 	var counter atomic.Uint32
-	items := polCache.Items()
+	items := polCache.Items(false)
 	itemsCount := len(items)
 	now := time.Now()
 	for _, entry := range items {
@@ -46,7 +45,7 @@ func prefetchCachedPolicies() {
 		if entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE && remainingTTL+PREFETCH_INTERVAL <= 0 {
 			itemsCount--
 			if remainingTTL == 0 {
-				polCache.Remove(entry.Key)
+				polCache.Remove(false, entry.Key)
 			}
 			continue
 		}
@@ -55,16 +54,19 @@ func prefetchCachedPolicies() {
 		}
 		semaphore <- struct{}{}
 		wg.Add(1)
-		go func(entry cache.Entry[*CacheStruct]) {
+		go func(c cache.Entry[*CacheStruct]) {
 			defer func() {
 				wg.Done()
 				<-semaphore
 			}()
 			// Refresh the cached policy
-			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&entry.Key)
+			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&c.Key)
 			if refreshedPolicy != "" && refreshedPolicy != "TEMP" {
 				counter.Add(1)
-				polCache.Set(entry.Key, &CacheStruct{Policy: refreshedPolicy, Report: refreshedRpt, TTL: refreshedTTL, Counter: entry.Value.Counter, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(refreshedTTL+rand.Uint32N(20)) * time.Second)}})
+				c.Value.Policy = refreshedPolicy
+				c.Value.Report = refreshedRpt
+				c.Value.TTL = refreshedTTL
+				c.Value.Expirable.ExpiresAt = now.Add(time.Duration(refreshedTTL+rand.Uint32N(20)) * time.Second)
 			}
 		}(entry)
 	}

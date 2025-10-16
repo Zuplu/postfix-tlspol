@@ -59,8 +59,8 @@ type Cache[T Cacheable] struct {
 	filePath   string
 	wg         sync.WaitGroup
 	savePeriod time.Duration
-	mu         sync.RWMutex
 	dirty      bool
+	sync.RWMutex
 }
 
 type Entry[T Cacheable] struct {
@@ -84,37 +84,41 @@ func New[T Cacheable](_ T, filePath string, savePeriod time.Duration) *Cache[T] 
 }
 
 func (c *Cache[T]) Set(key string, value T) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.Lock()
+	defer c.Unlock()
 	c.data[key] = value
 	c.dirty = true
 }
 
 func (c *Cache[T]) Get(key string) (T, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.RLock()
+	defer c.RUnlock()
 	val, ok := c.data[key]
 	return val, ok
 }
 
-func (c *Cache[T]) Remove(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Cache[T]) Remove(haveLock bool, key string) {
+	if !haveLock {
+		c.Lock()
+		defer c.Unlock()
+	}
 	delete(c.data, key)
 	c.dirty = true
 }
 
 func (c *Cache[T]) Purge() {
-	c.mu.Lock()
+	c.Lock()
+	defer c.Unlock()
 	c.data = make(map[string]T)
 	c.dirty = true
-	c.mu.Unlock()
-	c.Save()
+	c.Save(true)
 }
 
-func (c *Cache[T]) Items() []Entry[T] {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (c *Cache[T]) Items(haveLock bool) []Entry[T] {
+	if !haveLock {
+		c.RLock()
+		defer c.RUnlock()
+	}
 	entries := make([]Entry[T], 0, len(c.data))
 	for k, v := range c.data {
 		entries = append(entries, Entry[T]{Key: k, Value: v})
@@ -125,7 +129,7 @@ func (c *Cache[T]) Items() []Entry[T] {
 func (c *Cache[T]) Close() {
 	close(c.quit)
 	c.wg.Wait()
-	if err := c.Save(); err != nil {
+	if err := c.Save(false); err != nil {
 		log.Errorf("cache: error during final save: %v", err)
 	}
 }
@@ -138,7 +142,7 @@ func (c *Cache[T]) periodicSave() {
 		select {
 		case <-ticker.C:
 			go func() {
-				if err := c.Save(); err != nil {
+				if err := c.Save(false); err != nil {
 					log.Errorf("cache: error saving cache: %v", err)
 				}
 			}()
@@ -148,19 +152,26 @@ func (c *Cache[T]) periodicSave() {
 	}
 }
 
-func (c *Cache[T]) Save() error {
-	c.mu.RLock()
+func (c *Cache[T]) Save(haveLock bool) error {
+	if !haveLock {
+		c.RLock()
+	}
 	if !c.dirty {
-		c.mu.RUnlock()
+		if !haveLock {
+			c.RUnlock()
+		}
 		return nil
+	}
+	if !haveLock {
+		c.RUnlock()
+		c.Lock()
+		defer c.Unlock()
 	}
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(c.data); err != nil {
-		c.mu.RUnlock()
 		return err
 	}
-	c.mu.RUnlock()
 	f, err := os.Create(c.filePath)
 	if err != nil {
 		return err
@@ -174,9 +185,7 @@ func (c *Cache[T]) Save() error {
 	if _, err := g.Write(buf.Bytes()); err != nil {
 		return err
 	}
-	c.mu.Lock()
 	c.dirty = false
-	c.mu.Unlock()
 	return nil
 }
 
@@ -199,9 +208,9 @@ func (c *Cache[T]) load() error {
 	if err := dec.Decode(&stored); err != nil {
 		return err
 	}
-	c.mu.Lock()
+	c.Lock()
 	c.data = stored
 	c.dirty = false
-	c.mu.Unlock()
+	c.Unlock()
 	return nil
 }

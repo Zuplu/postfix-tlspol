@@ -114,7 +114,7 @@ func StartDaemon(v *string, licenseText *string) {
 
 	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
-	tidyCache()
+	_ = tidyCache()
 	listenForSignals()
 
 	readEnv()
@@ -132,7 +132,7 @@ func listenForSignals() {
 		for {
 			sig := <-signals
 			log.Infof("Received signal: %v, saving cache...", sig)
-			tidyCache()
+			_ = tidyCache()
 			if sig == syscall.SIGHUP {
 				continue
 			}
@@ -375,11 +375,20 @@ func handleConnection(conn *net.Conn) {
 
 			if ttl != 0 {
 				now := time.Now()
-				var cnt uint32 = 0
-				if found && c != nil {
-					cnt = c.Counter
+				var cs *CacheStruct
+				if c != nil {
+					cs = c
+					cs.Counter++
+				} else {
+					cs = &CacheStruct{}
+					cs.Counter = 1
+					cs.Expirable = &cache.Expirable{}
 				}
-				polCache.Set(domain, &CacheStruct{Policy: policy, Report: report, TTL: ttl, Counter: cnt + 1, Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(ttl+rand.Uint32N(20)) * time.Second)}})
+				cs.Policy = policy
+				cs.Report = report
+				cs.TTL = ttl
+				cs.Expirable.ExpiresAt = now.Add(time.Duration(ttl+rand.Uint32N(20)) * time.Second)
+				polCache.Set(domain, cs)
 			}
 			workChan <- true
 		}(ns.Text())
@@ -458,8 +467,7 @@ func queryDomain(domain *string) (string, string, uint32) {
 }
 
 func dumpCachedPolicies(conn *net.Conn, export bool) {
-	tidyCache()
-	items := polCache.Items()
+	items := tidyCache()
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Value.Counter != items[j].Value.Counter {
 			return items[i].Value.Counter > items[j].Value.Counter
@@ -485,13 +493,19 @@ func purgeCache(conn *net.Conn) {
 	fmt.Fprintln(*conn, "OK")
 }
 
-func tidyCache() {
-	defer polCache.Save()
-	items := polCache.Items()
+func tidyCache() []cache.Entry[*CacheStruct] {
+	polCache.Lock()
+	defer polCache.Unlock()
+	defer polCache.Save(true)
+	items := polCache.Items(true)
 	now := time.Now()
+	var entries []cache.Entry[*CacheStruct]
 	for _, entry := range items {
 		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now)+PREFETCH_INTERVAL <= 0 {
-			polCache.Remove(entry.Key)
+			polCache.Remove(true, entry.Key)
+		} else {
+			entries = append(entries, entry)
 		}
 	}
+	return entries
 }
