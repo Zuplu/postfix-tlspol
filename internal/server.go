@@ -43,7 +43,7 @@ const (
 	CACHE_MIN_TTL      uint32 = 180
 	CACHE_MAX_TTL      uint32 = 2592000
 	CACHE_MAX_AGE      uint32 = 1800 // max age for stale queries (only for prefetching, not served to postfix)
-	REQUEST_TIMEOUT           = 3 * time.Second
+	REQUEST_TIMEOUT           = 2 * time.Second
 )
 
 var (
@@ -411,21 +411,29 @@ func normalizeDomain(domain string) string {
 
 func queryDomain(domain *string) (string, string, uint32) {
 	results := make(chan PolicyResult, 2)
-	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
+	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+2)
+	defer cancel()
 
 	// DANE query
 	go func() {
 		policy, ttl := checkDane(&ctx, domain, true)
-		if ctx.Err() == nil {
-			results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}
+		select {
+		case <-ctx.Done():
+		case results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}:
+		default:
 		}
 	}()
 
 	// MTA-STS query
+	stsCtx, stsCancel := context.WithCancel(ctx)
+	defer stsCancel()
 	go func() {
-		policy, rpt, ttl := checkMtaSts(&ctx, domain, true)
-		if ctx.Err() == nil {
-			results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}
+		policy, rpt, ttl := checkMtaSts(&stsCtx, domain, true)
+		select {
+		case <-stsCtx.Done():
+		case <-ctx.Done():
+		case results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}:
+		default:
 		}
 	}()
 
@@ -444,12 +452,9 @@ func queryDomain(domain *string) (string, string, uint32) {
 		report = r.Report
 		ttl = r.TTL
 		if r.IsDane {
+			stsCancel()
 			break
 		}
-	}
-	cancel()
-	if i < 2 {
-		close(results)
 	}
 
 	if ttl < CACHE_MIN_TTL {

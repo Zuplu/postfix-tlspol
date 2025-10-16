@@ -1,3 +1,17 @@
+## What's Changed in v1.8.19 (2025-10-16)
+
+* build(docker): bump golang from 1.25.0-alpine3.22 to 1.25.1-alpine3.22 in /deployments by @dependabot[bot] in [#78](https://github.com/Zuplu/postfix-tlspol/pull/78)
+* build(deps): bump golang.org/x/term from 0.34.0 to 0.35.0 by @dependabot[bot] in [#79](https://github.com/Zuplu/postfix-tlspol/pull/79)
+* chore: update dependabot.yaml by @DragonWork
+* build(deps): update dependencies by @DragonWork
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#84](https://github.com/Zuplu/postfix-tlspol/pull/84)
+* build(docker): bump golang from 1.25.1-alpine3.22 to 1.25.3-alpine3.22 in /deployments by @dependabot[bot] in [#85](https://github.com/Zuplu/postfix-tlspol/pull/85)
+* build(deps): update toolchain and dependencies
+* refactor: optimize mutex usage in cache and avoid recreation of struct entries
+* fix: fix race conditions and optimize handling of timeouts
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.18...v1.8.19
+
 ## What's Changed in v1.8.18 (2025-09-05)
 
 * fix: fix IPv6 nameserver setup from `/etc/resolv.conf` by @DragonWork
