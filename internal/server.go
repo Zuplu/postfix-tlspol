@@ -413,38 +413,38 @@ func queryDomain(domain *string) (string, string, uint32) {
 	results := make(chan PolicyResult, 2)
 	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+2)
 	defer cancel()
+	go func() {
+		<-ctx.Done()
+		close(results)
+	}()
+	var wg sync.WaitGroup
+	go func() {
+		wg.Wait()
+		cancel()
+	}()
+	wg.Add(2)
 
 	// DANE query
 	go func() {
+		defer wg.Done()
 		policy, ttl := checkDane(&ctx, domain, true)
-		select {
-		case <-ctx.Done():
-		case results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}:
-		default:
+		if ctx.Err() == nil {
+			results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}
 		}
 	}()
 
 	// MTA-STS query
-	stsCtx, stsCancel := context.WithCancel(ctx)
-	defer stsCancel()
 	go func() {
-		policy, rpt, ttl := checkMtaSts(&stsCtx, domain, true)
-		select {
-		case <-stsCtx.Done():
-		case <-ctx.Done():
-		case results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}:
-		default:
+		defer wg.Done()
+		policy, rpt, ttl := checkMtaSts(&ctx, domain, true)
+		if ctx.Err() == nil {
+			results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}
 		}
 	}()
 
 	policy, report := "", ""
 	var ttl uint32 = CACHE_NOTFOUND_TTL
-	var i uint8 = 0
 	for r := range results {
-		i++
-		if i >= 2 {
-			close(results)
-		}
 		if r.Policy == "" {
 			continue
 		}
@@ -452,7 +452,6 @@ func queryDomain(domain *string) (string, string, uint32) {
 		report = r.Report
 		ttl = r.TTL
 		if r.IsDane {
-			stsCancel()
 			break
 		}
 	}

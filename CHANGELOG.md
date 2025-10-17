@@ -1,3 +1,9 @@
+## What's Changed in v1.8.20 (2025-10-17)
+
+* fix: eliminate potential deadlock by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.19...v1.8.20
+
 ## What's Changed in v1.8.19 (2025-10-16)
 
 * build(docker): bump golang from 1.25.0-alpine3.22 to 1.25.1-alpine3.22 in /deployments by @dependabot[bot] in [#78](https://github.com/Zuplu/postfix-tlspol/pull/78)
@@ -6,9 +12,9 @@
 * build(deps): update dependencies by @DragonWork
 * build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#84](https://github.com/Zuplu/postfix-tlspol/pull/84)
 * build(docker): bump golang from 1.25.1-alpine3.22 to 1.25.3-alpine3.22 in /deployments by @dependabot[bot] in [#85](https://github.com/Zuplu/postfix-tlspol/pull/85)
-* build(deps): update toolchain and dependencies
-* refactor: optimize mutex usage in cache and avoid recreation of struct entries
-* fix: fix race conditions and optimize handling of timeouts
+* build(deps): update toolchain and dependencies by @DragonWork
+* refactor: optimize mutex usage in cache and avoid recreation of struct entries by @DragonWork
+* fix: fix race conditions and optimize handling of timeouts (closes #82) by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.18...v1.8.19
 
