@@ -29,6 +29,55 @@ Before submitting an issue, please:
 - Provide detailed steps to reproduce the issue
 - Include relevant code samples and error messages
 - Specify your Go version and operating system
+- Use the `go-yaml` CLI tool described below
+
+
+### Using the `go-yaml` CLI Tool
+
+This tool can be used to inspect both the internal stages and final results of
+YAML processing with the go-yaml library.
+It should be used when reporting most bugs.
+
+The `go-yaml` CLI tool uses the `go-yaml.in/yaml/v4` library to decode and
+encode YAML.
+Decoding YAML is a multi-stage process that involves tokens, events, and nodes.
+The `go-yaml` CLI tool lets you see all of these intermediate stages of the
+decoding process.
+This is crucial for understanding what go-yaml is doing internally.
+
+The `go-yaml` CLI tool can be built with the `make go-yaml` command or installed
+with the `go install go.yaml.in/yaml/v4/cmd/go-yaml@latest` command.
+
+You can learn about all of its options with the `go-yaml -h` command.
+
+Here is an example of using it on a small piece of YAML:
+
+```bash
+./go-yaml -t <<< '
+foo: &a1 bar
+*a1: baz
+```
+
+
+### Coding Conventions
+
+- Follow standard Go coding conventions
+- Use `make fmt` to format your code
+- Write descriptive comments for non-obvious code
+- Add tests for your work
+- Keep line length to 80 characters
+- Use meaningful variable and function names
+- Start doc and comment sentences on a new line
+- Test your changes with the `go-yaml` CLI tool when working on parsing logic
+
+
+### Commit Conventions
+
+- No merge commits
+- Commit subject line should:
+  - Start with a capital letter
+  - Not end with a period
+  - Be no more than 50 characters
 
 
 ### Pull Requests
@@ -43,56 +92,43 @@ Before submitting an issue, please:
 1. Submit a pull request
 
 
-### Coding Conventions
-
-- Follow standard Go coding conventions
-- Use `gofmt` to format your code
-- Write descriptive comments for non-obvious code
-- Add tests for your work
-- Keep line length to 80 characters
-- Use meaningful variable and function names
-- Start doc and comment sentences on a new line
-
-
-### Commit Conventions
-
-- No merge commits
-- Commit subject line should:
-  - Start with a capital letter
-  - Not end with a period
-  - Be no more than 50 characters
-
-
 ### Testing
 
-- Ensure all tests pass
+- Ensure all tests pass with `make test`
 - Add new tests for new functionality
 - Update existing tests when modifying functionality
 
 
-## Development Setup
+## Development Process
 
-- Install Go (see [go.mod](https://github.com/yaml/go-yaml/blob/main/go.mod) for
-  minimum required version)
+- Installing Go is not necessary. See "The Makefile" below.
 - Fork and clone the repository
 - Make your changes
-- Run tests and linters
+- Run tests, linters and formatters
+  - `make test-all`
+  - `make lint`
+  - `make fmt`
+  - `make tidy`
+- Submit a [Pull Request](https://github.com/yaml/go-yaml/pulls)
 
 
-## Using the Makefile
+## The Makefile
 
-The repository contains a `GNUmakefile` that provides a number of useful
-targets:
+The repository contains a Makefile (`GNUmakefile`) that provides a number of
+useful targets:
 
 - `make test` runs the tests
 - `make test v=1 count=3` runs the tests with options
 - `make test GO-VERSION=1.23.4` runs the tests with a specific Go version
 - `make shell` opens a shell with the project's dependencies set up
 - `make shell GO-VERSION=1.23.4` opens a shell with a specific Go version
-- `make fmt` runs `go fmt`
+- `make fmt` runs `golangci-lint fmt ./...`
+- `make lint` runs `golangci-lint run`
 - `make tidy` runs `go mod tidy`
 - `make install` runs `go install`
 - `make distclean` cleans the project completely
+
+The Makefile will install all requirements for any target, including Go itself.
 
 
 ## Getting Help
