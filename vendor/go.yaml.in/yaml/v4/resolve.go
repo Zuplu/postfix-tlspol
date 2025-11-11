@@ -29,8 +29,10 @@ type resolveMapItem struct {
 	tag   string
 }
 
-var resolveTable = make([]byte, 256)
-var resolveMap = make(map[string]resolveMapItem)
+var (
+	resolveTable = make([]byte, 256)
+	resolveMap   = make(map[string]resolveMapItem)
+)
 
 func init() {
 	t := resolveTable
@@ -44,7 +46,7 @@ func init() {
 	}
 	t[int('.')] = '.' // Float (potentially in map)
 
-	var resolveMapList = []struct {
+	resolveMapList := []struct {
 		v   any
 		tag string
 		l   []string
@@ -86,8 +88,10 @@ const (
 // https://staticcheck.dev/docs/checks/#SA4026
 var negativeZero = math.Copysign(0.0, -1.0)
 
-var longTags = make(map[string]string)
-var shortTags = make(map[string]string)
+var (
+	longTags  = make(map[string]string)
+	shortTags = make(map[string]string)
+)
 
 func init() {
 	for _, stag := range []string{nullTag, boolTag, strTag, intTag, floatTag, timestampTag, seqTag, mapTag, binaryTag, mergeTag} {
@@ -194,7 +198,7 @@ func resolve(tag string, in string) (rtag string, out any) {
 				}
 			}
 
-			plain := strings.Replace(in, "_", "", -1)
+			plain := strings.ReplaceAll(in, "_", "")
 			intv, err := strconv.ParseInt(plain, 0, 64)
 			if err == nil {
 				if intv == int64(int(intv)) {
@@ -211,56 +215,6 @@ func resolve(tag string, in string) (rtag string, out any) {
 				floatv, err := strconv.ParseFloat(plain, 64)
 				if err == nil {
 					return floatTag, floatv
-				}
-			}
-			if strings.HasPrefix(plain, "0b") {
-				intv, err := strconv.ParseInt(plain[2:], 2, 64)
-				if err == nil {
-					if intv == int64(int(intv)) {
-						return intTag, int(intv)
-					} else {
-						return intTag, intv
-					}
-				}
-				uintv, err := strconv.ParseUint(plain[2:], 2, 64)
-				if err == nil {
-					return intTag, uintv
-				}
-			} else if strings.HasPrefix(plain, "-0b") {
-				intv, err := strconv.ParseInt("-"+plain[3:], 2, 64)
-				if err == nil {
-					if true || intv == int64(int(intv)) {
-						return intTag, int(intv)
-					} else {
-						return intTag, intv
-					}
-				}
-			}
-			// Octals as introduced in version 1.2 of the spec.
-			// Octals from the 1.1 spec, spelled as 0777, are still
-			// decoded by default in v3 as well for compatibility.
-			// May be dropped in v4 depending on how usage evolves.
-			if strings.HasPrefix(plain, "0o") {
-				intv, err := strconv.ParseInt(plain[2:], 8, 64)
-				if err == nil {
-					if intv == int64(int(intv)) {
-						return intTag, int(intv)
-					} else {
-						return intTag, intv
-					}
-				}
-				uintv, err := strconv.ParseUint(plain[2:], 8, 64)
-				if err == nil {
-					return intTag, uintv
-				}
-			} else if strings.HasPrefix(plain, "-0o") {
-				intv, err := strconv.ParseInt("-"+plain[3:], 8, 64)
-				if err == nil {
-					if true || intv == int64(int(intv)) {
-						return intTag, int(intv)
-					} else {
-						return intTag, intv
-					}
 				}
 			}
 		default:

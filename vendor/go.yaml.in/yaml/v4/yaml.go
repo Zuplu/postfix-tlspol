@@ -17,7 +17,7 @@
 //
 // Source code and other details for the project are available at GitHub:
 //
-//	https://github.com/go-yaml/yaml
+//	https://github.com/yaml/go-yaml
 package yaml
 
 import (
@@ -30,6 +30,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"go.yaml.in/yaml/v4/internal/libyaml"
 )
 
 // The Unmarshaler interface may be implemented by types to customize their
@@ -71,7 +73,7 @@ type Marshaler interface {
 // lowercased as the default key. Custom keys may be defined via the
 // "yaml" name in the field tag: the content preceding the first comma
 // is used as the key, and the following comma-separated options are
-// used to tweak the marshalling process (see Marshal).
+// used to tweak the marshaling process (see Marshal).
 // Conflicting names result in a runtime error.
 //
 // For example:
@@ -125,7 +127,7 @@ func (dec *Decoder) Decode(v any) (err error) {
 		return io.EOF
 	}
 	out := reflect.ValueOf(v)
-	if out.Kind() == reflect.Ptr && !out.IsNil() {
+	if out.Kind() == reflect.Pointer && !out.IsNil() {
 		out = out.Elem()
 	}
 	d.unmarshal(node, out)
@@ -143,7 +145,7 @@ func (n *Node) Decode(v any) (err error) {
 	d := newDecoder()
 	defer handleErr(&err)
 	out := reflect.ValueOf(v)
-	if out.Kind() == reflect.Ptr && !out.IsNil() {
+	if out.Kind() == reflect.Pointer && !out.IsNil() {
 		out = out.Elem()
 	}
 	d.unmarshal(n, out)
@@ -161,7 +163,7 @@ func unmarshal(in []byte, out any, strict bool) (err error) {
 	node := p.parse()
 	if node != nil {
 		v := reflect.ValueOf(out)
-		if v.Kind() == reflect.Ptr && !v.IsNil() {
+		if v.Kind() == reflect.Pointer && !v.IsNil() {
 			v = v.Elem()
 		}
 		d.unmarshal(node, v)
@@ -176,11 +178,11 @@ func unmarshal(in []byte, out any, strict bool) (err error) {
 // of the generated document will reflect the structure of the value itself.
 // Maps and pointers (to struct, string, int, etc) are accepted as the in value.
 //
-// Struct fields are only marshalled if they are exported (have an upper case
-// first letter), and are marshalled using the field name lowercased as the
+// Struct fields are only marshaled if they are exported (have an upper case
+// first letter), and are marshaled using the field name lowercased as the
 // default key. Custom keys may be defined via the "yaml" name in the field
 // tag: the content preceding the first comma is used as the key, and the
-// following comma-separated options are used to tweak the marshalling process.
+// following comma-separated options are used to tweak the marshaling process.
 // Conflicting names result in a runtime error.
 //
 // The field tag format accepted is:
@@ -221,7 +223,7 @@ func Marshal(in any) (out []byte, err error) {
 	e.marshalDoc("", reflect.ValueOf(in))
 	e.finish()
 	out = e.out
-	return
+	return out, err
 }
 
 // An Encoder writes YAML values to an output stream.
@@ -279,12 +281,12 @@ func (e *Encoder) SetIndent(spaces int) {
 
 // CompactSeqIndent makes it so that '- ' is considered part of the indentation.
 func (e *Encoder) CompactSeqIndent() {
-	e.encoder.emitter.compact_sequence_indent = true
+	e.encoder.emitter.CompactSequenceIndent = true
 }
 
 // DefaultSeqIndent makes it so that '- ' is not considered part of the indentation.
 func (e *Encoder) DefaultSeqIndent() {
-	e.encoder.emitter.compact_sequence_indent = false
+	e.encoder.emitter.CompactSequenceIndent = false
 }
 
 // Close closes the encoder by writing any remaining data.
@@ -323,6 +325,7 @@ func failf(format string, args ...any) {
 type ParserError struct {
 	Message string
 	Line    int
+	Column  int
 }
 
 func (e *ParserError) Error() string {
@@ -374,6 +377,11 @@ func (e *TypeError) Error() string {
 func (e *TypeError) Is(target error) bool {
 	for _, err := range e.Errors {
 		if errors.Is(err, target) {
+			return true
+		}
+
+		// Check if the error is not wrapped in the UnmarshalError.
+		if err != nil && errors.Is(err.Err, target) {
 			return true
 		}
 	}
@@ -635,7 +643,7 @@ func getStructInfo(st reflect.Type) (*structInfo, error) {
 		info := fieldInfo{Num: i}
 
 		tag := field.Tag.Get("yaml")
-		if tag == "" && strings.Index(string(field.Tag), ":") < 0 {
+		if tag == "" && !strings.Contains(string(field.Tag), ":") {
 			tag = string(field.Tag)
 		}
 		if tag == "-" {
@@ -654,7 +662,7 @@ func getStructInfo(st reflect.Type) (*structInfo, error) {
 				case "inline":
 					inline = true
 				default:
-					return nil, errors.New(fmt.Sprintf("unsupported flag %q in tag %q of type %s", flag, tag, st))
+					return nil, fmt.Errorf("unsupported flag %q in tag %q of type %s", flag, tag, st)
 				}
 			}
 			tag = fields[0]
@@ -670,15 +678,15 @@ func getStructInfo(st reflect.Type) (*structInfo, error) {
 					return nil, errors.New("option ,inline needs a map with string keys in struct " + st.String())
 				}
 				inlineMap = info.Num
-			case reflect.Struct, reflect.Ptr:
+			case reflect.Struct, reflect.Pointer:
 				ftype := field.Type
-				for ftype.Kind() == reflect.Ptr {
+				for ftype.Kind() == reflect.Pointer {
 					ftype = ftype.Elem()
 				}
 				if ftype.Kind() != reflect.Struct {
 					return nil, errors.New("option ,inline may only be used on a struct or map field")
 				}
-				if reflect.PtrTo(ftype).Implements(unmarshalerType) {
+				if reflect.PointerTo(ftype).Implements(unmarshalerType) {
 					inlineUnmarshalers = append(inlineUnmarshalers, []int{i})
 				} else {
 					sinfo, err := getStructInfo(ftype)
@@ -749,7 +757,7 @@ type IsZeroer interface {
 func isZero(v reflect.Value) bool {
 	kind := v.Kind()
 	if z, ok := v.Interface().(IsZeroer); ok {
-		if (kind == reflect.Ptr || kind == reflect.Interface) && v.IsNil() {
+		if (kind == reflect.Pointer || kind == reflect.Interface) && v.IsNil() {
 			return true
 		}
 		return z.IsZero()
@@ -757,7 +765,7 @@ func isZero(v reflect.Value) bool {
 	switch kind {
 	case reflect.String:
 		return len(v.String()) == 0
-	case reflect.Interface, reflect.Ptr:
+	case reflect.Interface, reflect.Pointer:
 		return v.IsNil()
 	case reflect.Slice:
 		return v.Len() == 0
@@ -791,64 +799,64 @@ func ParserGetEvents(in []byte) (string, error) {
 	p := newParser(in)
 	defer p.destroy()
 	var events strings.Builder
-	var event yaml_event_t
+	var event libyaml.Event
 	for {
-		if !yaml_parser_parse(&p.parser, &event) {
-			return "", errors.New(p.parser.problem)
+		if !p.parser.Parse(&event) {
+			return "", errors.New(p.parser.Problem)
 		}
 		formatted := formatEvent(&event)
 		events.WriteString(formatted)
-		if event.typ == yaml_STREAM_END_EVENT {
-			yaml_event_delete(&event)
+		if event.Type == libyaml.STREAM_END_EVENT {
+			event.Delete()
 			break
 		}
-		yaml_event_delete(&event)
+		event.Delete()
 		events.WriteByte('\n')
 	}
 	return events.String(), nil
 }
 
-func formatEvent(e *yaml_event_t) string {
+func formatEvent(e *libyaml.Event) string {
 	var b strings.Builder
-	switch e.typ {
-	case yaml_STREAM_START_EVENT:
+	switch e.Type {
+	case libyaml.STREAM_START_EVENT:
 		b.WriteString("+STR")
-	case yaml_STREAM_END_EVENT:
+	case libyaml.STREAM_END_EVENT:
 		b.WriteString("-STR")
-	case yaml_DOCUMENT_START_EVENT:
+	case libyaml.DOCUMENT_START_EVENT:
 		b.WriteString("+DOC")
-		if !e.implicit {
+		if !e.Implicit {
 			b.WriteString(" ---")
 		}
-	case yaml_DOCUMENT_END_EVENT:
+	case libyaml.DOCUMENT_END_EVENT:
 		b.WriteString("-DOC")
-		if !e.implicit {
+		if !e.Implicit {
 			b.WriteString(" ...")
 		}
-	case yaml_ALIAS_EVENT:
+	case libyaml.ALIAS_EVENT:
 		b.WriteString("=ALI *")
-		b.Write(e.anchor)
-	case yaml_SCALAR_EVENT:
+		b.Write(e.Anchor)
+	case libyaml.SCALAR_EVENT:
 		b.WriteString("=VAL")
-		if len(e.anchor) > 0 {
+		if len(e.Anchor) > 0 {
 			b.WriteString(" &")
-			b.Write(e.anchor)
+			b.Write(e.Anchor)
 		}
-		if len(e.tag) > 0 {
+		if len(e.Tag) > 0 {
 			b.WriteString(" <")
-			b.Write(e.tag)
+			b.Write(e.Tag)
 			b.WriteString(">")
 		}
-		switch e.scalar_style() {
-		case yaml_PLAIN_SCALAR_STYLE:
+		switch e.ScalarStyle() {
+		case libyaml.PLAIN_SCALAR_STYLE:
 			b.WriteString(" :")
-		case yaml_LITERAL_SCALAR_STYLE:
+		case libyaml.LITERAL_SCALAR_STYLE:
 			b.WriteString(" |")
-		case yaml_FOLDED_SCALAR_STYLE:
+		case libyaml.FOLDED_SCALAR_STYLE:
 			b.WriteString(" >")
-		case yaml_SINGLE_QUOTED_SCALAR_STYLE:
+		case libyaml.SINGLE_QUOTED_SCALAR_STYLE:
 			b.WriteString(" '")
-		case yaml_DOUBLE_QUOTED_SCALAR_STYLE:
+		case libyaml.DOUBLE_QUOTED_SCALAR_STYLE:
 			b.WriteString(` "`)
 		}
 		// Escape special characters for consistent event output.
@@ -856,40 +864,40 @@ func formatEvent(e *yaml_event_t) string {
 			`\`, `\\`,
 			"\n", `\n`,
 			"\t", `\t`,
-		).Replace(string(e.value))
+		).Replace(string(e.Value))
 		b.WriteString(val)
 
-	case yaml_SEQUENCE_START_EVENT:
+	case libyaml.SEQUENCE_START_EVENT:
 		b.WriteString("+SEQ")
-		if len(e.anchor) > 0 {
+		if len(e.Anchor) > 0 {
 			b.WriteString(" &")
-			b.Write(e.anchor)
+			b.Write(e.Anchor)
 		}
-		if len(e.tag) > 0 {
+		if len(e.Tag) > 0 {
 			b.WriteString(" <")
-			b.Write(e.tag)
+			b.Write(e.Tag)
 			b.WriteString(">")
 		}
-		if e.sequence_style() == yaml_FLOW_SEQUENCE_STYLE {
+		if e.SequenceStyle() == libyaml.FLOW_SEQUENCE_STYLE {
 			b.WriteString(" []")
 		}
-	case yaml_SEQUENCE_END_EVENT:
+	case libyaml.SEQUENCE_END_EVENT:
 		b.WriteString("-SEQ")
-	case yaml_MAPPING_START_EVENT:
+	case libyaml.MAPPING_START_EVENT:
 		b.WriteString("+MAP")
-		if len(e.anchor) > 0 {
+		if len(e.Anchor) > 0 {
 			b.WriteString(" &")
-			b.Write(e.anchor)
+			b.Write(e.Anchor)
 		}
-		if len(e.tag) > 0 {
+		if len(e.Tag) > 0 {
 			b.WriteString(" <")
-			b.Write(e.tag)
+			b.Write(e.Tag)
 			b.WriteString(">")
 		}
-		if e.mapping_style() == yaml_FLOW_MAPPING_STYLE {
+		if e.MappingStyle() == libyaml.FLOW_MAPPING_STYLE {
 			b.WriteString(" {}")
 		}
-	case yaml_MAPPING_END_EVENT:
+	case libyaml.MAPPING_END_EVENT:
 		b.WriteString("-MAP")
 	}
 	return b.String()
