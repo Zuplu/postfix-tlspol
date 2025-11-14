@@ -518,7 +518,7 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 	now := time.Now()
 	var entries []cache.Entry[*CacheStruct]
 	for _, entry := range items {
-		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now)+PREFETCH_INTERVAL <= 0 {
+		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now)+PREFETCH_INTERVAL <= 0 || strings.Contains(entry.Value.Report, "mx_host_pattern=.") {
 			polCache.Remove(true, entry.Key)
 		} else {
 			entries = append(entries, entry)

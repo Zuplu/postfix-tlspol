@@ -107,7 +107,6 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 			if !valid.IsDNSName(val[2:]) {
 				return false
 			}
-			val = val[1:]
 		} else if !valid.IsDNSName(val) {
 			return false
 		}
