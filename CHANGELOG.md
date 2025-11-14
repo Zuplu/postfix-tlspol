@@ -7,6 +7,23 @@
 * build(deps): update indirect dependencies by @DragonWork
 * build(deps): update toolchain to go1.25.4 by @DragonWork
 * fix: fix MTA-STS wildcard hosts failing with recent postfix versions by @DragonWork
+* build(deps): update dependencies
+
+## New Contributors
+* @DragonWork made their first contribution
+* @dependabot[bot] made their first contribution in [#90](https://github.com/Zuplu/postfix-tlspol/pull/90)
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.20...v1.8.21
+
+## What's Changed in v1.8.21 (2025-11-14)
+
+* build(deps): bump golang.org/x/sys from 0.37.0 to 0.38.0 in the golang-x group by @dependabot[bot] in [#89](https://github.com/Zuplu/postfix-tlspol/pull/89)
+* build(docker): bump golang from 1.25.3-alpine3.22 to 1.25.4-alpine3.22 in /deployments by @dependabot[bot] in [#88](https://github.com/Zuplu/postfix-tlspol/pull/88)
+* build(deps): bump go.yaml.in/yaml/v4 from 4.0.0-rc.2 to 4.0.0-rc.3 by @dependabot[bot] in [#90](https://github.com/Zuplu/postfix-tlspol/pull/90)
+* refactor: small concurrency fixes by @DragonWork
+* build(deps): update indirect dependencies by @DragonWork
+* build(deps): update toolchain to go1.25.4 by @DragonWork
+* fix: fix MTA-STS wildcard hosts failing with recent postfix versions by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.20...v1.8.21
 
