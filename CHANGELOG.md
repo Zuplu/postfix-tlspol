@@ -7,11 +7,7 @@
 * build(deps): update indirect dependencies by @DragonWork
 * build(deps): update toolchain to go1.25.4 by @DragonWork
 * fix: fix MTA-STS wildcard hosts failing with recent postfix versions by @DragonWork
-* build(deps): update dependencies
-
-## New Contributors
-* @DragonWork made their first contribution
-* @dependabot[bot] made their first contribution in [#90](https://github.com/Zuplu/postfix-tlspol/pull/90)
+* build(deps): update dependencies by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.20...v1.8.21
 
