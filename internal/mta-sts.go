@@ -186,7 +186,7 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 	}
 	report = "policy_type=sts policy_domain=" + *domain + mxHosts + report
 
-	if mode == "enforce" {
+	if mode == "enforce" && len(mxServers) != 0 {
 		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"
 		return res, report, maxAge
 	}

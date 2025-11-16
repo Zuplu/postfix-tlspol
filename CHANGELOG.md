@@ -1,3 +1,9 @@
+## What's Changed in v1.8.22 (2025-11-16)
+
+* fix: reject MTA-STS policies with no MX hosts by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.21...v1.8.22
+
 ## What's Changed in v1.8.21 (2025-11-14)
 
 * build(deps): bump golang.org/x/sys from 0.37.0 to 0.38.0 in the golang-x group by @dependabot[bot] in [#89](https://github.com/Zuplu/postfix-tlspol/pull/89)
