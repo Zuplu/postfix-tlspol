@@ -1,3 +1,10 @@
+## What's Changed in v1.8.24 (2025-12-22)
+
+* chore(deps): bump the github-actions group with 2 updates by @dependabot[bot] in [#109](https://github.com/Zuplu/postfix-tlspol/pull/109)
+* fix: reorder cleanup by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.23...v1.8.24
+
 ## What's Changed in v1.8.23 (2025-12-22)
 
 * chore: fix Docker status badge in README.md by @DragonWork

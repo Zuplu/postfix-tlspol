@@ -417,11 +417,6 @@ func queryDomain(domain *string) (string, string, uint32) {
 	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+1) // we retry a request once after 750ms upon failure
 	defer cancel()
 	var wg sync.WaitGroup
-	go func() {
-		wg.Wait()
-		cancel()
-		close(results)
-	}()
 	wg.Add(2)
 
 	// DANE query
@@ -446,6 +441,12 @@ func queryDomain(domain *string) (string, string, uint32) {
 			case <-ctx.Done():
 			}
 		}
+	}()
+
+	go func() {
+		wg.Wait()
+		cancel()
+		close(results)
 	}()
 
 	policy, report := "", ""
