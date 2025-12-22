@@ -174,7 +174,7 @@ func startServer() {
 	}
 	if err != nil {
 		log.Errorf("Error starting socketmap server: %v", err)
-		return
+		os.Exit(1)
 	}
 	serverWg.Add(1)
 	defer func() {
