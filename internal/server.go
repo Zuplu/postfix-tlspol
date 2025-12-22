@@ -162,9 +162,12 @@ func startServer() {
 	var err error
 	if strings.HasPrefix(config.Server.Address, "unix:") {
 		socketPath := config.Server.Address[5:]
-		listener, err = net.Listen("unix", socketPath)
-		if err == nil {
-			err = os.Chmod(socketPath, config.Server.SocketPermissions)
+		err = os.Remove(socketPath)
+		if err == nil || os.IsNotExist(err) {
+			listener, err = net.Listen("unix", socketPath)
+			if err == nil {
+				err = os.Chmod(socketPath, config.Server.SocketPermissions)
+			}
 		}
 	} else {
 		listener, err = net.Listen("tcp", config.Server.Address)
