@@ -1,3 +1,18 @@
+## What's Changed in v1.8.23 (2025-12-22)
+
+* chore: fix Docker status badge in README.md by @DragonWork
+* build(deps): bump golang.org/x/sys from 0.38.0 to 0.39.0 in the golang-x group by @dependabot[bot] in [#103](https://github.com/Zuplu/postfix-tlspol/pull/103)
+* build(docker): bump golang from 1.25.4-alpine3.22 to 1.25.5-alpine3.22 in /deployments by @dependabot[bot] in [#102](https://github.com/Zuplu/postfix-tlspol/pull/102)
+* build(deps): bump golang.org/x/term from 0.37.0 to 0.38.0 in the golang-x group by @dependabot[bot] in [#105](https://github.com/Zuplu/postfix-tlspol/pull/105)
+* build(deps): bump github.com/miekg/dns from 1.1.68 to 1.1.69 by @dependabot[bot] in [#106](https://github.com/Zuplu/postfix-tlspol/pull/106)
+* build(deps): update indirect dependencies by @DragonWork
+* build: update toolchain to go1.25.5 by @DragonWork
+* fix: remove existing unix socket file if it exists before server startup by @DragonWork
+* fix: return non-zero exit code when server fails to start by @DragonWork
+* fix: fix race-conditions in parallel lookup leading to write on closed channel by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.22...v1.8.23
+
 ## What's Changed in v1.8.22 (2025-11-16)
 
 * fix: reject MTA-STS policies with no MX hosts by @DragonWork
