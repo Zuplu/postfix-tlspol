@@ -416,19 +416,11 @@ func queryDomain(domain *string) (string, string, uint32) {
 	results := make(chan PolicyResult, 2)
 	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+1) // we retry a request once after 750ms upon failure
 	defer cancel()
-	var mu sync.RWMutex
-	closed := false
-	go func() {
-		<-ctx.Done()
-		mu.Lock()
-		closed = true
-		mu.Unlock()
-		close(results)
-	}()
 	var wg sync.WaitGroup
 	go func() {
 		wg.Wait()
 		cancel()
+		close(results)
 	}()
 	wg.Add(2)
 
@@ -437,10 +429,9 @@ func queryDomain(domain *string) (string, string, uint32) {
 		defer wg.Done()
 		policy, ttl := checkDane(&ctx, domain, true)
 		if ctx.Err() == nil {
-			mu.RLock()
-			defer mu.RUnlock()
-			if !closed {
-				results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}
+			select {
+			case results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}:
+			case <-ctx.Done():
 			}
 		}
 	}()
@@ -450,10 +441,9 @@ func queryDomain(domain *string) (string, string, uint32) {
 		defer wg.Done()
 		policy, rpt, ttl := checkMtaSts(&ctx, domain, true)
 		if ctx.Err() == nil {
-			mu.RLock()
-			defer mu.RUnlock()
-			if !closed {
-				results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}
+			select {
+			case results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}:
+			case <-ctx.Done():
 			}
 		}
 	}()
