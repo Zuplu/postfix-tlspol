@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -430,6 +431,7 @@ func queryDomain(domain *string) (string, string, uint32) {
 			}
 		}
 	}()
+	runtime.Gosched()
 
 	// MTA-STS query
 	go func() {

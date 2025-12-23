@@ -205,16 +205,18 @@ func checkDane(ctx *context.Context, domain *string, mayRetry bool) (string, uin
 	if numRecords == 0 {
 		return "", 0
 	}
-	tlsaResults := make(chan ResultWithTTL)
+	tlsaResults := make(chan ResultWithTTL, numRecords)
+	cctx, cancel := context.WithCancel(*ctx)
 	for _, mx := range mxRecords {
 		go func(mx string) {
-			tlsaResults <- checkTlsa(ctx, &mx)
+			tlsaResults <- checkTlsa(&cctx, &mx)
 		}(mx)
 	}
-	return getDanePolicy(ctx, domain, mayRetry, ttl, incompl, numRecords, &tlsaResults)
+	return getDanePolicy(&cctx, cancel, domain, mayRetry, ttl, incompl, numRecords, &tlsaResults)
 }
 
-func getDanePolicy(ctx *context.Context, domain *string, mayRetry bool, ttl uint32, incompl bool, numRecords int, tlsaResults *chan ResultWithTTL) (string, uint32) {
+func getDanePolicy(ctx *context.Context, cancel func(), domain *string, mayRetry bool, ttl uint32, incompl bool, numRecords int, tlsaResults *chan ResultWithTTL) (string, uint32) {
+	defer cancel()
 	var ttls []uint32
 	ttls = append(ttls, ttl)
 	var i int = 0
