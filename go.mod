@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.25.5
 
 require (
-	github.com/miekg/dns v1.1.69
+	github.com/miekg/dns v1.1.70
 	go.yaml.in/yaml/v4 v4.0.0-rc.3
 	golang.org/x/sys v0.40.0
 	golang.org/x/term v0.39.0
