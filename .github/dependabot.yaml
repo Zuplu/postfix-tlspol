@@ -15,6 +15,10 @@ updates:
     directory: /deployments
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "golang"
+        versions:
+          - "*-rc*"
     commit-message:
       prefix: "build(docker)"
 
