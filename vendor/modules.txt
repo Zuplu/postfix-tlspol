@@ -1,7 +1,7 @@
 # github.com/miekg/dns v1.1.72
 ## explicit; go 1.24.0
 github.com/miekg/dns
-# go.yaml.in/yaml/v4 v4.0.0-rc.3
+# go.yaml.in/yaml/v4 v4.0.0-rc.4
 ## explicit; go 1.18
 go.yaml.in/yaml/v4
 go.yaml.in/yaml/v4/internal/libyaml
