@@ -1,3 +1,19 @@
+## What's Changed in v1.8.25 (2026-02-03)
+
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#112](https://github.com/Zuplu/postfix-tlspol/pull/112)
+* build(deps): bump github.com/miekg/dns from 1.1.69 to 1.1.70 by @dependabot[bot] in [#113](https://github.com/Zuplu/postfix-tlspol/pull/113)
+* refactor: micro-optimize parallel lookup by @DragonWork
+* build: update toolchain to go1.25.6 by @DragonWork
+* build(deps): update indirect dependencies by @DragonWork
+* chore: update dependabot.yaml to include indirect dependencies by @DragonWork
+* build(docker): bump golang from `bc25967` to `d9b2e14` in /deployments by @dependabot[bot] in [#117](https://github.com/Zuplu/postfix-tlspol/pull/117)
+* build(deps): bump github.com/miekg/dns from 1.1.70 to 1.1.72 by @dependabot[bot] in [#118](https://github.com/Zuplu/postfix-tlspol/pull/118)
+* build(deps): bump go.yaml.in/yaml/v4 from 4.0.0-rc.3 to 4.0.0-rc.4 by @dependabot[bot] in [#119](https://github.com/Zuplu/postfix-tlspol/pull/119)
+* build(docker): bump golang from `d9b2e14` to `98e6cff` in /deployments by @dependabot[bot] in [#121](https://github.com/Zuplu/postfix-tlspol/pull/121)
+* chore(release): update CHANGELOG.md by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.24...v1.8.25
+
 ## What's Changed in v1.8.24 (2025-12-22)
 
 * chore(deps): bump the github-actions group with 2 updates by @dependabot[bot] in [#109](https://github.com/Zuplu/postfix-tlspol/pull/109)
