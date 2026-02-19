@@ -1,3 +1,12 @@
+## What's Changed in v1.8.26 (2026-02-19)
+
+* build(deps): bump the golang-x group with 5 updates by @dependabot[bot] in [#124](https://github.com/Zuplu/postfix-tlspol/pull/124)
+* build: update toolchain to go1.26.0 by @DragonWork
+* build(docker): update golang to 1.26.0 by @DragonWork
+* chore: update CHANGELOG.md
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.25...v1.8.26
+
 ## What's Changed in v1.8.25 (2026-02-03)
 
 * build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#112](https://github.com/Zuplu/postfix-tlspol/pull/112)
