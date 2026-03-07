@@ -1,9 +1,15 @@
+## What's Changed in v1.8.27 (2026-03-07)
+
+* build(deps): bump golang.org/x/net from 0.50.0 to 0.51.0 in the golang-x group by @dependabot[bot] in [#126](https://github.com/Zuplu/postfix-tlspol/pull/126)
+* build: update toolchain to go1.26.1 (includes important security fixes) by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.26...v1.8.27
+
 ## What's Changed in v1.8.26 (2026-02-19)
 
 * build(deps): bump the golang-x group with 5 updates by @dependabot[bot] in [#124](https://github.com/Zuplu/postfix-tlspol/pull/124)
 * build: update toolchain to go1.26.0 by @DragonWork
 * build(docker): update golang to 1.26.0 by @DragonWork
-* chore: update CHANGELOG.md
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.25...v1.8.26
 
@@ -14,25 +20,21 @@
 * refactor: micro-optimize parallel lookup by @DragonWork
 * build: update toolchain to go1.25.6 by @DragonWork
 * build(deps): update indirect dependencies by @DragonWork
-* chore: update dependabot.yaml to include indirect dependencies by @DragonWork
 * build(docker): bump golang from `bc25967` to `d9b2e14` in /deployments by @dependabot[bot] in [#117](https://github.com/Zuplu/postfix-tlspol/pull/117)
 * build(deps): bump github.com/miekg/dns from 1.1.70 to 1.1.72 by @dependabot[bot] in [#118](https://github.com/Zuplu/postfix-tlspol/pull/118)
 * build(deps): bump go.yaml.in/yaml/v4 from 4.0.0-rc.3 to 4.0.0-rc.4 by @dependabot[bot] in [#119](https://github.com/Zuplu/postfix-tlspol/pull/119)
 * build(docker): bump golang from `d9b2e14` to `98e6cff` in /deployments by @dependabot[bot] in [#121](https://github.com/Zuplu/postfix-tlspol/pull/121)
-* chore(release): update CHANGELOG.md by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.24...v1.8.25
 
 ## What's Changed in v1.8.24 (2025-12-22)
 
-* chore(deps): bump the github-actions group with 2 updates by @dependabot[bot] in [#109](https://github.com/Zuplu/postfix-tlspol/pull/109)
 * fix: reorder cleanup by @DragonWork
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.23...v1.8.24
 
 ## What's Changed in v1.8.23 (2025-12-22)
 
-* chore: fix Docker status badge in README.md by @DragonWork
 * build(deps): bump golang.org/x/sys from 0.38.0 to 0.39.0 in the golang-x group by @dependabot[bot] in [#103](https://github.com/Zuplu/postfix-tlspol/pull/103)
 * build(docker): bump golang from 1.25.4-alpine3.22 to 1.25.5-alpine3.22 in /deployments by @dependabot[bot] in [#102](https://github.com/Zuplu/postfix-tlspol/pull/102)
 * build(deps): bump golang.org/x/term from 0.37.0 to 0.38.0 in the golang-x group by @dependabot[bot] in [#105](https://github.com/Zuplu/postfix-tlspol/pull/105)
@@ -86,7 +88,6 @@
 
 * build(docker): bump golang from 1.25.0-alpine3.22 to 1.25.1-alpine3.22 in /deployments by @dependabot[bot] in [#78](https://github.com/Zuplu/postfix-tlspol/pull/78)
 * build(deps): bump golang.org/x/term from 0.34.0 to 0.35.0 by @dependabot[bot] in [#79](https://github.com/Zuplu/postfix-tlspol/pull/79)
-* chore: update dependabot.yaml by @DragonWork
 * build(deps): update dependencies by @DragonWork
 * build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#84](https://github.com/Zuplu/postfix-tlspol/pull/84)
 * build(docker): bump golang from 1.25.1-alpine3.22 to 1.25.3-alpine3.22 in /deployments by @dependabot[bot] in [#85](https://github.com/Zuplu/postfix-tlspol/pull/85)
@@ -115,9 +116,7 @@
 * feat: fallback to system resolver without dns.address by @mweinelt in [#73](https://github.com/Zuplu/postfix-tlspol/pull/73)
 * refactor: rearrange imports by @DragonWork
 * fix: fix MTA-STS policy parsing by @DragonWork
-* chore(deps): bump actions/attest-build-provenance from 2.4.0 to 3.0.0 by @dependabot[bot] in [#75](https://github.com/Zuplu/postfix-tlspol/pull/75)
 * build(deps): bump go.yaml.in/yaml/v4 from 4.0.0-rc.1 to 4.0.0-rc.2 by @dependabot[bot] in [#74](https://github.com/Zuplu/postfix-tlspol/pull/74)
-* chore(release): update CHANGELOG.md by @DragonWork
 
 ## New Contributors
 * @mweinelt made their first contribution in [#73](https://github.com/Zuplu/postfix-tlspol/pull/73)
@@ -130,7 +129,6 @@
 * refactor: lowercase domain names to standardize data as they are case-insensitive per RFC 4343
 * fix: fine-tune prefetch algorithm
 * fix: cap `max_age` to `math.MaxUint32` to prevent overflow
-* chore: update dependabot.yaml
 * fix: reject literal IP addresses in MTA-STS policy validation
 
 **Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/7f83569...v1.8.15
