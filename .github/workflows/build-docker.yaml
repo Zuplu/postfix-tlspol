@@ -30,7 +30,7 @@ jobs:
       json: ${{ toJSON(steps.metadata.outputs.json) }}
     steps:
       - name: 📦 Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -50,7 +50,7 @@ jobs:
           echo "IS_LATEST=$IS_LATEST" >> "$GITHUB_ENV"
 
       - id: metadata
-        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # pin@v6.0.0
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf
         env:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: index
         with:
@@ -86,23 +86,23 @@ jobs:
           echo "PLATFORM=$PLATFORM" >> "$GITHUB_ENV"
 
       - name: 📦 Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pin@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: ⚙️ Set up QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # pin@v4.0.0
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a
 
       - name: 🛠️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # pin@v4.0.0
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
 
       - name: 🔐 Login to Docker Hub
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # pin@v4.0.0
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: 🏗️ Build platform-specific Docker image 🚧
         id: build
-        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # pin@v7.0.0
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294
         env:
           DOCKER_BUILD_SUMMARY: false
           DOCKER_BUILD_RECORD_UPLOAD: false
@@ -129,13 +129,13 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: 📤 Upload digest
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # pin@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: digest-${{ env.PLATFORM }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
-          compression-level: 0
+          archive: false
 
   bundle:
     name: 📦 Bundle and Deploy ✨
@@ -144,18 +144,19 @@ jobs:
     permissions:
       id-token: write
       attestations: write
+      artifact-metadata: write
     env:
       METADATA: ${{ fromJSON(needs.metadata.outputs.json) }}
     steps:
       - name: 📥 Download digests
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # pin@v4
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           path: ${{ runner.temp }}/digests
           pattern: digest-*
           merge-multiple: true
 
       - name: 🔐 Login to Docker Hub
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # pin@v4.0.0
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -170,7 +171,7 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
 
       - name: 🔏 Attest build provenance
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # pin@v4
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
         id: attest
         with:
           subject-name: docker.io/${{ env.REGISTRY_IMAGE }}
