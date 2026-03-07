@@ -3,9 +3,12 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
+      time: "07:00"
     commit-message:
       prefix: "chore(deps)"
+    cooldown:
+      default-days: 1
     groups:
       github-actions:
         patterns:
@@ -14,14 +17,22 @@ updates:
   - package-ecosystem: docker
     directory: /deployments
     schedule:
-      interval: weekly
+      interval: daily
+      time: "07:00"
+    cooldown:
+      default-days: 1
     commit-message:
       prefix: "build(docker)"
 
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
+      time: "07:00"
+    cooldown:
+      default-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 1
     allow:
       - dependency-type: all
     commit-message:
