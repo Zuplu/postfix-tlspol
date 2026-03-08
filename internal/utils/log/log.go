@@ -90,35 +90,35 @@ func logMessage(level LogLevel, message string) {
 	fmt.Fprintln(output, msg)
 }
 
-func Debug(v ...interface{}) {
+func Debug(v ...any) {
 	logMessage(DEBUG, fmt.Sprint(v...))
 }
 
-func Debugf(format string, v ...interface{}) {
+func Debugf(format string, v ...any) {
 	logMessage(DEBUG, fmt.Sprintf(format, v...))
 }
 
-func Info(v ...interface{}) {
+func Info(v ...any) {
 	logMessage(INFO, fmt.Sprint(v...))
 }
 
-func Infof(format string, v ...interface{}) {
+func Infof(format string, v ...any) {
 	logMessage(INFO, fmt.Sprintf(format, v...))
 }
 
-func Warn(v ...interface{}) {
+func Warn(v ...any) {
 	logMessage(WARN, fmt.Sprint(v...))
 }
 
-func Warnf(format string, v ...interface{}) {
+func Warnf(format string, v ...any) {
 	logMessage(WARN, fmt.Sprintf(format, v...))
 }
 
-func Error(v ...interface{}) {
+func Error(v ...any) {
 	logMessage(ERROR, fmt.Sprint(v...))
 }
 
-func Errorf(format string, v ...interface{}) {
+func Errorf(format string, v ...any) {
 	logMessage(ERROR, fmt.Sprintf(format, v...))
 }
 

@@ -31,7 +31,7 @@ type ServerConfig struct {
 	Prefetch          bool        `yaml:"prefetch"`
 }
 
-func (c *ServerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	// Set default values
 	c.Address = defaultConfig.Server.Address
 	c.SocketPermissions = defaultConfig.Server.SocketPermissions
@@ -128,7 +128,7 @@ func (c *DnsConfig) GetResolverAddress() (string, error) {
 	return *c.Address, nil
 }
 
-func (c *DnsConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+func (c *DnsConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	// Set default values
 	c.Address = defaultConfig.Dns.Address
 	type alias DnsConfig
