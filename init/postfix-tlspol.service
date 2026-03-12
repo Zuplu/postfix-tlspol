@@ -41,6 +41,7 @@ RuntimeDirectory=postfix-tlspol
 RuntimeDirectoryMode=1755
 StateDirectory=postfix-tlspol
 WorkingDirectory=/var/lib/postfix-tlspol
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target
