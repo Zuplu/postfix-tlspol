@@ -8,7 +8,6 @@ require (
 	github.com/miekg/dns v1.1.72
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
 	golang.org/x/sys v0.42.0
-	golang.org/x/term v0.41.0
 )
 
 require (
