@@ -10,10 +10,10 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"slices"
 	"time"
 
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
 	"github.com/miekg/dns"
@@ -197,7 +197,7 @@ func checkDane(ctx *context.Context, domain *string, mayRetry bool) (string, uin
 				time.Sleep(750 * time.Millisecond)
 				return checkDane(ctx, domain, false)
 			}
-			log.Warnf("DNS error during MX lookup for %q: %v", *domain, err)
+			slog.Warn("DNS error during MX lookup", "domain", *domain, "error", err)
 		}
 		return "TEMP", 0
 	}
@@ -235,7 +235,7 @@ func getDanePolicy(ctx *context.Context, cancel func(), domain *string, mayRetry
 					time.Sleep(750 * time.Millisecond)
 					return checkDane(ctx, domain, false)
 				}
-				log.Warnf("DNS error during TLSA lookup for %q: %v", *domain, res.Err)
+				slog.Warn("DNS error during TLSA lookup", "domain", *domain, "error", res.Err)
 			}
 			return "TEMP", 0
 		}

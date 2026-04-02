@@ -10,12 +10,12 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
 
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 )
@@ -27,7 +27,7 @@ func flagCliConnFunc(f *flag.Flag) {
 		cliConnMode = true
 		value = (*f).Value.String()
 		if len(value) == 0 || !valid.IsDNSName(value) {
-			log.Errorf("Invalid domain: %q", value)
+			slog.Error("Invalid domain", "domain", value)
 			return
 		}
 	case "dump", "export", "purge":
@@ -43,7 +43,7 @@ func flagCliConnFunc(f *flag.Flag) {
 		conn, err = net.Dial("tcp", config.Server.Address)
 	}
 	if err != nil {
-		log.Errorf("Could not connect to socketmap instance. Is postfix-tlspol running? (%v)", err)
+		slog.Error("Could not connect to socketmap instance. Is postfix-tlspol running?", "error", err)
 		return
 	}
 	defer conn.Close()
@@ -63,13 +63,13 @@ func cliQuery(f *flag.Flag, conn *net.Conn, value *string) {
 	(*conn).Write(netstring.Marshal("JSON " + *value))
 	raw, err := bufio.NewReader(*conn).ReadBytes('\n')
 	if err != nil {
-		log.Errorf("Could not query domain %q. (%v)", *value, err)
+		slog.Error("Could not query domain", "domain", *value, "error", err)
 		return
 	}
 	result := new(Result)
 	err = json.Unmarshal(raw, &result)
 	if err != nil {
-		log.Errorf("Could not query domain %q. (%v)", *value, err)
+		slog.Error("Could not query domain %q. (%v)", "domain", *value, "error", err)
 		return
 	}
 	o, err := os.Stdout.Stat()
@@ -93,7 +93,7 @@ func cliQuery(f *flag.Flag, conn *net.Conn, value *string) {
 		err = enc.Encode(result)
 	}
 	if err != nil {
-		log.Errorf("Could not query domain %q. (%v)", *value, err)
+		slog.Error("Could not query domain", "domain", *value, "error", err)
 		return
 	}
 	return

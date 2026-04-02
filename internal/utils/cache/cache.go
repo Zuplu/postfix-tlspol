@@ -9,11 +9,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/gob"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
-
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 )
 
 type Cacheable interface {
@@ -76,7 +75,7 @@ func New[T Cacheable](_ T, filePath string, savePeriod time.Duration) *Cache[T] 
 		quit:       make(chan struct{}),
 	}
 	if err := c.load(); err != nil {
-		log.Errorf("cache: error loading persisted data: %v", err)
+		slog.Error("cache: error loading persisted data", "error", err)
 	}
 	c.wg.Add(1)
 	go c.periodicSave()
@@ -130,7 +129,7 @@ func (c *Cache[T]) Close() {
 	close(c.quit)
 	c.wg.Wait()
 	if err := c.Save(false); err != nil {
-		log.Errorf("cache: error during final save: %v", err)
+		slog.Error("cache: error during final save", "error", err)
 	}
 }
 
@@ -143,7 +142,7 @@ func (c *Cache[T]) periodicSave() {
 		case <-ticker.C:
 			go func() {
 				if err := c.Save(false); err != nil {
-					log.Errorf("cache: error saving cache: %v", err)
+					slog.Error("cache: error saving cache", "error", err)
 				}
 			}()
 		case <-c.quit:

@@ -6,6 +6,7 @@
 package tlspol
 
 import (
+	"log/slog"
 	"math/rand/v2"
 	"runtime"
 	"sync"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 )
 
 const (
@@ -26,7 +26,7 @@ func startPrefetching() {
 	if !config.Server.Prefetch {
 		return
 	}
-	log.Info("Prefetching enabled!")
+	slog.Info("Prefetching enabled")
 	ticker := time.NewTicker(time.Duration(PREFETCH_INTERVAL) * time.Second)
 	semaphore = make(chan struct{}, runtime.NumCPU()*4+2)
 	for range ticker.C {
@@ -73,6 +73,6 @@ func prefetchCachedPolicies() {
 	wg.Wait()
 	count := counter.Load()
 	if count > 0 {
-		log.Debugf("Prefetched %d of %d policies", count, itemsCount)
+		slog.Debug("Prefetched policies", "count", count, "total", itemsCount)
 	}
 }

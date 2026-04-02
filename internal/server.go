@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
@@ -50,6 +50,7 @@ const (
 var (
 	Version     = "undefined"
 	bgCtx       = context.Background()
+	levelVar    = new(slog.LevelVar)
 	client      = dns.Client{UDPSize: 4096, Timeout: REQUEST_TIMEOUT}
 	config      Config
 	polCache    *cache.Cache[*CacheStruct]
@@ -95,9 +96,20 @@ func StartDaemon(v *string, licenseText *string) {
 	var err error
 	config, err = loadConfig(configFile)
 	if err != nil {
-		log.Errorf("Error loading config: %v", err)
+		slog.Error("Error loading config", "error", err)
 		return
 	}
+	levelVar.Set(config.Server.LogLevel)
+	handlerOpts := &slog.HandlerOptions{
+		Level: levelVar,
+	}
+	var handler slog.Handler
+	if strings.ToLower(strings.TrimSpace(config.Server.LogFormat)) == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, handlerOpts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, handlerOpts)
+	}
+	slog.SetDefault(slog.New(handler))
 
 	flag.Visit(flagCliConnFunc)
 
@@ -111,7 +123,6 @@ func StartDaemon(v *string, licenseText *string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n", curYear, Version)
-	log.SetLevel(config.Server.LogLevel)
 
 	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
@@ -132,7 +143,7 @@ func listenForSignals() {
 	go func() {
 		for {
 			sig := <-signals
-			log.Infof("Received signal: %v, saving cache...", sig)
+			slog.Info("Received signal, saving cache...", "signal", sig)
 			_ = tidyCache()
 			if sig == syscall.SIGHUP {
 				continue
@@ -174,7 +185,7 @@ func startServer() {
 		listener, err = net.Listen("tcp", config.Server.Address)
 	}
 	if err != nil {
-		log.Errorf("Error starting socketmap server: %v", err)
+		slog.Error("Error starting socketmap server", "error", err)
 		os.Exit(1)
 	}
 	serverWg.Add(1)
@@ -183,7 +194,7 @@ func startServer() {
 		serverWg.Done()
 	}()
 
-	log.Infof("Listening on %s...", config.Server.Address)
+	slog.Info("Server listening", "address", config.Server.Address)
 
 	for {
 		conn, err := listener.Accept()
@@ -191,13 +202,13 @@ func startServer() {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				break
 			}
-			log.Errorf("Error accepting connection: %v", err)
+			slog.Error("Error accepting connection", "error", err)
 			break
 		}
 		go handleConnection(&conn)
 	}
 
-	log.Info("Socketmap server terminated.")
+	slog.Info("Socketmap server terminated")
 }
 
 func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheStruct, bool) {
@@ -207,10 +218,10 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheSt
 		if ttl > 0 {
 			switch c.Policy {
 			case "":
-				log.Infof("No policy found for %q (from cache, %s remaining)", *domain, time.Duration(ttl)*time.Second)
+				slog.Info("No policy found", "source", "cache", "domain", *domain, "ttl", (time.Duration(ttl) * time.Second).String())
 				(*conn).Write(NS_NOTFOUND)
 			default:
-				log.Infof("Evaluated policy for %q: %s (from cache, %s remaining)", *domain, c.Policy, time.Duration(ttl)*time.Second)
+				slog.Info("Evaluated policy", "source", "cache", "domain", *domain, "policy", c.Policy, "ttl", (time.Duration(ttl) * time.Second).String())
 				var res string
 				if *withTlsRpt {
 					res = c.Policy + " " + c.Report
@@ -286,7 +297,7 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 
 	b, err := json.Marshal(r)
 	if err != nil {
-		log.Errorf("Could not marshal JSON: %v", err)
+		slog.Error("Could not marshal JSON", "error", err)
 		return
 	}
 
@@ -296,13 +307,13 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
 	switch *policy {
 	case "":
-		log.Infof("No policy found for %q (cached for %s)", *domain, time.Duration(*ttl)*time.Second)
+		slog.Info("No policy found", "source", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).String())
 		(*conn).Write(NS_NOTFOUND)
 	case "TEMP":
-		log.Warnf("Evaluating policy for %q failed temporarily (cached for %s)", *domain, time.Duration(*ttl)*time.Second)
+		slog.Warn("Evaluating policy failed temporarily", "source", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).String())
 		(*conn).Write(NS_TEMP)
 	default:
-		log.Infof("Evaluated policy for %q: %s (cached for %s)", *domain, *policy, time.Duration(*ttl)*time.Second)
+		slog.Info("Evaluated policy", "source", "network", "domain", *domain, "policy", *policy, "ttl", (time.Duration(*ttl) * time.Second).String())
 		res := *policy
 		if *withTlsRpt {
 			res = res + " " + *report
@@ -340,7 +351,7 @@ func handleConnection(conn *net.Conn) {
 				workChan <- false
 				return
 			default:
-				log.Warnf("Unknown command: %q", query)
+				slog.Warn("Unknown command", "query", query)
 				(*conn).Write(NS_PERM)
 				workChan <- false
 				return

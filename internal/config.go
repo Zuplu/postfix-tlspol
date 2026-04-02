@@ -7,12 +7,11 @@ package tlspol
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
 	"sync"
-
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 
 	"github.com/miekg/dns"
 	"go.yaml.in/yaml/v4"
@@ -25,7 +24,8 @@ type ServerConfig struct {
 	Address           string `yaml:"address"`
 	CacheFile         string `yaml:"cache-file"`
 	NamedLogLevel     string `yaml:"log-level"`
-	LogLevel          log.LogLevel
+	LogLevel          slog.Level
+	LogFormat         string      `yaml:"log-format"`
 	SocketPermissions os.FileMode `yaml:"socket-permissions"`
 	TlsRpt            bool        `yaml:"tlsrpt"`
 	Prefetch          bool        `yaml:"prefetch"`
@@ -43,7 +43,12 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
 	}
-	c.LogLevel = log.LogLevels[strings.ToLower(c.NamedLogLevel)]
+	var lvl slog.Level
+	err := lvl.UnmarshalText([]byte(strings.ToLower(c.NamedLogLevel)))
+	if err != nil {
+		lvl = slog.LevelInfo
+	}
+	c.LogLevel = lvl
 	return nil
 }
 
@@ -64,10 +69,10 @@ var resolvConf = sync.OnceValue(func() *ResolvConf {
 func NewResolvConf(path string) *ResolvConf {
 	cfg, err := dns.ClientConfigFromFile(path)
 	if err != nil {
-		log.Errorf("Reading from %q failed: %v", path, err)
+		slog.Error("Reading DNS configuration failed", "path", path, "error", err)
 		return nil
 	}
-	log.Infof("Read DNS configuration from %q", path)
+	slog.Info("Read DNS configuration", "path", path)
 	rc := &ResolvConf{
 		config: cfg,
 		path:   path,
@@ -85,12 +90,12 @@ func (rc *ResolvConf) Get() *dns.ClientConfig {
 func (rc *ResolvConf) watch() {
 	fd, err := unix.InotifyInit()
 	if err != nil {
-		log.Errorf("InotifyInit() for /etc/resolv.conf failed: %v", err)
+		slog.Error("InotifyInit() failed", "path", rc.path, "error", err)
 		return
 	}
 	_, err = unix.InotifyAddWatch(fd, rc.path, unix.IN_CLOSE_WRITE)
 	if err != nil {
-		log.Errorf("InotifyAddWatch() for /etc/resolv.conf failed: %v", err)
+		slog.Error("InotifyAddWatch() failed", "path", rc.path, "error", err)
 		return
 	}
 	buf := make([]byte, 4096)
@@ -105,9 +110,9 @@ func (rc *ResolvConf) watch() {
 				rc.Lock()
 				rc.config = cfg
 				rc.Unlock()
-				log.Infof("Reloaded %q", rc.path)
+				slog.Info("Reloaded DNS configuration", "path", rc.path)
 			} else {
-				log.Errorf("Failed to reload %q: %v", rc.path, err)
+				slog.Error("Failed to reload DNS configuration", "path", rc.path, "error", err)
 			}
 		}
 	}
@@ -145,7 +150,7 @@ type Config struct {
 
 func SetDefaultConfig(data *[]byte) {
 	if err := yaml.Unmarshal(*data, &defaultConfig); err != nil {
-		log.Errorf("Could not initialize default configuration: %v", err)
+		slog.Error("Could not initialize default configuration", "error", err)
 	}
 }
 

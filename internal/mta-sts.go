@@ -10,12 +10,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Zuplu/postfix-tlspol/internal/utils/log"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
 	"github.com/miekg/dns"
@@ -141,7 +141,7 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 				time.Sleep(750 * time.Millisecond)
 				return checkMtaSts(ctx, domain, false)
 			}
-			log.Warnf("DNS error during MTA-STS lookup for %q: %v", *domain, err)
+			slog.Warn("DNS error during MTA-STS lookup", "domain", *domain, "error", err)
 		}
 		return "", "", 0
 	}
