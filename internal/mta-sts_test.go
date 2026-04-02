@@ -1,3 +1,8 @@
+/*
+ * MIT License
+ * Copyright (c) 2024-2026 Zuplu
+ */
+
 package tlspol
 
 import (
