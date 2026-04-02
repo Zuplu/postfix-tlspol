@@ -1,6 +1,6 @@
 /*
  * MIT License
- * Copyright (c) 2024-2025 Zuplu
+ * Copyright (c) 2024-2026 Zuplu
  */
 
 package cache
