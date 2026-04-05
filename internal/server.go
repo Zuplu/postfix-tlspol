@@ -218,10 +218,10 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheSt
 		if ttl > 0 {
 			switch c.Policy {
 			case "":
-				slog.Info("No policy found", "source", "cache", "domain", *domain, "ttl", (time.Duration(ttl) * time.Second).String())
+				slog.Info("No policy found", "origin", "cache", "domain", *domain, "ttl", (time.Duration(ttl) * time.Second).Seconds())
 				(*conn).Write(NS_NOTFOUND)
 			default:
-				slog.Info("Evaluated policy", "source", "cache", "domain", *domain, "policy", c.Policy, "ttl", (time.Duration(ttl) * time.Second).String())
+				slog.Info("Evaluated policy", "origin", "cache", "domain", *domain, "policy", firstWord(c.Policy), "ttl", (time.Duration(ttl) * time.Second).Seconds())
 				var res string
 				if *withTlsRpt {
 					res = c.Policy + " " + c.Report
@@ -238,15 +238,15 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheSt
 }
 
 type DanePolicy struct {
-	Policy string `json:"policy"`
-	Time   string `json:"time"`
-	TTL    uint32 `json:"ttl"`
+	Policy string  `json:"policy"`
+	Time   float64 `json:"time"`
+	TTL    uint32  `json:"ttl"`
 }
 type MtaStsPolicy struct {
-	Policy string `json:"policy"`
-	Report string `json:"report"`
-	Time   string `json:"time"`
-	TTL    uint32 `json:"ttl"`
+	Policy string  `json:"policy"`
+	Report string  `json:"report"`
+	Time   float64 `json:"time"`
+	TTL    uint32  `json:"ttl"`
 }
 type Result struct {
 	Version string       `json:"version"`
@@ -285,13 +285,13 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 		Dane: DanePolicy{
 			Policy: dPol,
 			TTL:    dTTL,
-			Time:   tb.Sub(ta).Truncate(time.Millisecond).String(),
+			Time:   tb.Sub(ta).Truncate(time.Millisecond).Seconds(),
 		},
 		MtaSts: MtaStsPolicy{
 			Policy: msPol,
 			TTL:    msTTL,
 			Report: msRpt,
-			Time:   tc.Sub(ta).Truncate(time.Millisecond).String(),
+			Time:   tc.Sub(ta).Truncate(time.Millisecond).Seconds(),
 		},
 	}
 
@@ -307,13 +307,13 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
 	switch *policy {
 	case "":
-		slog.Info("No policy found", "source", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).String())
+		slog.Info("No policy found", "origin", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).Seconds())
 		(*conn).Write(NS_NOTFOUND)
 	case "TEMP":
-		slog.Warn("Evaluating policy failed temporarily", "source", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).String())
+		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).Seconds())
 		(*conn).Write(NS_TEMP)
 	default:
-		slog.Info("Evaluated policy", "source", "network", "domain", *domain, "policy", *policy, "ttl", (time.Duration(*ttl) * time.Second).String())
+		slog.Info("Evaluated policy", "origin", "network", "domain", *domain, "policy", firstWord(*policy), "ttl", (time.Duration(*ttl) * time.Second).Seconds())
 		res := *policy
 		if *withTlsRpt {
 			res = res + " " + *report
@@ -532,4 +532,13 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 		}
 	}
 	return entries
+}
+
+func firstWord(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' {
+			return s[:i]
+		}
+	}
+	return s
 }
