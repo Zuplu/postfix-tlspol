@@ -9,16 +9,71 @@ import (
 	"bufio"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 )
+
+type dialTarget struct {
+	network string
+	address string
+}
+
+func appendDialTarget(targets []dialTarget, seen map[string]struct{}, network string, address string) []dialTarget {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return targets
+	}
+	key := network + "|" + address
+	if _, exists := seen[key]; exists {
+		return targets
+	}
+	seen[key] = struct{}{}
+	return append(targets, dialTarget{
+		network: network,
+		address: address,
+	})
+}
+
+func dialConfiguredOrDetectedSocketmap() (net.Conn, string, error) {
+	seen := make(map[string]struct{})
+	targets := make([]dialTarget, 0, 4)
+
+	if strings.HasPrefix(config.Server.Address, "unix:") {
+		targets = appendDialTarget(targets, seen, "unix", config.Server.Address[5:])
+	} else {
+		targets = appendDialTarget(targets, seen, "tcp", config.Server.Address)
+	}
+
+	// Probe known defaults so CLI works with systemd socket activation
+	// even when server.address does not match the active listener(s).
+	targets = appendDialTarget(targets, seen, "unix", "/run/postfix-tlspol/tlspol.sock")
+	targets = appendDialTarget(targets, seen, "tcp", "127.0.0.1:8642")
+	targets = appendDialTarget(targets, seen, "tcp", "localhost:8642")
+
+	var (
+		lastErr  error
+		attempts []string
+	)
+	for _, t := range targets {
+		attempts = append(attempts, t.network+":"+t.address)
+		conn, err := net.DialTimeout(t.network, t.address, 750*time.Millisecond)
+		if err == nil {
+			return conn, t.network + ":" + t.address, nil
+		}
+		lastErr = err
+	}
+
+	return nil, strings.Join(attempts, ", "), fmt.Errorf("all connection attempts failed (last error: %w)", lastErr)
+}
 
 func flagCliConnFunc(f *flag.Flag) {
 	var value string
@@ -35,18 +90,13 @@ func flagCliConnFunc(f *flag.Flag) {
 	default:
 		return
 	}
-	var conn net.Conn
-	var err error
-	if strings.HasPrefix(config.Server.Address, "unix:") {
-		conn, err = net.Dial("unix", config.Server.Address[5:])
-	} else {
-		conn, err = net.Dial("tcp", config.Server.Address)
-	}
+	conn, dialedEndpoint, err := dialConfiguredOrDetectedSocketmap()
 	if err != nil {
-		slog.Error("Could not connect to socketmap instance. Is postfix-tlspol running?", "error", err)
+		slog.Error("Could not connect to socketmap instance. Is postfix-tlspol running?", "error", err, "attempted_endpoints", dialedEndpoint)
 		return
 	}
 	defer conn.Close()
+	slog.Debug("Connected to socketmap instance", "endpoint", dialedEndpoint)
 	switch (*f).Name {
 	case "query":
 		cliQuery(f, &conn, &value)

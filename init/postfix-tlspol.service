@@ -2,6 +2,7 @@
 Description=postfix-tlspol daemon
 After=nss-lookup.target network-online.target
 Wants=nss-lookup.target
+Requires=postfix-tlspol.socket
 
 [Service]
 ExecStart=/usr/bin/postfix-tlspol -config /etc/postfix-tlspol/config.yaml
@@ -39,6 +40,7 @@ ReadOnlyPaths=/etc/postfix-tlspol
 UMask=0111
 RuntimeDirectory=postfix-tlspol
 RuntimeDirectoryMode=1755
+RuntimeDirectoryPreserve=yes
 StateDirectory=postfix-tlspol
 WorkingDirectory=/var/lib/postfix-tlspol
 OOMPolicy=continue

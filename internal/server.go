@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -58,7 +59,7 @@ var (
 	NS_TEMP     = netstring.Marshal("TEMP ")
 	NS_PERM     = netstring.Marshal("PERM ")
 	NS_TIMEOUT  = netstring.Marshal("TIMEOUT ")
-	listener    net.Listener
+	listeners   []net.Listener
 	serverWg    sync.WaitGroup
 	showVersion = false
 	showLicense = false
@@ -149,8 +150,12 @@ func listenForSignals() {
 				continue
 			}
 			polCache.Close()
-			if listener != nil {
-				listener.Close()
+			if len(listeners) > 0 {
+				for _, l := range listeners {
+					if l != nil {
+						l.Close()
+					}
+				}
 				serverWg.Wait()
 			}
 			os.Exit(0)
@@ -170,43 +175,142 @@ func readEnv() {
 	}
 }
 
+func listenSystemdSocket() ([]net.Listener, bool, error) {
+	listenPID, ok := os.LookupEnv("LISTEN_PID")
+	if !ok {
+		return nil, false, nil
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(listenPID))
+	if err != nil || pid != os.Getpid() {
+		return nil, false, nil
+	}
+
+	listenFDS, ok := os.LookupEnv("LISTEN_FDS")
+	if !ok {
+		return nil, false, nil
+	}
+	fds, err := strconv.Atoi(strings.TrimSpace(listenFDS))
+	if err != nil || fds < 1 {
+		return nil, false, nil
+	}
+
+	listeners := make([]net.Listener, 0, fds)
+	for i := 0; i < fds; i++ {
+		fdNum := uintptr(3 + i)
+		fdFile := os.NewFile(fdNum, fmt.Sprintf("systemd-listen-fd-%d", fdNum))
+		if fdFile == nil {
+			for _, existing := range listeners {
+				existing.Close()
+			}
+			return nil, false, fmt.Errorf("could not open inherited systemd socket fd %d", fdNum)
+		}
+
+		l, err := net.FileListener(fdFile)
+		fdFile.Close()
+		if err != nil {
+			for _, existing := range listeners {
+				existing.Close()
+			}
+			return nil, false, fmt.Errorf("failed to inherit socket activation fd %d: %w", fdNum, err)
+		}
+		listeners = append(listeners, l)
+	}
+
+	_ = os.Unsetenv("LISTEN_PID")
+	_ = os.Unsetenv("LISTEN_FDS")
+	_ = os.Unsetenv("LISTEN_FDNAMES")
+
+	return listeners, true, nil
+}
+
+func serveListener(l net.Listener) {
+	defer serverWg.Done()
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				break
+			}
+			addr := l.Addr()
+			if addr == nil {
+				slog.Error("Error accepting connection", "error", err, "network", "<unknown>", "address", "<unknown>")
+			} else {
+				slog.Error("Error accepting connection", "error", err, "network", addr.Network(), "address", addr.String())
+			}
+			break
+		}
+		go handleConnection(&conn)
+	}
+}
+
 func startServer() {
 	var err error
-	if strings.HasPrefix(config.Server.Address, "unix:") {
-		socketPath := config.Server.Address[5:]
-		err = os.Remove(socketPath)
-		if err == nil || os.IsNotExist(err) {
-			listener, err = net.Listen("unix", socketPath)
-			if err == nil {
-				err = os.Chmod(socketPath, config.Server.SocketPermissions)
+	listeners, inherited, err := listenSystemdSocket()
+	if err != nil {
+		slog.Error("Error inheriting systemd-activated socket", "error", err)
+		os.Exit(1)
+	}
+
+	if !inherited {
+		var directListener net.Listener
+		if strings.HasPrefix(config.Server.Address, "unix:") {
+			socketPath := config.Server.Address[5:]
+			err = os.Remove(socketPath)
+			if err == nil || os.IsNotExist(err) {
+				directListener, err = net.Listen("unix", socketPath)
+				if err == nil {
+					err = os.Chmod(socketPath, config.Server.SocketPermissions)
+				}
 			}
+		} else {
+			directListener, err = net.Listen("tcp", config.Server.Address)
+		}
+		if err == nil {
+			listeners = []net.Listener{directListener}
 		}
 	} else {
-		listener, err = net.Listen("tcp", config.Server.Address)
+		slog.Info("Using systemd socket activation")
 	}
 	if err != nil {
 		slog.Error("Error starting socketmap server", "error", err)
 		os.Exit(1)
 	}
-	serverWg.Add(1)
+
+	if len(listeners) == 0 {
+		slog.Error("Error starting socketmap server", "error", "no listeners available")
+		os.Exit(1)
+	}
+
+	if inherited {
+		for _, l := range listeners {
+			addr := l.Addr()
+			if addr == nil {
+				slog.Info("Server listening", "activation", "systemd", "network", "<unknown>", "address", "<unknown>")
+				continue
+			}
+			slog.Info("Server listening", "activation", "systemd", "network", addr.Network(), "address", addr.String())
+		}
+		slog.Warn("Ignoring configured server.address because systemd socket activation is active", "configured_address", config.Server.Address)
+		slog.Info("Listening on all systemd-provided sockets", "configured_address", config.Server.Address, "count", len(listeners))
+	} else {
+		addr := listeners[0].Addr()
+		if addr == nil {
+			slog.Info("Server listening", "activation", "direct", "network", "<unknown>", "address", "<unknown>")
+		} else {
+			slog.Info("Server listening", "activation", "direct", "network", addr.Network(), "address", addr.String())
+		}
+	}
+
 	defer func() {
-		listener = nil
-		serverWg.Done()
+		listeners = nil
 	}()
 
-	slog.Info("Server listening", "address", config.Server.Address)
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				break
-			}
-			slog.Error("Error accepting connection", "error", err)
-			break
-		}
-		go handleConnection(&conn)
+	serverWg.Add(len(listeners))
+	for _, l := range listeners {
+		go serveListener(l)
 	}
+	serverWg.Wait()
 
 	slog.Info("Socketmap server terminated")
 }

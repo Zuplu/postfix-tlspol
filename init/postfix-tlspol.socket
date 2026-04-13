@@ -1,0 +1,14 @@
+[Unit]
+Description=postfix-tlspol socket
+
+[Socket]
+# For overrides via "systemctl edit postfix-tlspol.socket":
+# set "ListenStream=" first to clear this default TCP listener before adding
+# your custom Unix socket ListenStream path.
+ListenStream=127.0.0.1:8642
+SocketMode=0666
+DirectoryMode=0755
+Accept=no
+
+[Install]
+WantedBy=sockets.target

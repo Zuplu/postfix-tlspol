@@ -67,6 +67,10 @@ log_meta() {
   printf "%b\n" "${cyanbg}$*${rst}"
 }
 
+sed_escape_replacement() {
+  printf "%s" "$1" | sed 's/[\\&|]/\\&/g'
+}
+
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
   act="${act:-build-only}"
   NOTEST="${NOTEST:-1}"
@@ -286,26 +290,45 @@ install_systemd_service() {
   fi
 
   install -d -m 0755 "$SYSTEMDUNITDIR"
-  install -m 0644 init/postfix-tlspol.service "$SYSTEMDUNITDIR/postfix-tlspol.service"
+  tmp_unit="$(mktemp)"
+  trap 'rm -f "$tmp_unit"' EXIT HUP INT TERM
+
+  unit_exec="$(sed_escape_replacement "${BINDIR%/}/postfix-tlspol")"
+  unit_cfg="$(sed_escape_replacement "${ETCDIR%/}/config.yaml")"
+  unit_workdir="$(sed_escape_replacement "${DATADIR%/}")"
+
+  sed \
+    -e "s|/usr/bin/postfix-tlspol|$unit_exec|g" \
+    -e "s|/etc/postfix-tlspol/config.yaml|$unit_cfg|g" \
+    -e "s|/var/lib/postfix-tlspol|$unit_workdir|g" \
+    init/postfix-tlspol.service > "$tmp_unit"
+
+  install -m 0644 "$tmp_unit" "$SYSTEMDUNITDIR/postfix-tlspol.service"
+  install -m 0644 init/postfix-tlspol.socket "$SYSTEMDUNITDIR/postfix-tlspol.socket"
+  rm -f "$tmp_unit"
+  trap - EXIT HUP INT TERM
+  log_info "Reinstalled systemd unit templates:"
+  log_info "  $SYSTEMDUNITDIR/postfix-tlspol.service"
+  log_info "  $SYSTEMDUNITDIR/postfix-tlspol.socket"
+  log_warn "For local modifications, use 'systemctl edit postfix-tlspol.service' or 'systemctl edit postfix-tlspol.socket'."
+  log_warn "If overriding ListenStream in postfix-tlspol.socket, add an empty 'ListenStream=' first to clear the default TCP listener."
+  log_warn "Do not edit installed unit files directly; reinstalls overwrite templates."
 
   if [ "$PREFIX" != "/" ]; then
     log_warn "PREFIX is not '/'; installed unit file into staging root only:"
     log_warn "  $SYSTEMDUNITDIR/postfix-tlspol.service"
+    log_warn "  $SYSTEMDUNITDIR/postfix-tlspol.socket"
     log_warn "Skipping daemon-reload/enable/restart on host system."
     return 0
   fi
 
   systemctl daemon-reload
+  log_warn "Ensuring socket unit is enabled..."
+  systemctl enable --now postfix-tlspol.socket
+  log_warn "Restarting service unit..."
+  systemctl restart postfix-tlspol.service
 
-  if systemctl is-enabled postfix-tlspol.service > /dev/null 2>&1; then
-    log_warn "Restarting service unit..."
-    systemctl reenable postfix-tlspol.service
-    systemctl restart postfix-tlspol.service
-  else
-    log_warn "Enabling and starting service unit..."
-    systemctl enable --now postfix-tlspol.service
-  fi
-
+  systemctl status --all --no-pager postfix-tlspol.socket
   systemctl status --all --no-pager postfix-tlspol.service
 }
 
