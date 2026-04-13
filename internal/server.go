@@ -322,10 +322,10 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheSt
 		if ttl > 0 {
 			switch c.Policy {
 			case "":
-				slog.Info("No policy found", "origin", "cache", "domain", *domain, "ttl", (time.Duration(ttl) * time.Second).Seconds())
+				slog.Info("No policy found", "origin", "cache", "domain", *domain, "ttl", ttl)
 				(*conn).Write(NS_NOTFOUND)
 			default:
-				slog.Info("Evaluated policy", "origin", "cache", "domain", *domain, "policy", firstWord(c.Policy), "ttl", (time.Duration(ttl) * time.Second).Seconds())
+				slog.Info("Evaluated policy", "origin", "cache", "domain", *domain, "policy", firstWord(c.Policy), "ttl", ttl)
 				var res string
 				if *withTlsRpt {
 					res = c.Policy + " " + c.Report
@@ -411,13 +411,13 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
 	switch *policy {
 	case "":
-		slog.Info("No policy found", "origin", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).Seconds())
+		slog.Info("No policy found", "origin", "network", "domain", *domain, "ttl", *ttl)
 		(*conn).Write(NS_NOTFOUND)
 	case "TEMP":
-		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", *domain, "ttl", (time.Duration(*ttl) * time.Second).Seconds())
+		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", *domain, "ttl", *ttl)
 		(*conn).Write(NS_TEMP)
 	default:
-		slog.Info("Evaluated policy", "origin", "network", "domain", *domain, "policy", firstWord(*policy), "ttl", (time.Duration(*ttl) * time.Second).Seconds())
+		slog.Info("Evaluated policy", "origin", "network", "domain", *domain, "policy", firstWord(*policy), "ttl", *ttl)
 		res := *policy
 		if *withTlsRpt {
 			res = res + " " + *report
