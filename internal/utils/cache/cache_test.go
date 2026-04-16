@@ -125,7 +125,7 @@ func TestCacheSetGetRemoveItemsPurge(t *testing.T) {
 	t.Parallel()
 
 	tmpFile := filepath.Join(t.TempDir(), "cache.gz")
-	c := New[*testValue]((*testValue)(nil), tmpFile, time.Hour)
+	c := New[*testValue](tmpFile, time.Hour)
 	t.Cleanup(c.Close)
 
 	now := time.Now().UTC()
@@ -166,7 +166,7 @@ func TestCacheSaveAndLoadRoundTrip(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "cache.gz")
 	now := time.Now().UTC()
 
-	c1 := New[*testValue]((*testValue)(nil), tmpFile, time.Hour)
+	c1 := New[*testValue](tmpFile, time.Hour)
 	c1.Set("alpha", newTestValue(now.Add(30*time.Second), "A"))
 	c1.Set("beta", newTestValue(now.Add(45*time.Second), "B"))
 	if err := c1.Save(false); err != nil {
@@ -174,7 +174,7 @@ func TestCacheSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	c1.Close()
 
-	c2 := New[*testValue]((*testValue)(nil), tmpFile, time.Hour)
+	c2 := New[*testValue](tmpFile, time.Hour)
 	t.Cleanup(c2.Close)
 
 	gotA, ok := c2.Get("alpha")
@@ -198,7 +198,7 @@ func TestCacheSaveSkipsWhenNotDirty(t *testing.T) {
 	t.Parallel()
 
 	tmpFile := filepath.Join(t.TempDir(), "cache.gz")
-	c := New[*testValue]((*testValue)(nil), tmpFile, time.Hour)
+	c := New[*testValue](tmpFile, time.Hour)
 	t.Cleanup(c.Close)
 
 	// Should not fail and should do nothing when not dirty.
@@ -211,7 +211,7 @@ func TestCacheConcurrentSetGet(t *testing.T) {
 	t.Parallel()
 
 	tmpFile := filepath.Join(t.TempDir(), "cache.gz")
-	c := New[*testValue]((*testValue)(nil), tmpFile, time.Hour)
+	c := New[*testValue](tmpFile, time.Hour)
 	t.Cleanup(c.Close)
 
 	const workers = 16
@@ -247,7 +247,7 @@ func TestCacheCloseIsSafeAfterUse(t *testing.T) {
 	t.Parallel()
 
 	tmpFile := filepath.Join(t.TempDir(), "cache.gz")
-	c := New[*testValue]((*testValue)(nil), tmpFile, 10*time.Millisecond)
+	c := New[*testValue](tmpFile, 10*time.Millisecond)
 
 	c.Set("x", newTestValue(time.Now().Add(5*time.Second), "X"))
 	c.Set("y", newTestValue(time.Now().Add(5*time.Second), "Y"))
@@ -259,7 +259,7 @@ func TestCacheCloseIsSafeAfterUse(t *testing.T) {
 	c.Close()
 
 	// Ensure persisted content can still be read.
-	c2 := New[*testValue]((*testValue)(nil), tmpFile, time.Hour)
+	c2 := New[*testValue](tmpFile, time.Hour)
 	defer c2.Close()
 
 	if _, ok := c2.Get("x"); !ok {

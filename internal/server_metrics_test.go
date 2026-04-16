@@ -116,7 +116,7 @@ func TestCachePurgeDoesNotTruncateStats(t *testing.T) {
 	}()
 
 	config.Server.CacheFile = filepath.Join(t.TempDir(), "cache.db")
-	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Hour)
+	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Hour)
 	defer polCache.Close()
 
 	metricQueriesTotal.Store(42)
@@ -162,5 +162,104 @@ func TestCachePurgeDoesNotTruncateStats(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("stats file changed during cache purge")
+	}
+}
+
+func TestTidyCacheRemovesExpiredNoPolicyAndOldStalePolicy(t *testing.T) {
+	oldCacheFile := config.Server.CacheFile
+	oldPolCache := polCache
+	defer func() {
+		config.Server.CacheFile = oldCacheFile
+		polCache = oldPolCache
+	}()
+
+	config.Server.CacheFile = filepath.Join(t.TempDir(), "cache.db")
+	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Hour)
+	defer polCache.Close()
+
+	now := time.Now()
+	polCache.Set("expired-empty.example", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Second)},
+		Policy:    "",
+	})
+	polCache.Set("old-stale.example", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Duration(CACHE_MAX_AGE+1) * time.Second)},
+		Policy:    "dane",
+	})
+	polCache.Set("recent-stale.example", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Minute)},
+		Policy:    "dane",
+	})
+	polCache.Set("fresh.example", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Minute)},
+		Policy:    "dane",
+	})
+
+	entries := tidyCache()
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		seen[entry.Key] = true
+	}
+
+	for _, removed := range []string{"expired-empty.example", "old-stale.example"} {
+		if seen[removed] {
+			t.Fatalf("expected %s to be removed", removed)
+		}
+		if _, ok := polCache.Get(removed); ok {
+			t.Fatalf("expected %s to be absent from cache", removed)
+		}
+	}
+	for _, kept := range []string{"recent-stale.example", "fresh.example"} {
+		if !seen[kept] {
+			t.Fatalf("expected %s to be retained", kept)
+		}
+	}
+}
+
+func TestTryCachedPolicyUpdatesCopy(t *testing.T) {
+	oldCacheFile := config.Server.CacheFile
+	oldPolCache := polCache
+	defer func() {
+		config.Server.CacheFile = oldCacheFile
+		polCache = oldPolCache
+	}()
+
+	config.Server.CacheFile = filepath.Join(t.TempDir(), "cache.db")
+	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Hour)
+	defer polCache.Close()
+
+	original := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Minute)},
+		Policy:    "dane",
+	}
+	polCache.Set("example.com", original)
+
+	c1, c2 := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.ReadAll(c2)
+		close(done)
+	}()
+
+	updated, ok := tryCachedPolicy(c1, "example.com", false)
+	c1.Close()
+	c2.Close()
+	<-done
+
+	if !ok {
+		t.Fatal("expected cached policy to be used")
+	}
+	if original.Counter != 0 {
+		t.Fatalf("expected original cached pointer to remain unchanged, got counter %d", original.Counter)
+	}
+	if updated == original {
+		t.Fatal("expected cache update to use a copied entry")
+	}
+	stored, ok := polCache.Get("example.com")
+	if !ok {
+		t.Fatal("expected updated cache entry to be stored")
+	}
+	if stored.Counter != 1 {
+		t.Fatalf("expected stored counter to be 1, got %d", stored.Counter)
 	}
 }

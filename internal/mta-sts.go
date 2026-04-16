@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -21,18 +22,18 @@ import (
 	"github.com/miekg/dns"
 )
 
-var MTASTS_MAX_AGE uint64 = 31557600 // RFC 8461, 3.2
+const MTASTS_MAX_AGE uint64 = 31557600 // RFC 8461, 3.2
 
-func checkMtaStsRecord(ctx *context.Context, domain *string) (bool, error) {
+func checkMtaStsRecord(ctx context.Context, domain string) (bool, error) {
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn("_mta-sts."+*domain), dns.TypeTXT)
+	m.SetQuestion(dns.Fqdn("_mta-sts."+domain), dns.TypeTXT)
 	m.SetEdns0(4096, false)
 
 	resolverAddress, err := config.Dns.GetResolverAddress()
 	if err != nil {
 		return false, err
 	}
-	r, _, err := client.ExchangeContext(*ctx, m, resolverAddress)
+	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
 	if err != nil {
 		return false, err
 	}
@@ -78,8 +79,25 @@ var httpClient = &http.Client{
 	Timeout: REQUEST_TIMEOUT, // Set a timeout for the request
 }
 
+type mtaStsPolicyParser struct {
+	mxServers    []string
+	mode         string
+	maxAge       uint32
+	hasMaxAge    bool
+	hasVersion   bool
+	report       strings.Builder
+	mxHosts      strings.Builder
+	existingKeys map[string]bool
+}
+
+func newMtaStsPolicyParser() mtaStsPolicyParser {
+	return mtaStsPolicyParser{
+		existingKeys: make(map[string]bool),
+	}
+}
+
 //gocyclo:ignore
-func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string, mxHosts *string, existingKeys *map[string]bool, line string) bool {
+func (p *mtaStsPolicyParser) parseLine(line string) bool {
 	line = strings.TrimSpace(line)
 	lineLen := len(line)
 	if lineLen == 0 {
@@ -96,12 +114,21 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 		return false // invalid policy
 	}
 	key, val := strings.TrimSpace(keyValPair[0]), strings.TrimSpace(keyValPair[1])
-	if key != "mx" && (*existingKeys)[key] {
+	if key != "mx" && p.existingKeys[key] {
 		return true // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
 	}
-	(*existingKeys)[key] = true
-	*report = *report + " { policy_string = " + key + ": " + val + " }"
+	p.existingKeys[key] = true
+	p.report.WriteString(" { policy_string = ")
+	p.report.WriteString(key)
+	p.report.WriteString(": ")
+	p.report.WriteString(val)
+	p.report.WriteString(" }")
 	switch key {
+	case "version":
+		if val != "STSv1" {
+			return false
+		}
+		p.hasVersion = true
 	case "mx":
 		if strings.HasPrefix(val, "*.") {
 			if !valid.IsDNSName(val[2:]) {
@@ -111,29 +138,62 @@ func parseLine(mxServers *[]string, mode *string, maxAge *uint32, report *string
 			return false
 		}
 		val = strings.ToLower(val)
-		*mxHosts = *mxHosts + " mx_host_pattern=" + val
+		p.mxHosts.WriteString(" mx_host_pattern=")
+		p.mxHosts.WriteString(val)
 		if strings.HasPrefix(val, "*.") {
 			val = val[1:]
 		}
-		*mxServers = append(*mxServers, val)
+		p.mxServers = append(p.mxServers, val)
 	case "mode":
-		*mode = val
+		if val != "enforce" && val != "testing" && val != "none" {
+			return false
+		}
+		p.mode = val
 	case "max_age":
 		age, err := strconv.ParseUint(val, 10, 64) // 10-digit value allowed despite upper limit fitting in 32 bits (see RFC Errata 7282)
 		if err != nil {
 			return false
 		}
 		if age > MTASTS_MAX_AGE { // cap to upper limit in RFC 8461
-			*maxAge = uint32(MTASTS_MAX_AGE)
+			p.maxAge = uint32(MTASTS_MAX_AGE)
 		} else {
-			*maxAge = uint32(age)
+			p.maxAge = uint32(age)
 		}
+		p.hasMaxAge = true
 	default:
 	}
 	return true
 }
 
-func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, string, uint32) {
+func (p *mtaStsPolicyParser) reportFor(domain string) string {
+	return "policy_type=sts policy_domain=" + domain + p.mxHosts.String() + p.report.String()
+}
+
+func parseMtaStsPolicy(domain string, r io.Reader) (string, string, uint32) {
+	parser := newMtaStsPolicyParser()
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		if !parser.parseLine(scanner.Text()) {
+			return "", "", 0
+		}
+	}
+	if scanner.Err() != nil {
+		return "", "", 0
+	}
+	if !parser.hasVersion || !parser.hasMaxAge {
+		return "", "", 0
+	}
+	report := parser.reportFor(domain)
+
+	if parser.mode == "enforce" && len(parser.mxServers) != 0 {
+		res := "secure match=" + strings.Join(parser.mxServers, ":") + " servername=hostname"
+		return res, report, parser.maxAge
+	}
+
+	return "", "", parser.maxAge
+}
+
+func checkMtaSts(ctx context.Context, domain string, mayRetry bool) (string, string, uint32) {
 	hasRecord, err := checkMtaStsRecord(ctx, domain)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
@@ -141,7 +201,7 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 				time.Sleep(750 * time.Millisecond)
 				return checkMtaSts(ctx, domain, false)
 			}
-			slog.Warn("DNS error during MTA-STS lookup", "domain", *domain, "error", err)
+			slog.Warn("DNS error during MTA-STS lookup", "domain", domain, "error", err)
 		}
 		return "", "", 0
 	}
@@ -149,8 +209,8 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 		return "", "", 0
 	}
 
-	mtaSTSURL := "https://mta-sts." + *domain + "/.well-known/mta-sts.txt"
-	req, err := http.NewRequestWithContext(*ctx, http.MethodGet, mtaSTSURL, nil)
+	mtaSTSURL := "https://mta-sts." + domain + "/.well-known/mta-sts.txt"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mtaSTSURL, nil)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && mayRetry {
 			time.Sleep(750 * time.Millisecond)
@@ -172,24 +232,5 @@ func checkMtaSts(ctx *context.Context, domain *string, mayRetry bool) (string, s
 		return "", "", 0
 	}
 
-	var mxServers []string
-	mode := ""
-	var maxAge uint32 = 0
-	report := ""
-	mxHosts := ""
-	existingKeys := make(map[string]bool)
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		if !parseLine(&mxServers, &mode, &maxAge, &report, &mxHosts, &existingKeys, scanner.Text()) {
-			return "", "", 0
-		}
-	}
-	report = "policy_type=sts policy_domain=" + *domain + mxHosts + report
-
-	if mode == "enforce" && len(mxServers) != 0 {
-		res := "secure match=" + strings.Join(mxServers, ":") + " servername=hostname"
-		return res, report, maxAge
-	}
-
-	return "", "", maxAge
+	return parseMtaStsPolicy(domain, resp.Body)
 }

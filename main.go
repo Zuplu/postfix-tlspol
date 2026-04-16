@@ -51,6 +51,6 @@ func init() {
 }
 
 func main() {
-	tlspol.SetDefaultConfig(&defaultConfigYaml)
-	tlspol.StartDaemon(&Version, &LicenseText)
+	tlspol.SetDefaultConfig(defaultConfigYaml)
+	tlspol.StartDaemon(Version, LicenseText)
 }

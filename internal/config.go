@@ -148,8 +148,8 @@ type Config struct {
 	Server ServerConfig `yaml:"server"`
 }
 
-func SetDefaultConfig(data *[]byte) {
-	if err := yaml.Unmarshal(*data, &defaultConfig); err != nil {
+func SetDefaultConfig(data []byte) {
+	if err := yaml.Unmarshal(data, &defaultConfig); err != nil {
 		slog.Error("Could not initialize default configuration", "error", err)
 	}
 }

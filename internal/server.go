@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +39,22 @@ type CacheStruct struct {
 	Report  string
 	TTL     uint32
 	Counter uint32
+}
+
+func cloneCacheStruct(c *CacheStruct) *CacheStruct {
+	if c == nil {
+		return &CacheStruct{
+			Expirable: &cache.Expirable{},
+		}
+	}
+	cloned := *c
+	if c.Expirable == nil {
+		cloned.Expirable = &cache.Expirable{}
+	} else {
+		expirable := *c.Expirable
+		cloned.Expirable = &expirable
+	}
+	return &cloned
 }
 
 const (
@@ -79,8 +94,8 @@ func init() {
 	flag.Bool("purge", false, "Manually clear the cache")
 }
 
-func StartDaemon(v *string, licenseText *string) {
-	Version = *v
+func StartDaemon(v string, licenseText string) {
+	Version = v
 	curYear, _, _ := time.Now().Date()
 
 	flag.Parse()
@@ -91,7 +106,7 @@ func StartDaemon(v *string, licenseText *string) {
 	}
 
 	if showLicense {
-		fmt.Printf("%s\n", *licenseText)
+		fmt.Printf("%s\n", licenseText)
 		return
 	}
 
@@ -127,7 +142,7 @@ func StartDaemon(v *string, licenseText *string) {
 
 	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n", curYear, Version)
 
-	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(600*time.Second))
+	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
 	defer func() {
 		stopMetricStatsPersistence()
@@ -152,7 +167,7 @@ func StartDaemon(v *string, licenseText *string) {
 
 func listenForSignals() {
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGHUP)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	go func() {
 		for {
 			sig := <-signals
@@ -330,19 +345,19 @@ func startServer() {
 	slog.Info("Socketmap server terminated")
 }
 
-func tryCachedPolicy(conn net.Conn, domain *string, withTlsRpt *bool) (*CacheStruct, bool) {
-	c, found := polCache.Get(*domain)
+func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruct, bool) {
+	c, found := polCache.Get(domain)
 	if found {
 		ttl := c.RemainingTTL()
 		if ttl > 0 {
 			switch c.Policy {
 			case "":
-				slog.Info("No policy found", "origin", "cache", "domain", *domain, "ttl", ttl)
+				slog.Info("No policy found", "origin", "cache", "domain", domain, "ttl", ttl)
 				conn.Write(NS_NOTFOUND)
 			default:
-				slog.Info("Evaluated policy", "origin", "cache", "domain", *domain, "policy", firstWord(c.Policy), "ttl", ttl)
+				slog.Info("Evaluated policy", "origin", "cache", "domain", domain, "policy", firstWord(c.Policy), "ttl", ttl)
 				var res string
-				if *withTlsRpt {
+				if withTlsRpt {
 					res = c.Policy + " " + c.Report
 				} else {
 					res = c.Policy
@@ -350,8 +365,10 @@ func tryCachedPolicy(conn net.Conn, domain *string, withTlsRpt *bool) (*CacheStr
 				conn.Write(netstring.Marshal("OK " + res))
 			}
 			observePolicy(c.Policy)
-			c.Counter++
-			return c, true
+			updated := cloneCacheStruct(c)
+			updated.Counter++
+			polCache.Set(domain, updated)
+			return updated, true
 		}
 	}
 	return c, false
@@ -375,7 +392,7 @@ type Result struct {
 	MtaSts  MtaStsPolicy `json:"mta-sts"`
 }
 
-func replyJson(ctx *context.Context, conn net.Conn, domain *string) {
+func replyJson(ctx context.Context, conn net.Conn, domain string) {
 	ta := time.Now()
 	var (
 		wg    sync.WaitGroup
@@ -401,7 +418,7 @@ func replyJson(ctx *context.Context, conn net.Conn, domain *string) {
 	wg.Wait()
 	r := Result{
 		Version: Version,
-		Domain:  *domain,
+		Domain:  domain,
 		Dane: DanePolicy{
 			Policy: dPol,
 			TTL:    dTTL,
@@ -424,23 +441,23 @@ func replyJson(ctx *context.Context, conn net.Conn, domain *string) {
 	conn.Write(append(b, '\n'))
 }
 
-func replySocketmap(conn net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
-	switch *policy {
+func replySocketmap(conn net.Conn, domain string, policy string, report string, ttl uint32, withTlsRpt bool) {
+	switch policy {
 	case "":
-		slog.Info("No policy found", "origin", "network", "domain", *domain, "ttl", *ttl)
+		slog.Info("No policy found", "origin", "network", "domain", domain, "ttl", ttl)
 		conn.Write(NS_NOTFOUND)
 	case "TEMP":
-		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", *domain, "ttl", *ttl)
+		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", domain, "ttl", ttl)
 		conn.Write(NS_TEMP)
 	default:
-		slog.Info("Evaluated policy", "origin", "network", "domain", *domain, "policy", firstWord(*policy), "ttl", *ttl)
-		res := *policy
-		if *withTlsRpt {
-			res = res + " " + *report
+		slog.Info("Evaluated policy", "origin", "network", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
+		res := policy
+		if withTlsRpt {
+			res = res + " " + report
 		}
 		conn.Write(netstring.Marshal("OK " + res))
 	}
-	observePolicy(*policy)
+	observePolicy(policy)
 }
 
 func isLikelyHTTP(reader *bufio.Reader) bool {
@@ -569,7 +586,7 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			if cmd == "JSON" {
 				ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
 				defer cancel()
-				replyJson(&ctx, conn, &domain)
+				replyJson(ctx, conn, domain)
 				workChan <- true
 				return
 			}
@@ -580,26 +597,23 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 				return
 			}
 
-			c, found := tryCachedPolicy(conn, &domain, &withTlsRpt)
+			c, found := tryCachedPolicy(conn, domain, withTlsRpt)
 			if found {
 				workChan <- true
 				return
 			}
 
-			policy, report, ttl := queryDomain(&domain)
+			policy, report, ttl := queryDomain(domain)
 
-			replySocketmap(conn, &domain, &policy, &report, &ttl, &withTlsRpt)
+			replySocketmap(conn, domain, policy, report, ttl, withTlsRpt)
 
 			if ttl != 0 {
 				now := time.Now()
-				var cs *CacheStruct
-				if c != nil {
-					cs = c
-					cs.Counter++
-				} else {
-					cs = &CacheStruct{}
+				cs := cloneCacheStruct(c)
+				if c == nil {
 					cs.Counter = 1
-					cs.Expirable = &cache.Expirable{}
+				} else {
+					cs.Counter++
 				}
 				cs.Policy = policy
 				cs.Report = report
@@ -626,7 +640,7 @@ func normalizeDomain(domain string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 }
 
-func queryDomain(domain *string) (string, string, uint32) {
+func queryDomain(domain string) (string, string, uint32) {
 	results := make(chan PolicyResult, 2)
 	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+1) // we retry a request once after 750ms upon failure
 	defer cancel()
@@ -636,7 +650,7 @@ func queryDomain(domain *string) (string, string, uint32) {
 	// DANE query
 	go func() {
 		defer wg.Done()
-		policy, ttl := checkDane(&ctx, domain, true)
+		policy, ttl := checkDane(ctx, domain, true)
 		if ctx.Err() == nil {
 			select {
 			case results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}:
@@ -644,12 +658,11 @@ func queryDomain(domain *string) (string, string, uint32) {
 			}
 		}
 	}()
-	runtime.Gosched()
 
 	// MTA-STS query
 	go func() {
 		defer wg.Done()
-		policy, rpt, ttl := checkMtaSts(&ctx, domain, true)
+		policy, rpt, ttl := checkMtaSts(ctx, domain, true)
 		if ctx.Err() == nil {
 			select {
 			case results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}:
@@ -727,7 +740,10 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 	now := time.Now()
 	var entries []cache.Entry[*CacheStruct]
 	for _, entry := range items {
-		if (entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE) && entry.Value.RemainingTTL(now)+PREFETCH_INTERVAL <= 0 || strings.Contains(entry.Value.Report, "mx_host_pattern=.") || strings.Contains(entry.Value.Policy, "match= ") {
+		removeExpiredNoPolicy := entry.Value.Policy == "" && entry.Value.RemainingTTL(now) == 0
+		removeStalePolicy := entry.Value.Age(now) >= CACHE_MAX_AGE
+		removeLegacyBadPolicy := strings.Contains(entry.Value.Report, "mx_host_pattern=.") || strings.Contains(entry.Value.Policy, "match= ")
+		if removeExpiredNoPolicy || removeStalePolicy || removeLegacyBadPolicy {
 			polCache.Remove(true, entry.Key)
 		} else {
 			entries = append(entries, entry)

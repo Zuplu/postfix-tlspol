@@ -67,7 +67,7 @@ type Entry[T Cacheable] struct {
 	Key   string
 }
 
-func New[T Cacheable](_ T, filePath string, savePeriod time.Duration) *Cache[T] {
+func New[T Cacheable](filePath string, savePeriod time.Duration) *Cache[T] {
 	c := &Cache[T]{
 		data:       make(map[string]T),
 		filePath:   filePath,
@@ -140,11 +140,9 @@ func (c *Cache[T]) periodicSave() {
 	for {
 		select {
 		case <-ticker.C:
-			go func() {
-				if err := c.Save(false); err != nil {
-					slog.Error("cache: error saving cache", "error", err)
-				}
-			}()
+			if err := c.Save(false); err != nil {
+				slog.Error("cache: error saving cache", "error", err)
+			}
 		case <-c.quit:
 			return
 		}

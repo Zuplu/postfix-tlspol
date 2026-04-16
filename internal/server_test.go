@@ -31,7 +31,7 @@ func TestDaneOverMtaSts(t *testing.T) {
 					t.SkipNow()
 					return
 				}
-				policy, _, _ := queryDomain(&domain)
+				policy, _, _ := queryDomain(domain)
 				if policy != "dane-only" {
 					t.Skipf("Expected DANE for %q, but not detected", domain)
 				} else if !passedOnce {

@@ -42,11 +42,16 @@ func prefetchCachedPolicies() {
 	now := time.Now()
 	for _, entry := range items {
 		remainingTTL := entry.Value.RemainingTTL(now)
-		if entry.Value.Policy == "" || entry.Value.Age(now) >= CACHE_MAX_AGE && remainingTTL+PREFETCH_INTERVAL <= 0 {
+		if entry.Value.Policy == "" {
 			itemsCount--
 			if remainingTTL == 0 {
 				polCache.Remove(false, entry.Key)
 			}
+			continue
+		}
+		if entry.Value.Age(now) >= CACHE_MAX_AGE {
+			itemsCount--
+			polCache.Remove(false, entry.Key)
 			continue
 		}
 		if remainingTTL > PREFETCH_INTERVAL {
@@ -60,13 +65,15 @@ func prefetchCachedPolicies() {
 				<-semaphore
 			}()
 			// Refresh the cached policy
-			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(&c.Key)
+			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(c.Key)
 			if refreshedPolicy != "" && refreshedPolicy != "TEMP" {
 				counter.Add(1)
-				c.Value.Policy = refreshedPolicy
-				c.Value.Report = refreshedRpt
-				c.Value.TTL = refreshedTTL
-				c.Value.Expirable.ExpiresAt = now.Add(time.Duration(refreshedTTL+rand.Uint32N(20)) * time.Second)
+				refreshed := cloneCacheStruct(c.Value)
+				refreshed.Policy = refreshedPolicy
+				refreshed.Report = refreshedRpt
+				refreshed.TTL = refreshedTTL
+				refreshed.Expirable.ExpiresAt = now.Add(time.Duration(refreshedTTL+rand.Uint32N(20)) * time.Second)
+				polCache.Set(c.Key, refreshed)
 			}
 		}(entry)
 	}

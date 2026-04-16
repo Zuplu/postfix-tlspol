@@ -99,67 +99,89 @@ func flagCliConnFunc(f *flag.Flag) {
 	slog.Debug("Connected to socketmap instance", "endpoint", dialedEndpoint)
 	switch (*f).Name {
 	case "query":
-		cliQuery(f, &conn, &value)
+		cliQuery(conn, value)
 	case "dump":
-		cliDump(f, &conn, false)
+		cliDump(conn, false)
 	case "export":
-		cliDump(f, &conn, true)
+		cliDump(conn, true)
 	case "purge":
-		cliPurge(f, &conn)
+		cliPurge(conn)
 	}
 }
 
-func cliQuery(f *flag.Flag, conn *net.Conn, value *string) {
-	(*conn).Write(netstring.Marshal("JSON " + *value))
-	raw, err := bufio.NewReader(*conn).ReadBytes('\n')
+func cliQuery(conn net.Conn, value string) {
+	conn.Write(netstring.Marshal("JSON " + value))
+	raw, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
-		slog.Error("Could not query domain", "domain", *value, "error", err)
+		slog.Error("Could not query domain", "domain", value, "error", err)
 		return
 	}
-	result := new(Result)
-	err = json.Unmarshal(raw, &result)
-	if err != nil {
-		slog.Error("Could not query domain %q. (%v)", "domain", *value, "error", err)
+	var result Result
+	if err := json.Unmarshal(raw, &result); err != nil {
+		slog.Error("Could not query domain", "domain", value, "error", err)
 		return
 	}
 	o, err := os.Stdout.Stat()
 	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
 		var buf io.WriteCloser
+		var jq *exec.Cmd
 		if _, err := exec.LookPath("jq"); err == nil {
-			jq := exec.Command("jq")
-			buf, _ = jq.StdinPipe()
-			jq.Stdout = os.Stdout
-			jq.Stderr = os.Stderr
-			defer jq.Run()
-		} else {
-			buf = os.Stdout
+			jq = exec.Command("jq")
+			buf, err = jq.StdinPipe()
+			if err == nil {
+				jq.Stdout = os.Stdout
+				jq.Stderr = os.Stderr
+				err = jq.Start()
+			}
+		}
+		if err != nil && buf != nil {
+			_ = buf.Close()
+		}
+		if err != nil || buf == nil {
+			jq = nil
+			buf = nopWriteCloser{Writer: os.Stdout}
 		}
 		enc := json.NewEncoder(buf)
 		enc.SetIndent("", "  ")
 		err = enc.Encode(result)
-		defer buf.Close()
+		closeErr := buf.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if jq != nil {
+			waitErr := jq.Wait()
+			if err == nil {
+				err = waitErr
+			}
+		}
 	} else {
 		enc := json.NewEncoder(os.Stdout)
 		err = enc.Encode(result)
 	}
 	if err != nil {
-		slog.Error("Could not query domain", "domain", *value, "error", err)
+		slog.Error("Could not query domain", "domain", value, "error", err)
 		return
 	}
 	return
 }
 
-func cliDump(f *flag.Flag, conn *net.Conn, export bool) {
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (w nopWriteCloser) Close() error { return nil }
+
+func cliDump(conn net.Conn, export bool) {
 	if export {
-		(*conn).Write(netstring.Marshal("EXPORT"))
+		conn.Write(netstring.Marshal("EXPORT"))
 	} else {
-		(*conn).Write(netstring.Marshal("DUMP"))
+		conn.Write(netstring.Marshal("DUMP"))
 		o, err := os.Stdout.Stat()
 		if err == nil && o.Mode()&os.ModeCharDevice != 0 {
 			if _, err := exec.LookPath("less"); err == nil {
 				less := exec.Command("less")
 				less.Env = append(os.Environ(), "LESS=-S --use-color --prompt=postfix-tlspol\\ in-memory\\ cache")
-				less.Stdin = *conn
+				less.Stdin = conn
 				less.Stdout = os.Stdout
 				less.Stderr = os.Stderr
 				less.Run()
@@ -167,10 +189,10 @@ func cliDump(f *flag.Flag, conn *net.Conn, export bool) {
 			}
 		}
 	}
-	io.Copy(os.Stdout, *conn)
+	io.Copy(os.Stdout, conn)
 }
 
-func cliPurge(f *flag.Flag, conn *net.Conn) {
-	(*conn).Write(netstring.Marshal("PURGE"))
-	io.Copy(os.Stdout, *conn)
+func cliPurge(conn net.Conn) {
+	conn.Write(netstring.Marshal("PURGE"))
+	io.Copy(os.Stdout, conn)
 }
