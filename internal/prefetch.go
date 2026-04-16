@@ -28,9 +28,10 @@ func startPrefetching() {
 	}
 	slog.Info("Prefetching enabled")
 	ticker := time.NewTicker(time.Duration(PREFETCH_INTERVAL) * time.Second)
+	defer ticker.Stop()
 	semaphore = make(chan struct{}, runtime.NumCPU()*4+2)
 	for range ticker.C {
-		go prefetchCachedPolicies()
+		prefetchCachedPolicies()
 	}
 }
 

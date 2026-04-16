@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -93,6 +94,7 @@ func (rc *ResolvConf) watch() {
 		slog.Error("InotifyInit() failed", "path", rc.path, "error", err)
 		return
 	}
+	defer unix.Close(fd)
 	_, err = unix.InotifyAddWatch(fd, rc.path, unix.IN_CLOSE_WRITE)
 	if err != nil {
 		slog.Error("InotifyAddWatch() failed", "path", rc.path, "error", err)
@@ -102,6 +104,10 @@ func (rc *ResolvConf) watch() {
 	for {
 		n, err := unix.Read(fd, buf)
 		if err != nil {
+			if err == unix.EINTR {
+				continue
+			}
+			runtime.Gosched()
 			continue
 		}
 		if n > 0 {
@@ -125,6 +131,9 @@ func (c *DnsConfig) GetResolverAddress() (string, error) {
 			return "", fmt.Errorf("could not load /etc/resolv.conf")
 		}
 		config := rc.Get()
+		if config == nil {
+			return "", fmt.Errorf("resolver configuration is unavailable")
+		}
 		if len(config.Servers) == 0 {
 			return "", fmt.Errorf("no nameservers found in /etc/resolv.conf")
 		}

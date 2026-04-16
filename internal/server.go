@@ -324,7 +324,7 @@ func startServer() {
 			slog.Info("Server listening", "activation", "systemd", "network", addr.Network(), "address", addr.String())
 		}
 		slog.Warn("Ignoring configured server.address because systemd socket activation is active", "configured_address", config.Server.Address)
-		slog.Info("Listening on all systemd-provided sockets", "configured_address", config.Server.Address, "count", len(listeners))
+		slog.Info("Listening on all systemd-provided sockets", "count", len(listeners))
 	} else {
 		addr := listeners[0].Addr()
 		if addr == nil {
@@ -546,87 +546,73 @@ func handleHTTPConnection(conn net.Conn, reader *bufio.Reader) {
 func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 	ns := netstring.NewScanner(reader)
 
-	workChan := make(chan bool, 1)
 	for ns.Scan() {
-		go func(query string) {
-			parts := strings.SplitN(query, " ", 2)
-			cmd := strings.ToUpper(parts[0])
-			withTlsRpt := config.Server.TlsRpt
-			switch cmd {
-			case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
-				withTlsRpt = true
-				addMetricQuery()
-			case "QUERY":
-				addMetricQuery()
-			case "JSON":
-			case "DUMP":
-				dumpCachedPolicies(conn, false)
-				workChan <- false
-				return
-			case "EXPORT":
-				dumpCachedPolicies(conn, true)
-				workChan <- false
-				return
-			case "PURGE":
-				purgeCache(conn)
-				workChan <- false
-				return
-			default:
-				slog.Warn("Unknown command", "query", query)
-				conn.Write(NS_PERM)
-				workChan <- false
-				return
-			}
-			if len(parts) != 2 { // empty query
-				conn.Write(NS_NOTFOUND)
-				workChan <- true
-				return
-			}
-
-			domain := normalizeDomain(parts[1])
-
-			if cmd == "JSON" {
-				ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
-				defer cancel()
-				replyJson(ctx, conn, domain)
-				workChan <- true
-				return
-			}
-
-			if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
-				conn.Write(NS_NOTFOUND)
-				workChan <- true
-				return
-			}
-
-			c, found := tryCachedPolicy(conn, domain, withTlsRpt)
-			if found {
-				workChan <- true
-				return
-			}
-
-			policy, report, ttl := queryDomain(domain)
-
-			replySocketmap(conn, domain, policy, report, ttl, withTlsRpt)
-
-			if ttl != 0 {
-				now := time.Now()
-				cs := cloneCacheStruct(c)
-				if c == nil {
-					cs.Counter = 1
-				} else {
-					cs.Counter++
-				}
-				cs.Policy = policy
-				cs.Report = report
-				cs.TTL = ttl
-				cs.Expirable.ExpiresAt = now.Add(time.Duration(ttl+rand.Uint32N(20)) * time.Second)
-				polCache.Set(domain, cs)
-			}
-			workChan <- true
-		}(ns.Text())
-		if !<-workChan {
+		query := ns.Text()
+		parts := strings.SplitN(query, " ", 2)
+		cmd := strings.ToUpper(parts[0])
+		withTlsRpt := config.Server.TlsRpt
+		switch cmd {
+		case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
+			withTlsRpt = true
+			addMetricQuery()
+		case "QUERY":
+			addMetricQuery()
+		case "JSON":
+		case "DUMP":
+			dumpCachedPolicies(conn, false)
 			return
+		case "EXPORT":
+			dumpCachedPolicies(conn, true)
+			return
+		case "PURGE":
+			purgeCache(conn)
+			return
+		default:
+			slog.Warn("Unknown command", "query", query)
+			conn.Write(NS_PERM)
+			return
+		}
+		if len(parts) != 2 { // empty query
+			conn.Write(NS_NOTFOUND)
+			continue
+		}
+
+		domain := normalizeDomain(parts[1])
+
+		if cmd == "JSON" {
+			ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
+			replyJson(ctx, conn, domain)
+			cancel()
+			continue
+		}
+
+		if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
+			conn.Write(NS_NOTFOUND)
+			continue
+		}
+
+		c, found := tryCachedPolicy(conn, domain, withTlsRpt)
+		if found {
+			continue
+		}
+
+		policy, report, ttl := queryDomain(domain)
+
+		replySocketmap(conn, domain, policy, report, ttl, withTlsRpt)
+
+		if ttl != 0 {
+			now := time.Now()
+			cs := cloneCacheStruct(c)
+			if c == nil {
+				cs.Counter = 1
+			} else {
+				cs.Counter++
+			}
+			cs.Policy = policy
+			cs.Report = report
+			cs.TTL = ttl
+			cs.Expirable.ExpiresAt = now.Add(time.Duration(ttl+rand.Uint32N(20)) * time.Second)
+			polCache.Set(domain, cs)
 		}
 	}
 }
@@ -661,7 +647,7 @@ func queryDomain(domain string) (string, string, uint32) {
 
 func queryDomainOnceImpl(domain string) (string, string, uint32) {
 	results := make(chan PolicyResult, 2)
-	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+1) // we retry a request once after 750ms upon failure
+	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+time.Second) // one retry may add up to ~750ms delay between attempts
 	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
