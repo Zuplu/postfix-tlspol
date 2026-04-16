@@ -31,6 +31,7 @@ import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
 	"github.com/miekg/dns"
+	"golang.org/x/sync/singleflight"
 )
 
 type CacheStruct struct {
@@ -69,6 +70,7 @@ var (
 	Version     = "undefined"
 	bgCtx       = context.Background()
 	levelVar    = new(slog.LevelVar)
+	queryGroup  singleflight.Group
 	client      = dns.Client{UDPSize: 4096, Timeout: REQUEST_TIMEOUT}
 	config      Config
 	polCache    *cache.Cache[*CacheStruct]
@@ -636,11 +638,28 @@ type PolicyResult struct {
 	IsDane bool
 }
 
+type domainResult struct {
+	Policy string
+	Report string
+	TTL    uint32
+}
+
+var queryDomainOnce = queryDomainOnceImpl
+
 func normalizeDomain(domain string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 }
 
 func queryDomain(domain string) (string, string, uint32) {
+	res, _, _ := queryGroup.Do(domain, func() (any, error) {
+		pol, rpt, ttl := queryDomainOnce(domain)
+		return domainResult{Policy: pol, Report: rpt, TTL: ttl}, nil
+	})
+	dr := res.(domainResult)
+	return dr.Policy, dr.Report, dr.TTL
+}
+
+func queryDomainOnceImpl(domain string) (string, string, uint32) {
 	results := make(chan PolicyResult, 2)
 	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+1) // we retry a request once after 750ms upon failure
 	defer cancel()

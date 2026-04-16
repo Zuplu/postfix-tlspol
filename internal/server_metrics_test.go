@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -261,5 +263,41 @@ func TestTryCachedPolicyUpdatesCopy(t *testing.T) {
 	}
 	if stored.Counter != 1 {
 		t.Fatalf("expected stored counter to be 1, got %d", stored.Counter)
+	}
+}
+
+func TestQueryDomainSingleflight(t *testing.T) {
+	origFn := queryDomainOnce
+	origGroup := queryGroup
+	defer func() {
+		queryDomainOnce = origFn
+		queryGroup = origGroup
+	}()
+
+	var calls atomic.Int32
+	block := make(chan struct{})
+	queryDomainOnce = func(domain string) (string, string, uint32) {
+		calls.Add(1)
+		<-block
+		return "dane", "", 300
+	}
+
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			queryDomain("example.com")
+		}()
+	}
+
+	// Allow goroutines to block inside the first call
+	time.Sleep(50 * time.Millisecond)
+	close(block)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected single underlying call, got %d", got)
 	}
 }
