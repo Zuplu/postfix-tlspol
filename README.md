@@ -25,6 +25,7 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
   - If there is no TLSA record available for at least one MX record, so that the DANE query returns an empty policy, then the MTA-STS policy will take effect and result in a `secure` policy and explicitly enforce a `match=` with the policy-provided MX hostnames.
 
 - The result is cached by `minimum TTL of all queries` or `max_age` seconds, for DANE and MTA-STS respectively.
+- The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket, including Go runtime metrics and counters for `dane`, `dane-only`, and `secure` (MTA-STS) results.
 
 It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix (see below).
 

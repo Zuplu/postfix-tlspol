@@ -3,6 +3,7 @@
 server:
   # server:port to listen as a socketmap server
   # or unix:/run/postfix-tlspol/tlspol.sock for Unix Domain Socket
+  # this line is ignored when systemd socket activation is used (default)
   address: 127.0.0.1:8642
 
   # socket file permissions if Unix Domain Sockets are used
@@ -16,7 +17,7 @@ server:
   # prefetch when TTL is about to expire
   prefetch: true
 
-  # cache file
+  # cache file (a sibling file stats.db is also created)
   cache-file: /var/lib/postfix-tlspol/cache.db
 
 dns:

@@ -6,6 +6,7 @@
 package tlspol
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -127,7 +129,17 @@ func StartDaemon(v *string, licenseText *string) {
 
 	polCache = cache.New(&CacheStruct{}, config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
+	defer func() {
+		stopMetricStatsPersistence()
+		if err := saveMetricStats(true); err != nil {
+			slog.Warn("Could not save metric stats", "error", err)
+		}
+	}()
 	_ = tidyCache()
+	if err := loadMetricStats(); err != nil {
+		slog.Warn("Could not load metric stats", "error", err)
+	}
+	startMetricStatsPersistence()
 	listenForSignals()
 
 	readEnv()
@@ -146,6 +158,9 @@ func listenForSignals() {
 			sig := <-signals
 			slog.Info("Received signal, saving cache...", "signal", sig)
 			_ = tidyCache()
+			if err := saveMetricStats(true); err != nil {
+				slog.Warn("Could not save metric stats", "error", err)
+			}
 			if sig == syscall.SIGHUP {
 				continue
 			}
@@ -240,7 +255,7 @@ func serveListener(l net.Listener) {
 			}
 			break
 		}
-		go handleConnection(&conn)
+		go handleConnection(conn)
 	}
 }
 
@@ -315,7 +330,7 @@ func startServer() {
 	slog.Info("Socketmap server terminated")
 }
 
-func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheStruct, bool) {
+func tryCachedPolicy(conn net.Conn, domain *string, withTlsRpt *bool) (*CacheStruct, bool) {
 	c, found := polCache.Get(*domain)
 	if found {
 		ttl := c.RemainingTTL()
@@ -323,7 +338,7 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheSt
 			switch c.Policy {
 			case "":
 				slog.Info("No policy found", "origin", "cache", "domain", *domain, "ttl", ttl)
-				(*conn).Write(NS_NOTFOUND)
+				conn.Write(NS_NOTFOUND)
 			default:
 				slog.Info("Evaluated policy", "origin", "cache", "domain", *domain, "policy", firstWord(c.Policy), "ttl", ttl)
 				var res string
@@ -332,8 +347,9 @@ func tryCachedPolicy(conn *net.Conn, domain *string, withTlsRpt *bool) (*CacheSt
 				} else {
 					res = c.Policy
 				}
-				(*conn).Write(netstring.Marshal("OK " + res))
+				conn.Write(netstring.Marshal("OK " + res))
 			}
+			observePolicy(c.Policy)
 			c.Counter++
 			return c, true
 		}
@@ -359,7 +375,7 @@ type Result struct {
 	MtaSts  MtaStsPolicy `json:"mta-sts"`
 }
 
-func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
+func replyJson(ctx *context.Context, conn net.Conn, domain *string) {
 	ta := time.Now()
 	var (
 		wg    sync.WaitGroup
@@ -405,32 +421,111 @@ func replyJson(ctx *context.Context, conn *net.Conn, domain *string) {
 		return
 	}
 
-	(*conn).Write(append(b, '\n'))
+	conn.Write(append(b, '\n'))
 }
 
-func replySocketmap(conn *net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
+func replySocketmap(conn net.Conn, domain *string, policy *string, report *string, ttl *uint32, withTlsRpt *bool) {
 	switch *policy {
 	case "":
 		slog.Info("No policy found", "origin", "network", "domain", *domain, "ttl", *ttl)
-		(*conn).Write(NS_NOTFOUND)
+		conn.Write(NS_NOTFOUND)
 	case "TEMP":
 		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", *domain, "ttl", *ttl)
-		(*conn).Write(NS_TEMP)
+		conn.Write(NS_TEMP)
 	default:
 		slog.Info("Evaluated policy", "origin", "network", "domain", *domain, "policy", firstWord(*policy), "ttl", *ttl)
 		res := *policy
 		if *withTlsRpt {
 			res = res + " " + *report
 		}
-		(*conn).Write(netstring.Marshal("OK " + res))
+		conn.Write(netstring.Marshal("OK " + res))
+	}
+	observePolicy(*policy)
+}
+
+func isLikelyHTTP(reader *bufio.Reader) bool {
+	b, err := reader.ReadByte()
+	if err != nil {
+		return false
+	}
+	_ = reader.UnreadByte()
+	if b >= '0' && b <= '9' {
+		return false
+	}
+	if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') {
+		return true
+	}
+	return false
+}
+
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	if isLikelyHTTP(reader) {
+		handleHTTPConnection(conn, reader)
+		return
+	}
+	handleSocketmapConnection(conn, reader)
+}
+
+func handleHTTPConnection(conn net.Conn, reader *bufio.Reader) {
+	writer := bufio.NewWriter(conn)
+	for {
+		req, err := http.ReadRequest(reader)
+		if err != nil {
+			return
+		}
+		_ = req.Body.Close()
+
+		shouldClose := req.Close || (req.ProtoMajor == 1 && req.ProtoMinor == 0 && !strings.EqualFold(req.Header.Get("Connection"), "keep-alive"))
+		resp := &http.Response{
+			Proto:      req.Proto,
+			ProtoMajor: req.ProtoMajor,
+			ProtoMinor: req.ProtoMinor,
+			Header:     make(http.Header),
+			Close:      shouldClose,
+		}
+
+		if req.URL.Path == "/metrics" && (req.Method == http.MethodGet || req.Method == http.MethodHead) {
+			body := buildMetricsText()
+			resp.StatusCode = http.StatusOK
+			resp.Status = "200 OK"
+			resp.Header.Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			resp.ContentLength = int64(len(body))
+			if req.Method == http.MethodGet {
+				resp.Body = io.NopCloser(strings.NewReader(body))
+			} else {
+				resp.Body = http.NoBody
+			}
+		} else {
+			body := "not found\n"
+			resp.StatusCode = http.StatusNotFound
+			resp.Status = "404 Not Found"
+			resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+			resp.ContentLength = int64(len(body))
+			if req.Method == http.MethodHead {
+				resp.Body = http.NoBody
+			} else {
+				resp.Body = io.NopCloser(strings.NewReader(body))
+			}
+		}
+
+		if err := resp.Write(writer); err != nil {
+			return
+		}
+		if err := writer.Flush(); err != nil {
+			return
+		}
+		if shouldClose {
+			return
+		}
 	}
 }
 
 //gocyclo:ignore
-func handleConnection(conn *net.Conn) {
-	defer (*conn).Close()
-
-	ns := netstring.NewScanner(*conn)
+func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
+	ns := netstring.NewScanner(reader)
 
 	workChan := make(chan bool, 1)
 	for ns.Scan() {
@@ -441,7 +536,10 @@ func handleConnection(conn *net.Conn) {
 			switch cmd {
 			case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
 				withTlsRpt = true
-			case "QUERY", "JSON":
+				addMetricQuery()
+			case "QUERY":
+				addMetricQuery()
+			case "JSON":
 			case "DUMP":
 				dumpCachedPolicies(conn, false)
 				workChan <- false
@@ -456,12 +554,12 @@ func handleConnection(conn *net.Conn) {
 				return
 			default:
 				slog.Warn("Unknown command", "query", query)
-				(*conn).Write(NS_PERM)
+				conn.Write(NS_PERM)
 				workChan <- false
 				return
 			}
 			if len(parts) != 2 { // empty query
-				(*conn).Write(NS_NOTFOUND)
+				conn.Write(NS_NOTFOUND)
 				workChan <- true
 				return
 			}
@@ -477,7 +575,7 @@ func handleConnection(conn *net.Conn) {
 			}
 
 			if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
-				(*conn).Write(NS_NOTFOUND)
+				conn.Write(NS_NOTFOUND)
 				workChan <- true
 				return
 			}
@@ -594,7 +692,7 @@ func queryDomain(domain *string) (string, string, uint32) {
 	return policy, report, ttl
 }
 
-func dumpCachedPolicies(conn *net.Conn, export bool) {
+func dumpCachedPolicies(conn net.Conn, export bool) {
 	items := tidyCache()
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Value.Counter != items[j].Value.Counter {
@@ -609,16 +707,16 @@ func dumpCachedPolicies(conn *net.Conn, export bool) {
 			continue
 		}
 		if export {
-			fmt.Fprintf(*conn, "%-28s %s\n", entry.Key, entry.Value.Policy)
+			fmt.Fprintf(conn, "%-28s %s\n", entry.Key, entry.Value.Policy)
 		} else {
-			fmt.Fprintf(*conn, "%-28s  %6d  %s\n", entry.Key, entry.Value.Counter, entry.Value.Policy)
+			fmt.Fprintf(conn, "%-28s  %6d  %s\n", entry.Key, entry.Value.Counter, entry.Value.Policy)
 		}
 	}
 }
 
-func purgeCache(conn *net.Conn) {
+func purgeCache(conn net.Conn) {
 	polCache.Purge()
-	fmt.Fprintln(*conn, "OK")
+	fmt.Fprintln(conn, "OK")
 }
 
 func tidyCache() []cache.Entry[*CacheStruct] {
