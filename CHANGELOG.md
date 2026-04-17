@@ -1,3 +1,27 @@
+## What's Changed in v1.9.0 (2026-04-17)
+
+* refactor: modernize interface{} -> any by @DragonWork
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#130](https://github.com/Zuplu/postfix-tlspol/pull/130)
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#131](https://github.com/Zuplu/postfix-tlspol/pull/131)
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#133](https://github.com/Zuplu/postfix-tlspol/pull/133)
+* feat: set systemd `OOMPolicy` to `continue` by @DragonWork
+* test: add testing for `netstring` module by @DragonWork
+* test: tighten testing for `valid` module by @DragonWork
+* test: add testing to `cache` module by @DragonWork
+* refactor: switch to native structured logging using `log/slog` by @DragonWork
+* refactor: modernize shell scripts and allow setting an installation prefix by @DragonWork
+* refactor: make logging more parser-friendly by @DragonWork
+* build(deps): bump the golang-x group across 1 directory with 4 updates by @dependabot[bot] in [#137](https://github.com/Zuplu/postfix-tlspol/pull/137)
+* feat: add systemd socket activation support by @DragonWork
+* fix: return seconds as integers in logging by @DragonWork
+* feat: expose metrics by @DragonWork
+* refactor: improve overall memory and heap behavior by @DragonWork
+* feat: coalesce multiple concurrent queries for same domain into one lookup (singleflight) by @DragonWork
+* fix: add missing singleflight module by @DragonWork
+* refactor: further minor code rewrite by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.8.27...v1.9.0
+
 ## What's Changed in v1.8.27 (2026-03-07)
 
 * build(deps): bump golang.org/x/net from 0.50.0 to 0.51.0 in the golang-x group by @dependabot[bot] in [#126](https://github.com/Zuplu/postfix-tlspol/pull/126)
