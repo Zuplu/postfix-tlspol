@@ -25,8 +25,8 @@ type ServerConfig struct {
 	Address           string `yaml:"address"`
 	CacheFile         string `yaml:"cache-file"`
 	NamedLogLevel     string `yaml:"log-level"`
+	LogFormat         string `yaml:"log-format"`
 	LogLevel          slog.Level
-	LogFormat         string      `yaml:"log-format"`
 	SocketPermissions os.FileMode `yaml:"socket-permissions"`
 	TlsRpt            bool        `yaml:"tlsrpt"`
 	Prefetch          bool        `yaml:"prefetch"`

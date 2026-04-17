@@ -80,14 +80,14 @@ var httpClient = &http.Client{
 }
 
 type mtaStsPolicyParser struct {
-	mxServers    []string
+	existingKeys map[string]bool
 	mode         string
+	report       strings.Builder
+	mxHosts      strings.Builder
+	mxServers    []string
 	maxAge       uint32
 	hasMaxAge    bool
 	hasVersion   bool
-	report       strings.Builder
-	mxHosts      strings.Builder
-	existingKeys map[string]bool
 }
 
 func newMtaStsPolicyParser() mtaStsPolicyParser {
