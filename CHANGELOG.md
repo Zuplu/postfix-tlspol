@@ -1,3 +1,12 @@
+## What's Changed in v1.9.1 (2026-04-17)
+
+* fix: fix Docker workflow by @DragonWork
+* fix: systemd socket activation for Unix Domain Sockets by @DragonWork
+* fix: harden forced cache save and log errors by @DragonWork
+* refactor: optimize struct alignment by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.9.0...v1.9.1
+
 ## What's Changed in v1.9.0 (2026-04-17)
 
 * refactor: modernize interface{} -> any by @DragonWork
