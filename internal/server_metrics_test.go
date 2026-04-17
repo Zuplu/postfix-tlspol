@@ -167,6 +167,35 @@ func TestCachePurgeDoesNotTruncateStats(t *testing.T) {
 	}
 }
 
+func TestPolicyCacheClosePersistsCacheDB(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "cache.db")
+	now := time.Now()
+
+	c1 := cache.New[*CacheStruct](tmpFile, time.Hour)
+	c1.Set("example.org", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(5 * time.Minute)},
+		Policy:    "dane",
+		TTL:       300,
+		Counter:   2,
+	})
+	c1.Close()
+
+	if _, err := os.Stat(tmpFile); err != nil {
+		t.Fatalf("expected cache.db to be saved on close: %v", err)
+	}
+
+	c2 := cache.New[*CacheStruct](tmpFile, time.Hour)
+	defer c2.Close()
+
+	got, ok := c2.Get("example.org")
+	if !ok {
+		t.Fatal("expected cached policy after reload")
+	}
+	if got.Policy != "dane" || got.TTL != 300 || got.Counter != 2 {
+		t.Fatalf("unexpected cached policy after reload: %+v", got)
+	}
+}
+
 func TestTidyCacheRemovesExpiredNoPolicyAndOldStalePolicy(t *testing.T) {
 	oldCacheFile := config.Server.CacheFile
 	oldPolCache := polCache

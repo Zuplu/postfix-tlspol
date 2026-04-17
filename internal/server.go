@@ -175,6 +175,9 @@ func listenForSignals() {
 			sig := <-signals
 			slog.Info("Received signal, saving cache...", "signal", sig)
 			_ = tidyCache()
+			if err := polCache.ForceSave(false); err != nil {
+				slog.Error("Could not save cache", "error", err)
+			}
 			if err := saveMetricStats(true); err != nil {
 				slog.Warn("Could not save metric stats", "error", err)
 			}

@@ -11,6 +11,7 @@ import (
 	"encoding/gob"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -150,38 +151,72 @@ func (c *Cache[T]) periodicSave() {
 }
 
 func (c *Cache[T]) Save(haveLock bool) error {
+	return c.save(haveLock, false)
+}
+
+func (c *Cache[T]) ForceSave(haveLock bool) error {
+	return c.save(haveLock, true)
+}
+
+func (c *Cache[T]) save(haveLock bool, force bool) error {
 	if !haveLock {
-		c.RLock()
-	}
-	if !c.dirty {
-		if !haveLock {
-			c.RUnlock()
-		}
-		return nil
-	}
-	if !haveLock {
-		c.RUnlock()
 		c.Lock()
 		defer c.Unlock()
 	}
+	if !force && !c.dirty {
+		return nil
+	}
+
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(c.data); err != nil {
 		return err
 	}
-	f, err := os.Create(c.filePath)
+
+	dir := filepath.Dir(c.filePath)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+
+	tmp, err := os.CreateTemp(dir, filepath.Base(c.filePath)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	g, err := gzip.NewWriterLevel(f, gzip.BestSpeed)
+	tmpPath := tmp.Name()
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	g, err := gzip.NewWriterLevel(tmp, gzip.BestSpeed)
 	if err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	defer g.Close()
 	if _, err := g.Write(buf.Bytes()); err != nil {
+		_ = g.Close()
+		_ = tmp.Close()
 		return err
 	}
+	if err := g.Close(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, c.filePath); err != nil {
+		return err
+	}
+	removeTmp = false
 	c.dirty = false
 	return nil
 }

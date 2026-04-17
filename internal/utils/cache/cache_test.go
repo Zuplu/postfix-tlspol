@@ -7,6 +7,7 @@ package cache
 
 import (
 	"encoding/gob"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -194,6 +195,49 @@ func TestCacheSaveAndLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCacheClosePersistsDirtyEntries(t *testing.T) {
+	t.Parallel()
+
+	tmpFile := filepath.Join(t.TempDir(), "cache.db")
+	now := time.Now().UTC()
+
+	c1 := New[*testValue](tmpFile, time.Hour)
+	c1.Set("alpha", newTestValue(now.Add(30*time.Second), "A"))
+	c1.Close()
+
+	if _, err := os.Stat(tmpFile); err != nil {
+		t.Fatalf("expected cache file to be created on close: %v", err)
+	}
+
+	c2 := New[*testValue](tmpFile, time.Hour)
+	t.Cleanup(c2.Close)
+
+	got, ok := c2.Get("alpha")
+	if !ok {
+		t.Fatalf("expected key alpha after close/load")
+	}
+	if got.Payload != "A" {
+		t.Fatalf("expected payload A, got %q", got.Payload)
+	}
+}
+
+func TestCacheSaveCreatesParentDirectory(t *testing.T) {
+	t.Parallel()
+
+	tmpFile := filepath.Join(t.TempDir(), "nested", "cache.db")
+	c := New[*testValue](tmpFile, time.Hour)
+	t.Cleanup(c.Close)
+
+	c.Set("alpha", newTestValue(time.Now().Add(30*time.Second), "A"))
+	if err := c.Save(false); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	if _, err := os.Stat(tmpFile); err != nil {
+		t.Fatalf("expected cache file to be created: %v", err)
+	}
+}
+
 func TestCacheSaveSkipsWhenNotDirty(t *testing.T) {
 	t.Parallel()
 
@@ -204,6 +248,37 @@ func TestCacheSaveSkipsWhenNotDirty(t *testing.T) {
 	// Should not fail and should do nothing when not dirty.
 	if err := c.Save(false); err != nil {
 		t.Fatalf("expected no error on save when not dirty, got %v", err)
+	}
+}
+
+func TestCacheForceSaveWritesWhenNotDirty(t *testing.T) {
+	t.Parallel()
+
+	tmpFile := filepath.Join(t.TempDir(), "cache.db")
+	c := New[*testValue](tmpFile, time.Hour)
+	t.Cleanup(c.Close)
+
+	c.Set("alpha", newTestValue(time.Now().Add(30*time.Second), "A"))
+	if err := c.Save(false); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+	if err := os.Remove(tmpFile); err != nil {
+		t.Fatalf("remove saved cache failed: %v", err)
+	}
+
+	if err := c.ForceSave(false); err != nil {
+		t.Fatalf("force save failed: %v", err)
+	}
+
+	c2 := New[*testValue](tmpFile, time.Hour)
+	defer c2.Close()
+
+	got, ok := c2.Get("alpha")
+	if !ok {
+		t.Fatalf("expected key alpha after force save/load")
+	}
+	if got.Payload != "A" {
+		t.Fatalf("expected payload A, got %q", got.Payload)
 	}
 }
 
