@@ -135,7 +135,7 @@ jobs:
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
-          archive: false
+          compression-level: 0
 
   bundle:
     name: 📦 Bundle and Deploy ✨
