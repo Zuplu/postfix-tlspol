@@ -2,9 +2,17 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/releases/latest) [![GitHub License](https://img.shields.io/github/license/Zuplu/postfix-tlspol)](https://github.com/Zuplu/postfix-tlspol/blob/main/LICENSE) [![CodeQL Badge](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/Zuplu/postfix-tlspol/actions/workflows/github-code-scanning/codeql/) [![Go Report Card](https://goreportcard.com/badge/github.com/Zuplu/postfix-tlspol)](https://goreportcard.com/report/github.com/Zuplu/postfix-tlspol) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/98f114fa07ac4daa89495e5248d4c76b)](https://app.codacy.com/gh/Zuplu/postfix-tlspol/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) [![Automated Docker Build](https://img.shields.io/github/actions/workflow/status/Zuplu/postfix-tlspol/build-docker.yaml?branch=main&logo=docker&logoColor=white&label=Docker&color=%232496ED)](https://hub.docker.com/r/zuplu/postfix-tlspol/tags) [![Dependabot Badge](https://img.shields.io/badge/dependabot-enabled-0366D6?logo=dependabot&logoColor=white)](https://github.com/Zuplu/postfix-tlspol/actions/workflows/dependabot/dependabot-updates)
 
-[<img src="https://zuplu.com/mascot.svg?1" width="140em" align="right" alt="Gopher mascot" />](#)
+[<img src="https://zuplu.com/mascot.svg" width="140em" align="right" alt="Gopher Mascot" />](#)
 
 A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy socketmap server for Postfix that complies to the standards and prioritizes DANE where possible.
+
+## New: Prometheus Metrics & Grafana Dashboard
+
+[<img src="https://zuplu.com/dashboard.png" width="140em" align="right" alt="Grafana Dashboard" />](#)
+
+The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket, including Go runtime metrics and counters for `dane`, `dane-only`, and `secure` (MTA-STS) results.
+
+<br/><br/><br/><br/>
 
 # Logic
 
@@ -25,7 +33,6 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
   - If there is no TLSA record available for at least one MX record, so that the DANE query returns an empty policy, then the MTA-STS policy will take effect and result in a `secure` policy and explicitly enforce a `match=` with the policy-provided MX hostnames.
 
 - The result is cached by `minimum TTL of all queries` or `max_age` seconds, for DANE and MTA-STS respectively.
-- The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket, including Go runtime metrics and counters for `dane`, `dane-only`, and `secure` (MTA-STS) results.
 
 It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix (see below).
 
@@ -165,16 +172,4 @@ dns:
 
 # Prefetching
 
-It is recommended to adjust your local DNS caching resolver to serve the original TTL response.
-
-For example, in `Unbound`, configure the following:
-```
-cache-min-ttl: 10
-cache-max-ttl: 240
-serve-original-ttl: yes
-```
-This will serve the original TTL, but still skip the cache after `240` seconds, when a new query is made. (Note: Policies with TTL lower than 300 seconds are not elligible for prefetching.)
-
-It ensures that when postfix-tlspol prefetches policies before the TTL actually expires, the DNS cache won't be used (otherwise it would only prefetch for the residual TTL time).
-
-Prefetching will work without these settings, albeit slightly less efficiently.
+Prefetching is enabled by default, and postfix-tlspol tries to keep its cache fresh.
