@@ -146,17 +146,7 @@ func StartDaemon(v string, licenseText string) {
 
 	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Duration(600*time.Second))
 	defer polCache.Close()
-	defer func() {
-		stopMetricStatsPersistence()
-		if err := saveMetricStats(true); err != nil {
-			slog.Warn("Could not save metric stats", "error", err)
-		}
-	}()
 	_ = tidyCache()
-	if err := loadMetricStats(); err != nil {
-		slog.Warn("Could not load metric stats", "error", err)
-	}
-	startMetricStatsPersistence()
 	listenForSignals()
 
 	readEnv()
@@ -177,9 +167,6 @@ func listenForSignals() {
 			_ = tidyCache()
 			if err := polCache.ForceSave(false); err != nil {
 				slog.Error("Could not save cache", "error", err)
-			}
-			if err := saveMetricStats(true); err != nil {
-				slog.Warn("Could not save metric stats", "error", err)
 			}
 			if sig == syscall.SIGHUP {
 				continue

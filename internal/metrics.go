@@ -6,15 +6,10 @@
 package tlspol
 
 import (
-	"encoding/gob"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"time"
 )
 
 var (
@@ -23,113 +18,10 @@ var (
 	metricDaneOnlyTotal atomic.Uint64
 	metricSecureTotal   atomic.Uint64
 	metricNoPolicyTotal atomic.Uint64
-	metricStatsDirty    atomic.Bool
-	metricPersistQuit   chan struct{}
-	metricPersistWG     sync.WaitGroup
 )
-
-type metricStats struct {
-	Queries  uint64
-	Dane     uint64
-	DaneOnly uint64
-	Secure   uint64
-	NoPolicy uint64
-}
-
-const metricPersistInterval = 5 * time.Minute
-
-func metricStatsPath() string {
-	return filepath.Join(filepath.Dir(config.Server.CacheFile), "stats.db")
-}
-
-func loadMetricStats() error {
-	f, err := os.Open(metricStatsPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer f.Close()
-	var stats metricStats
-	if err := gob.NewDecoder(f).Decode(&stats); err != nil {
-		return err
-	}
-	metricQueriesTotal.Store(stats.Queries)
-	metricDaneTotal.Store(stats.Dane)
-	metricDaneOnlyTotal.Store(stats.DaneOnly)
-	metricSecureTotal.Store(stats.Secure)
-	metricNoPolicyTotal.Store(stats.NoPolicy)
-	metricStatsDirty.Store(false)
-	return nil
-}
-
-func saveMetricStats(force bool) error {
-	if !force && !metricStatsDirty.Load() {
-		return nil
-	}
-	stats := metricStats{
-		Queries:  metricQueriesTotal.Load(),
-		Dane:     metricDaneTotal.Load(),
-		DaneOnly: metricDaneOnlyTotal.Load(),
-		Secure:   metricSecureTotal.Load(),
-		NoPolicy: metricNoPolicyTotal.Load(),
-	}
-	path := metricStatsPath()
-	tmpPath := path + ".tmp"
-
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return err
-	}
-	encErr := gob.NewEncoder(f).Encode(stats)
-	closeErr := f.Close()
-	if encErr != nil {
-		_ = os.Remove(tmpPath)
-		return encErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmpPath)
-		return closeErr
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	metricStatsDirty.Store(false)
-	return nil
-}
-
-func startMetricStatsPersistence() {
-	metricPersistQuit = make(chan struct{})
-	metricPersistWG.Add(1)
-	go func() {
-		defer metricPersistWG.Done()
-		ticker := time.NewTicker(metricPersistInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				_ = saveMetricStats(false)
-			case <-metricPersistQuit:
-				return
-			}
-		}
-	}()
-}
-
-func stopMetricStatsPersistence() {
-	if metricPersistQuit == nil {
-		return
-	}
-	close(metricPersistQuit)
-	metricPersistWG.Wait()
-	metricPersistQuit = nil
-}
 
 func addMetricQuery() {
 	metricQueriesTotal.Add(1)
-	metricStatsDirty.Store(true)
 }
 
 func observePolicy(policy string) {
@@ -137,16 +29,12 @@ func observePolicy(policy string) {
 	case "dane-only":
 		metricDaneOnlyTotal.Add(1)
 		metricDaneTotal.Add(1)
-		metricStatsDirty.Store(true)
 	case "dane":
 		metricDaneTotal.Add(1)
-		metricStatsDirty.Store(true)
 	case "secure":
 		metricSecureTotal.Add(1)
-		metricStatsDirty.Store(true)
 	case "":
 		metricNoPolicyTotal.Add(1)
-		metricStatsDirty.Store(true)
 	}
 }
 
