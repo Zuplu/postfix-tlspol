@@ -7,6 +7,7 @@ package tlspol
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net"
 	"os"
@@ -84,8 +85,13 @@ func TestPolicyCacheClosePersistsCacheDB(t *testing.T) {
 	c1.Set("example.org", &CacheStruct{
 		Expirable: &cache.Expirable{ExpiresAt: now.Add(5 * time.Minute)},
 		Policy:    "dane",
-		TTL:       300,
-		Counter:   2,
+		Dane: PolicyBranch{
+			Policy:    "dane",
+			TTL:       300,
+			ExpiresAt: now.Add(5 * time.Minute),
+		},
+		TTL:     300,
+		Counter: 2,
 	})
 	c1.Close()
 
@@ -171,6 +177,11 @@ func TestTryCachedPolicyUpdatesCopy(t *testing.T) {
 	original := &CacheStruct{
 		Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Minute)},
 		Policy:    "dane",
+		Dane: PolicyBranch{
+			Policy:    "dane",
+			TTL:       60,
+			ExpiresAt: time.Now().Add(time.Minute),
+		},
 	}
 	polCache.Set("example.com", original)
 
@@ -214,10 +225,14 @@ func TestQueryDomainSingleflight(t *testing.T) {
 
 	var calls atomic.Int32
 	block := make(chan struct{})
-	queryDomainOnce = func(domain string) (string, string, uint32) {
+	queryDomainOnce = func(domain string) domainResult {
 		calls.Add(1)
 		<-block
-		return "dane", "", 300
+		return domainResult{
+			Policy: "dane",
+			TTL:    300,
+			Dane:   branchFromResult("dane", "", 300),
+		}
 	}
 
 	const workers = 8
@@ -237,5 +252,89 @@ func TestQueryDomainSingleflight(t *testing.T) {
 
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("expected single underlying call, got %d", got)
+	}
+}
+
+func TestSelectCachedPolicyPrioritizesFreshDane(t *testing.T) {
+	now := time.Now()
+	c := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Hour)},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.example servername=hostname",
+			Report:    "policy_type=sts",
+			TTL:       3600,
+			ExpiresAt: now.Add(time.Hour),
+		},
+	}
+
+	if _, _, _, ok := selectCachedPolicy(c, now); ok {
+		t.Fatal("expected MTA-STS-only cache entry to miss without fresh DANE state")
+	}
+
+	c.Dane = PolicyBranch{
+		TTL:       300,
+		ExpiresAt: now.Add(5 * time.Minute),
+	}
+	policy, report, ttl, ok := selectCachedPolicy(c, now)
+	if !ok {
+		t.Fatal("expected MTA-STS to be usable with fresh no-DANE state")
+	}
+	if policy != c.MtaSts.Policy || report != c.MtaSts.Report || ttl != 300 {
+		t.Fatalf("unexpected MTA-STS selection: policy=%q report=%q ttl=%d", policy, report, ttl)
+	}
+
+	c.Dane = PolicyBranch{
+		Policy:    "dane-only",
+		TTL:       600,
+		ExpiresAt: now.Add(10 * time.Minute),
+	}
+	policy, _, ttl, ok = selectCachedPolicy(c, now)
+	if !ok || policy != "dane-only" || ttl != 600 {
+		t.Fatalf("expected fresh DANE to override MTA-STS, got policy=%q ttl=%d ok=%v", policy, ttl, ok)
+	}
+}
+
+func TestQueryDomainDaneTempDoesNotDowngradeToMtaSts(t *testing.T) {
+	origDane := checkDanePolicy
+	origMtaSts := checkMtaStsPolicy
+	defer func() {
+		checkDanePolicy = origDane
+		checkMtaStsPolicy = origMtaSts
+	}()
+
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		return "TEMP", 0
+	}
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		return "secure match=mx.example servername=hostname", "policy_type=sts", 86400
+	}
+
+	result := queryDomainOnceImpl("example.com")
+	if result.Policy != "TEMP" || result.TTL != 0 {
+		t.Fatalf("expected temporary DANE failure to win over MTA-STS, got %+v", result)
+	}
+	if result.MtaSts.Policy == "" || result.MtaSts.TTL != 86400 {
+		t.Fatalf("expected MTA-STS branch to be retained for cache, got %+v", result.MtaSts)
+	}
+}
+
+func TestQueryDomainUsesMtaStsOnlyAfterFreshNoDane(t *testing.T) {
+	origDane := checkDanePolicy
+	origMtaSts := checkMtaStsPolicy
+	defer func() {
+		checkDanePolicy = origDane
+		checkMtaStsPolicy = origMtaSts
+	}()
+
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		return "", 300
+	}
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		return "secure match=mx.example servername=hostname", "policy_type=sts", 86400
+	}
+
+	result := queryDomainOnceImpl("example.com")
+	if result.Policy != "secure match=mx.example servername=hostname" || result.Report != "policy_type=sts" || result.TTL != 300 {
+		t.Fatalf("unexpected selected policy: %+v", result)
 	}
 }

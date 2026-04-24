@@ -27,12 +27,12 @@ The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix
 
 - **For MTA-STS:**
   - Check for an existing MTA-STS record over DNS, and if found, fetch the policy via HTTPS.
-  - If a response from the DANE query is available and not empty, the MTA-STS result is ignored.
-  - If the DANE check is not ready yet, the result will be hold back, until it is completed.
-  - DNS errors won't downgrade to MTA-STS, TLSA records must be explicitly and verifiably not available for MTA-STS to overrule DANE.
+  - DANE is authoritative when fresh and usable. MTA-STS is only used when fresh DANE state explicitly proves that no DANE policy is available.
+  - Temporary DANE failures do not downgrade to MTA-STS. TLSA records must be explicitly and verifiably not available for MTA-STS to overrule DANE.
+  - MTA-STS and DANE state are cached independently, so a later refreshed DANE result immediately overrides a still-fresh MTA-STS policy.
   - If there is no TLSA record available for at least one MX record, so that the DANE query returns an empty policy, then the MTA-STS policy will take effect and result in a `secure` policy and explicitly enforce a `match=` with the policy-provided MX hostnames.
 
-- The result is cached by `minimum TTL of all queries` or `max_age` seconds, for DANE and MTA-STS respectively.
+- DANE and MTA-STS branches are cached by `minimum TTL of all DNSSEC/DANE queries` and MTA-STS `max_age` seconds respectively. The served result is derived from the fresh branch state on every cache hit, with mandatory DANE (`dane-only`) taking precedence.
 
 It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix (see below).
 

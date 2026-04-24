@@ -190,20 +190,37 @@ const (
 )
 
 func checkDane(ctx context.Context, domain string, mayRetry bool) (string, uint32) {
+	attempts := 1
+	if mayRetry {
+		attempts = POLICY_ATTEMPTS
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		policy, ttl, err := checkDaneOnce(ctx, domain)
+		if err == nil {
+			return policy, ttl
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return "TEMP", 0
+		}
+		if attempt == attempts {
+			slog.Warn("DNS error during DANE lookup", "domain", domain, "error", err, "attempts", attempts)
+			return "TEMP", 0
+		}
+		if !waitPolicyRetry(ctx, attempt) {
+			return "TEMP", 0
+		}
+	}
+	return "TEMP", 0
+}
+
+func checkDaneOnce(ctx context.Context, domain string) (string, uint32, error) {
 	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			if mayRetry {
-				time.Sleep(750 * time.Millisecond)
-				return checkDane(ctx, domain, false)
-			}
-			slog.Warn("DNS error during MX lookup", "domain", domain, "error", err)
-		}
-		return "TEMP", 0
+		return "", 0, err
 	}
 	numRecords := len(mxRecords)
 	if numRecords == 0 {
-		return "", 0
+		return "", 0, nil
 	}
 	tlsaResults := make(chan ResultWithTTL, numRecords)
 	cctx, cancel := context.WithCancel(ctx)
@@ -212,10 +229,10 @@ func checkDane(ctx context.Context, domain string, mayRetry bool) (string, uint3
 			tlsaResults <- checkTlsa(cctx, mx)
 		}(mx)
 	}
-	return getDanePolicy(cctx, cancel, domain, mayRetry, ttl, incompl, numRecords, tlsaResults)
+	return getDanePolicy(cctx, cancel, ttl, incompl, numRecords, tlsaResults)
 }
 
-func getDanePolicy(ctx context.Context, cancel func(), domain string, mayRetry bool, ttl uint32, incompl bool, numRecords int, tlsaResults <-chan ResultWithTTL) (string, uint32) {
+func getDanePolicy(ctx context.Context, cancel func(), ttl uint32, incompl bool, numRecords int, tlsaResults <-chan ResultWithTTL) (string, uint32, error) {
 	defer cancel()
 	var ttls []uint32
 	ttls = append(ttls, ttl)
@@ -226,14 +243,7 @@ func getDanePolicy(ctx context.Context, cancel func(), domain string, mayRetry b
 	for i := 0; i < numRecords; i++ {
 		res := <-tlsaResults
 		if res.Err != nil {
-			if !errors.Is(res.Err, context.Canceled) {
-				if mayRetry {
-					time.Sleep(750 * time.Millisecond)
-					return checkDane(ctx, domain, false)
-				}
-				slog.Warn("DNS error during TLSA lookup", "domain", domain, "error", res.Err)
-			}
-			return "TEMP", 0
+			return "", 0, res.Err
 		}
 		ttls = append(ttls, res.TTL)
 		switch res.Result {
@@ -253,7 +263,19 @@ func getDanePolicy(ctx context.Context, cancel func(), domain string, mayRetry b
 			pol = "dane-only"
 		}
 	}
-	return pol, findMin(ttls)
+	return pol, findMin(ttls), nil
+}
+
+func waitPolicyRetry(ctx context.Context, attempt int) bool {
+	delay := POLICY_RETRY_BASE * time.Duration(attempt)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func findMin[T uint8 | uint32](s []T) T {

@@ -7,7 +7,6 @@ package tlspol
 
 import (
 	"log/slog"
-	"math/rand/v2"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -42,8 +41,8 @@ func prefetchCachedPolicies() {
 	itemsCount := len(items)
 	now := time.Now()
 	for _, entry := range items {
-		remainingTTL := entry.Value.RemainingTTL(now)
-		if entry.Value.Policy == "" {
+		policy, _, remainingTTL, usable := selectCachedPolicy(entry.Value, now)
+		if usable && policy == "" {
 			itemsCount--
 			if remainingTTL == 0 {
 				polCache.Remove(false, entry.Key)
@@ -55,7 +54,7 @@ func prefetchCachedPolicies() {
 			polCache.Remove(false, entry.Key)
 			continue
 		}
-		if remainingTTL > PREFETCH_INTERVAL {
+		if usable && remainingTTL > PREFETCH_INTERVAL {
 			continue
 		}
 		semaphore <- struct{}{}
@@ -66,15 +65,10 @@ func prefetchCachedPolicies() {
 				<-semaphore
 			}()
 			// Refresh the cached policy
-			refreshedPolicy, refreshedRpt, refreshedTTL := queryDomain(c.Key)
-			if refreshedPolicy != "" && refreshedPolicy != "TEMP" {
+			refreshed := queryDomain(c.Key)
+			if refreshed.Dane.HasData() || refreshed.MtaSts.HasData() {
 				counter.Add(1)
-				refreshed := cloneCacheStruct(c.Value)
-				refreshed.Policy = refreshedPolicy
-				refreshed.Report = refreshedRpt
-				refreshed.TTL = refreshedTTL
-				refreshed.Expirable.ExpiresAt = now.Add(time.Duration(refreshedTTL+rand.Uint32N(20)) * time.Second)
-				polCache.Set(c.Key, refreshed)
+				polCache.Set(c.Key, mergeCacheResult(c.Value, refreshed, now))
 			}
 		}(entry)
 	}

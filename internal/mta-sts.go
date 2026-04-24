@@ -194,43 +194,53 @@ func parseMtaStsPolicy(domain string, r io.Reader) (string, string, uint32) {
 }
 
 func checkMtaSts(ctx context.Context, domain string, mayRetry bool) (string, string, uint32) {
+	attempts := 1
+	if mayRetry {
+		attempts = POLICY_ATTEMPTS
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		policy, report, ttl, err := checkMtaStsOnce(ctx, domain)
+		if err == nil {
+			return policy, report, ttl
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return "TEMP", "", 0
+		}
+		if attempt == attempts {
+			slog.Warn("Error during MTA-STS lookup", "domain", domain, "error", err, "attempts", attempts)
+			return "TEMP", "", 0
+		}
+		if !waitPolicyRetry(ctx, attempt) {
+			return "TEMP", "", 0
+		}
+	}
+	return "TEMP", "", 0
+}
+
+func checkMtaStsOnce(ctx context.Context, domain string) (string, string, uint32, error) {
 	hasRecord, err := checkMtaStsRecord(ctx, domain)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			if mayRetry {
-				time.Sleep(750 * time.Millisecond)
-				return checkMtaSts(ctx, domain, false)
-			}
-			slog.Warn("DNS error during MTA-STS lookup", "domain", domain, "error", err)
-		}
-		return "", "", 0
+		return "", "", 0, err
 	}
 	if !hasRecord {
-		return "", "", 0
+		return "", "", 0, nil
 	}
 
 	mtaSTSURL := "https://mta-sts." + domain + "/.well-known/mta-sts.txt"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mtaSTSURL, nil)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) && mayRetry {
-			time.Sleep(750 * time.Millisecond)
-			return checkMtaSts(ctx, domain, false)
-		}
-		return "", "", 0
+		return "", "", 0, err
 	}
 	req.Header.Set("User-Agent", "postfix-tlspol/"+Version)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) && mayRetry {
-			time.Sleep(750 * time.Millisecond)
-			return checkMtaSts(ctx, domain, false)
-		}
-		return "", "", 0
+		return "", "", 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", 0
+		return "", "", 0, nil
 	}
 
-	return parseMtaStsPolicy(domain, resp.Body)
+	policy, report, ttl := parseMtaStsPolicy(domain, resp.Body)
+	return policy, report, ttl, nil
 }

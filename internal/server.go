@@ -36,10 +36,106 @@ import (
 
 type CacheStruct struct {
 	*cache.Expirable
-	Policy  string
+	Policy  string // legacy/selected policy, retained for old cache files and dumps
 	Report  string
 	TTL     uint32
+	Dane    PolicyBranch
+	MtaSts  PolicyBranch
 	Counter uint32
+}
+
+type PolicyBranch struct {
+	Policy    string
+	Report    string
+	TTL       uint32
+	ExpiresAt time.Time
+}
+
+func (p PolicyBranch) HasData() bool {
+	return p.TTL != 0 || !p.ExpiresAt.IsZero()
+}
+
+func (p PolicyBranch) RemainingTTL(t ...time.Time) uint32 {
+	if !p.HasData() {
+		return 0
+	}
+	now := time.Now()
+	if len(t) != 0 {
+		now = t[0]
+	}
+	ttl := p.ExpiresAt.Sub(now).Seconds()
+	if ttl < 0 {
+		return 0
+	}
+	return uint32(ttl)
+}
+
+func (p PolicyBranch) Age(t ...time.Time) uint32 {
+	if !p.HasData() {
+		return 0
+	}
+	now := time.Now()
+	if len(t) != 0 {
+		now = t[0]
+	}
+	age := now.Sub(p.ExpiresAt).Seconds()
+	if age < 0 {
+		return 0
+	}
+	return uint32(age)
+}
+
+func (c *CacheStruct) hasBranches() bool {
+	return c != nil && (c.Dane.HasData() || c.MtaSts.HasData())
+}
+
+func (c *CacheStruct) RemainingTTL(t ...time.Time) uint32 {
+	if c == nil {
+		return 0
+	}
+	if !c.hasBranches() {
+		if c.Expirable == nil {
+			return 0
+		}
+		return c.Expirable.RemainingTTL(t...)
+	}
+	return max(c.Dane.RemainingTTL(t...), c.MtaSts.RemainingTTL(t...))
+}
+
+func (c *CacheStruct) Age(t ...time.Time) uint32 {
+	if c == nil {
+		return 0
+	}
+	if !c.hasBranches() {
+		if c.Expirable == nil {
+			return 0
+		}
+		return c.Expirable.Age(t...)
+	}
+	daneAge, mtaStsAge := c.Dane.Age(t...), c.MtaSts.Age(t...)
+	if !c.Dane.HasData() {
+		return mtaStsAge
+	}
+	if !c.MtaSts.HasData() {
+		return daneAge
+	}
+	return min(daneAge, mtaStsAge)
+}
+
+func (c *CacheStruct) noPolicyOnly() bool {
+	if c == nil {
+		return false
+	}
+	if !c.hasBranches() {
+		return c.Policy == ""
+	}
+	if c.Dane.HasData() && c.Dane.Policy != "" {
+		return false
+	}
+	if c.MtaSts.HasData() && c.MtaSts.Policy != "" {
+		return false
+	}
+	return c.Dane.HasData() || c.MtaSts.HasData()
 }
 
 func cloneCacheStruct(c *CacheStruct) *CacheStruct {
@@ -64,26 +160,30 @@ const (
 	CACHE_MAX_TTL      uint32 = 2592000
 	CACHE_MAX_AGE      uint32 = 1800 // max age for stale queries (only for prefetching, not served to postfix)
 	REQUEST_TIMEOUT           = 2 * time.Second
+	POLICY_ATTEMPTS           = 3
+	POLICY_RETRY_BASE         = 250 * time.Millisecond
 )
 
 var (
-	Version     = "undefined"
-	bgCtx       = context.Background()
-	levelVar    = new(slog.LevelVar)
-	queryGroup  singleflight.Group
-	client      = dns.Client{UDPSize: 4096, Timeout: REQUEST_TIMEOUT}
-	config      Config
-	polCache    *cache.Cache[*CacheStruct]
-	NS_NOTFOUND = netstring.Marshal("NOTFOUND ")
-	NS_TEMP     = netstring.Marshal("TEMP ")
-	NS_PERM     = netstring.Marshal("PERM ")
-	NS_TIMEOUT  = netstring.Marshal("TIMEOUT ")
-	listeners   []net.Listener
-	serverWg    sync.WaitGroup
-	showVersion = false
-	showLicense = false
-	configFile  string
-	cliConnMode = false
+	Version           = "undefined"
+	bgCtx             = context.Background()
+	levelVar          = new(slog.LevelVar)
+	queryGroup        singleflight.Group
+	client            = dns.Client{UDPSize: 4096, Timeout: REQUEST_TIMEOUT}
+	config            Config
+	polCache          *cache.Cache[*CacheStruct]
+	NS_NOTFOUND       = netstring.Marshal("NOTFOUND ")
+	NS_TEMP           = netstring.Marshal("TEMP ")
+	NS_PERM           = netstring.Marshal("PERM ")
+	NS_TIMEOUT        = netstring.Marshal("TIMEOUT ")
+	listeners         []net.Listener
+	serverWg          sync.WaitGroup
+	showVersion       = false
+	showLicense       = false
+	configFile        string
+	cliConnMode       = false
+	checkDanePolicy   = checkDane
+	checkMtaStsPolicy = checkMtaSts
 )
 
 func init() {
@@ -340,30 +440,145 @@ func startServer() {
 func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruct, bool) {
 	c, found := polCache.Get(domain)
 	if found {
-		ttl := c.RemainingTTL()
-		if ttl > 0 {
-			switch c.Policy {
+		policy, report, ttl, ok := selectCachedPolicy(c, time.Now())
+		if ok {
+			switch policy {
 			case "":
 				slog.Info("No policy found", "origin", "cache", "domain", domain, "ttl", ttl)
 				conn.Write(NS_NOTFOUND)
 			default:
-				slog.Info("Evaluated policy", "origin", "cache", "domain", domain, "policy", firstWord(c.Policy), "ttl", ttl)
+				slog.Info("Evaluated policy", "origin", "cache", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
 				var res string
 				if withTlsRpt {
-					res = c.Policy + " " + c.Report
+					res = policy + " " + report
 				} else {
-					res = c.Policy
+					res = policy
 				}
 				conn.Write(netstring.Marshal("OK " + res))
 			}
-			observePolicy(c.Policy)
+			observePolicy(policy)
 			updated := cloneCacheStruct(c)
 			updated.Counter++
+			updated.Policy = policy
+			updated.Report = report
+			updated.TTL = ttl
 			polCache.Set(domain, updated)
 			return updated, true
 		}
 	}
 	return c, false
+}
+
+func selectCachedPolicy(c *CacheStruct, now time.Time) (string, string, uint32, bool) {
+	if c == nil {
+		return "", "", 0, false
+	}
+	if !c.hasBranches() {
+		if c.Expirable == nil || c.Expirable.RemainingTTL(now) == 0 {
+			return "", "", 0, false
+		}
+		if c.Policy == "dane" || c.Policy == "dane-only" {
+			return c.Policy, c.Report, c.Expirable.RemainingTTL(now), true
+		}
+		return "", "", 0, false
+	}
+
+	daneTTL := c.Dane.RemainingTTL(now)
+	mtaStsTTL := c.MtaSts.RemainingTTL(now)
+	if daneTTL == 0 {
+		return "", "", 0, false
+	}
+	if c.Dane.Policy != "" {
+		return c.Dane.Policy, c.Dane.Report, daneTTL, true
+	}
+	if mtaStsTTL != 0 {
+		ttl := minPositive(daneTTL, mtaStsTTL)
+		return c.MtaSts.Policy, c.MtaSts.Report, ttl, true
+	}
+	return "", "", 0, false
+}
+
+func minPositive(a uint32, b uint32) uint32 {
+	if a == 0 {
+		return b
+	}
+	if b == 0 {
+		return a
+	}
+	return min(a, b)
+}
+
+func normalizePolicyTTL(policy string, ttl uint32) (uint32, bool) {
+	if policy == "TEMP" {
+		return 0, false
+	}
+	if policy == "" && ttl == 0 {
+		ttl = CACHE_NOTFOUND_TTL
+	}
+	if ttl < CACHE_MIN_TTL {
+		ttl = CACHE_MIN_TTL
+	} else if ttl > CACHE_MAX_TTL {
+		ttl = CACHE_MAX_TTL
+	}
+	return ttl, true
+}
+
+func branchFromResult(policy string, report string, ttl uint32) PolicyBranch {
+	ttl, ok := normalizePolicyTTL(policy, ttl)
+	if !ok {
+		return PolicyBranch{}
+	}
+	return PolicyBranch{
+		Policy: policy,
+		Report: report,
+		TTL:    ttl,
+	}
+}
+
+func expireBranch(branch PolicyBranch, now time.Time) PolicyBranch {
+	if !branch.HasData() {
+		return branch
+	}
+	branch.ExpiresAt = now.Add(time.Duration(branch.TTL+rand.Uint32N(20)) * time.Second)
+	return branch
+}
+
+func selectedPolicyFromBranches(dane PolicyBranch, mtaSts PolicyBranch, daneTemp bool) (string, string, uint32) {
+	if daneTemp {
+		return "TEMP", "", 0
+	}
+	if dane.HasData() {
+		if dane.Policy != "" {
+			return dane.Policy, dane.Report, dane.TTL
+		}
+		if mtaSts.HasData() {
+			return mtaSts.Policy, mtaSts.Report, minPositive(dane.TTL, mtaSts.TTL)
+		}
+		return "", "", 0
+	}
+	return "TEMP", "", 0
+}
+
+func mergeCacheResult(c *CacheStruct, result domainResult, now time.Time) *CacheStruct {
+	cs := cloneCacheStruct(c)
+	if result.Dane.HasData() {
+		cs.Dane = expireBranch(result.Dane, now)
+	}
+	if result.MtaSts.HasData() {
+		cs.MtaSts = expireBranch(result.MtaSts, now)
+	}
+	policy, report, ttl, ok := selectCachedPolicy(cs, now)
+	if ok {
+		cs.Policy = policy
+		cs.Report = report
+		cs.TTL = ttl
+		cs.Expirable.ExpiresAt = now.Add(time.Duration(ttl) * time.Second)
+	} else {
+		cs.Policy = result.Policy
+		cs.Report = result.Report
+		cs.TTL = result.TTL
+	}
+	return cs
 }
 
 type DanePolicy struct {
@@ -399,12 +614,12 @@ func replyJson(ctx context.Context, conn net.Conn, domain string) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		dPol, dTTL = checkDane(ctx, domain, true)
+		dPol, dTTL = checkDanePolicy(ctx, domain, true)
 		tb = time.Now()
 	}()
 	go func() {
 		defer wg.Done()
-		msPol, msRpt, msTTL = checkMtaSts(ctx, domain, true)
+		msPol, msRpt, msTTL = checkMtaStsPolicy(ctx, domain, true)
 		tc = time.Now()
 	}()
 	wg.Wait()
@@ -586,38 +801,30 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			continue
 		}
 
-		policy, report, ttl := queryDomain(domain)
+		result := queryDomain(domain)
 
-		replySocketmap(conn, domain, policy, report, ttl, withTlsRpt)
+		replySocketmap(conn, domain, result.Policy, result.Report, result.TTL, withTlsRpt)
 
-		if ttl != 0 {
+		if result.TTL != 0 || result.Dane.HasData() || result.MtaSts.HasData() {
 			now := time.Now()
-			cs := cloneCacheStruct(c)
+			cs := mergeCacheResult(c, result, now)
 			if c == nil {
 				cs.Counter = 1
 			} else {
 				cs.Counter++
 			}
-			cs.Policy = policy
-			cs.Report = report
-			cs.TTL = ttl
-			cs.Expirable.ExpiresAt = now.Add(time.Duration(ttl+rand.Uint32N(20)) * time.Second)
 			polCache.Set(domain, cs)
 		}
 	}
 }
 
-type PolicyResult struct {
-	Policy string
-	Report string
-	TTL    uint32
-	IsDane bool
-}
-
 type domainResult struct {
-	Policy string
-	Report string
-	TTL    uint32
+	Policy   string
+	Report   string
+	TTL      uint32
+	Dane     PolicyBranch
+	MtaSts   PolicyBranch
+	DaneTemp bool
 }
 
 var queryDomainOnce = queryDomainOnceImpl
@@ -626,78 +833,51 @@ func normalizeDomain(domain string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 }
 
-func queryDomain(domain string) (string, string, uint32) {
+func queryDomain(domain string) domainResult {
 	res, _, _ := queryGroup.Do(domain, func() (any, error) {
-		pol, rpt, ttl := queryDomainOnce(domain)
-		return domainResult{Policy: pol, Report: rpt, TTL: ttl}, nil
+		return queryDomainOnce(domain), nil
 	})
-	dr := res.(domainResult)
-	return dr.Policy, dr.Report, dr.TTL
+	return res.(domainResult)
 }
 
-func queryDomainOnceImpl(domain string) (string, string, uint32) {
-	results := make(chan PolicyResult, 2)
-	ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT+time.Second) // one retry may add up to ~750ms delay between attempts
+func queryDomainOnceImpl(domain string) domainResult {
+	ctx, cancel := context.WithTimeout(bgCtx, time.Duration(POLICY_ATTEMPTS)*REQUEST_TIMEOUT+time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
+	var (
+		danePolicy string
+		daneTTL    uint32
+		mtaStsPol  string
+		mtaStsRpt  string
+		mtaStsTTL  uint32
+	)
 	wg.Add(2)
 
 	// DANE query
 	go func() {
 		defer wg.Done()
-		policy, ttl := checkDane(ctx, domain, true)
-		if ctx.Err() == nil {
-			select {
-			case results <- PolicyResult{IsDane: true, Policy: policy, Report: "", TTL: ttl}:
-			case <-ctx.Done():
-			}
-		}
+		danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
 	}()
 
 	// MTA-STS query
 	go func() {
 		defer wg.Done()
-		policy, rpt, ttl := checkMtaSts(ctx, domain, true)
-		if ctx.Err() == nil {
-			select {
-			case results <- PolicyResult{IsDane: false, Policy: policy, Report: rpt, TTL: ttl}:
-			case <-ctx.Done():
-			}
-		}
+		mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
 	}()
+	wg.Wait()
 
-	go func() {
-		wg.Wait()
-		cancel()
-		close(results)
-	}()
-
-	policy, report := "", ""
-	var ttl uint32 = CACHE_NOTFOUND_TTL
-	for r := range results {
-		if r.Policy == "" {
-			continue
-		}
-		policy = r.Policy
-		report = r.Report
-		ttl = r.TTL
-		if r.IsDane {
-			break
-		}
+	daneTemp := danePolicy == "TEMP"
+	dane := branchFromResult(danePolicy, "", daneTTL)
+	mtaSts := branchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
+	policy, report, ttl := selectedPolicyFromBranches(dane, mtaSts, daneTemp)
+	return domainResult{
+		Policy:   policy,
+		Report:   report,
+		TTL:      ttl,
+		Dane:     dane,
+		MtaSts:   mtaSts,
+		DaneTemp: daneTemp,
 	}
-
-	if ttl < CACHE_MIN_TTL {
-		ttl = CACHE_MIN_TTL
-	} else if ttl > CACHE_MAX_TTL {
-		ttl = CACHE_MAX_TTL
-	}
-	if policy == "" {
-		ttl = CACHE_NOTFOUND_TTL
-	} else if policy == "TEMP" {
-		ttl = 0
-	}
-
-	return policy, report, ttl
 }
 
 func dumpCachedPolicies(conn net.Conn, export bool) {
@@ -710,14 +890,14 @@ func dumpCachedPolicies(conn net.Conn, export bool) {
 	})
 	now := time.Now()
 	for _, entry := range items {
-		remainingTTL := entry.Value.RemainingTTL(now)
-		if entry.Value.Policy == "" || remainingTTL < PREFETCH_INTERVAL+1 {
+		policy, _, remainingTTL, ok := selectCachedPolicy(entry.Value, now)
+		if !ok || policy == "" || remainingTTL < PREFETCH_INTERVAL+1 {
 			continue
 		}
 		if export {
-			fmt.Fprintf(conn, "%-28s %s\n", entry.Key, entry.Value.Policy)
+			fmt.Fprintf(conn, "%-28s %s\n", entry.Key, policy)
 		} else {
-			fmt.Fprintf(conn, "%-28s  %6d  %s\n", entry.Key, entry.Value.Counter, entry.Value.Policy)
+			fmt.Fprintf(conn, "%-28s  %6d  %s\n", entry.Key, entry.Value.Counter, policy)
 		}
 	}
 }
@@ -735,9 +915,12 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 	now := time.Now()
 	var entries []cache.Entry[*CacheStruct]
 	for _, entry := range items {
-		removeExpiredNoPolicy := entry.Value.Policy == "" && entry.Value.RemainingTTL(now) == 0
+		removeExpiredNoPolicy := entry.Value.noPolicyOnly() && entry.Value.RemainingTTL(now) == 0
 		removeStalePolicy := entry.Value.Age(now) >= CACHE_MAX_AGE
-		removeLegacyBadPolicy := strings.Contains(entry.Value.Report, "mx_host_pattern=.") || strings.Contains(entry.Value.Policy, "match= ")
+		removeLegacyBadPolicy := strings.Contains(entry.Value.Report, "mx_host_pattern=.") ||
+			strings.Contains(entry.Value.Policy, "match= ") ||
+			strings.Contains(entry.Value.MtaSts.Report, "mx_host_pattern=.") ||
+			strings.Contains(entry.Value.MtaSts.Policy, "match= ")
 		if removeExpiredNoPolicy || removeStalePolicy || removeLegacyBadPolicy {
 			polCache.Remove(true, entry.Key)
 		} else {
