@@ -201,16 +201,19 @@ func TestTidyCacheRemovesExpiredNoPolicyAndOldStalePolicy(t *testing.T) {
 	}
 }
 
-func TestTryCachedPolicyUpdatesCopy(t *testing.T) {
+func TestTryCachedPolicyDoesNotRewriteCacheEntry(t *testing.T) {
 	oldCacheFile := config.Server.CacheFile
 	oldPolCache := polCache
+	oldCounters := cacheHitCounters
 	defer func() {
 		config.Server.CacheFile = oldCacheFile
 		polCache = oldPolCache
+		cacheHitCounters = oldCounters
 	}()
 
 	config.Server.CacheFile = filepath.Join(t.TempDir(), "cache.db")
 	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Hour)
+	cacheHitCounters = sync.Map{}
 	defer polCache.Close()
 
 	original := &CacheStruct{
@@ -242,15 +245,18 @@ func TestTryCachedPolicyUpdatesCopy(t *testing.T) {
 	if original.Counter != 0 {
 		t.Fatalf("expected original cached pointer to remain unchanged, got counter %d", original.Counter)
 	}
-	if updated == original {
-		t.Fatal("expected cache update to use a copied entry")
+	if updated != original {
+		t.Fatal("expected cache hit to return the stored entry without rewriting it")
 	}
 	stored, ok := polCache.Get("example.com")
 	if !ok {
-		t.Fatal("expected updated cache entry to be stored")
+		t.Fatal("expected cache entry to remain stored")
 	}
-	if stored.Counter != 1 {
-		t.Fatalf("expected stored counter to be 1, got %d", stored.Counter)
+	if stored.Counter != 0 {
+		t.Fatalf("expected stored counter to remain 0 before flush, got %d", stored.Counter)
+	}
+	if got := cacheEntryCounter("example.com", stored); got != 1 {
+		t.Fatalf("expected combined counter to be 1, got %d", got)
 	}
 }
 

@@ -60,6 +60,7 @@ type Cache[T Cacheable] struct {
 	wg         sync.WaitGroup
 	savePeriod time.Duration
 	dirty      bool
+	generation uint64
 	sync.RWMutex
 }
 
@@ -88,6 +89,22 @@ func (c *Cache[T]) Set(key string, value T) {
 	defer c.Unlock()
 	c.data[key] = value
 	c.dirty = true
+	c.generation++
+}
+
+func (c *Cache[T]) Update(haveLock bool, key string, fn func(T, bool) (T, bool)) {
+	if !haveLock {
+		c.Lock()
+		defer c.Unlock()
+	}
+	val, ok := c.data[key]
+	next, update := fn(val, ok)
+	if !update {
+		return
+	}
+	c.data[key] = next
+	c.dirty = true
+	c.generation++
 }
 
 func (c *Cache[T]) Get(key string) (T, bool) {
@@ -104,14 +121,16 @@ func (c *Cache[T]) Remove(haveLock bool, key string) {
 	}
 	delete(c.data, key)
 	c.dirty = true
+	c.generation++
 }
 
 func (c *Cache[T]) Purge() {
 	c.Lock()
-	defer c.Unlock()
 	c.data = make(map[string]T)
 	c.dirty = true
-	c.Save(true)
+	c.generation++
+	c.Unlock()
+	_ = c.Save(false)
 }
 
 func (c *Cache[T]) Items(haveLock bool) []Entry[T] {
@@ -159,17 +178,56 @@ func (c *Cache[T]) ForceSave(haveLock bool) error {
 }
 
 func (c *Cache[T]) save(haveLock bool, force bool) error {
-	if !haveLock {
+	var (
+		snapshot   map[string]T
+		generation uint64
+	)
+	if haveLock {
+		if !force && !c.dirty {
+			return nil
+		}
+		snapshot, generation = c.snapshotLocked()
+	} else {
 		c.Lock()
-		defer c.Unlock()
+		if !force && !c.dirty {
+			c.Unlock()
+			return nil
+		}
+		snapshot, generation = c.snapshotLocked()
+		c.Unlock()
 	}
-	if !force && !c.dirty {
+
+	if err := c.writeSnapshot(snapshot); err != nil {
+		return err
+	}
+
+	if haveLock {
+		if c.generation == generation {
+			c.dirty = false
+		}
 		return nil
 	}
 
+	c.Lock()
+	if c.generation == generation {
+		c.dirty = false
+	}
+	c.Unlock()
+	return nil
+}
+
+func (c *Cache[T]) snapshotLocked() (map[string]T, uint64) {
+	snapshot := make(map[string]T, len(c.data))
+	for k, v := range c.data {
+		snapshot[k] = v
+	}
+	return snapshot, c.generation
+}
+
+func (c *Cache[T]) writeSnapshot(data map[string]T) error {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(c.data); err != nil {
+	if err := enc.Encode(data); err != nil {
 		return err
 	}
 
@@ -217,7 +275,6 @@ func (c *Cache[T]) save(haveLock bool, force bool) error {
 		return err
 	}
 	removeTmp = false
-	c.dirty = false
 	return nil
 }
 

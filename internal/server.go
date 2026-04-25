@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -178,6 +179,7 @@ var (
 	NS_TIMEOUT        = netstring.Marshal("TIMEOUT ")
 	listeners         []net.Listener
 	serverWg          sync.WaitGroup
+	cacheHitCounters  sync.Map
 	showVersion       = false
 	showLicense       = false
 	configFile        string
@@ -514,16 +516,57 @@ func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruc
 				conn.Write(netstring.Marshal("OK " + res))
 			}
 			observePolicy(policy)
-			updated := cloneCacheStruct(c)
-			updated.Counter++
-			updated.Policy = policy
-			updated.Report = report
-			updated.TTL = ttl
-			polCache.Set(domain, updated)
-			return updated, true
+			addCacheHitCounter(domain)
+			return c, true
 		}
 	}
 	return c, false
+}
+
+func addCacheHitCounter(domain string) {
+	counter, _ := cacheHitCounters.LoadOrStore(domain, &atomic.Uint32{})
+	counter.(*atomic.Uint32).Add(1)
+}
+
+func drainCacheHitCounter(domain string) uint32 {
+	counter, ok := cacheHitCounters.Load(domain)
+	if !ok {
+		return 0
+	}
+	return counter.(*atomic.Uint32).Swap(0)
+}
+
+func cacheEntryCounter(domain string, c *CacheStruct) uint32 {
+	if c == nil {
+		return 0
+	}
+	counter := c.Counter
+	if pending, ok := cacheHitCounters.Load(domain); ok {
+		counter += pending.(*atomic.Uint32).Load()
+	}
+	return counter
+}
+
+func flushCacheHitCounters(haveLock bool) {
+	cacheHitCounters.Range(func(key any, value any) bool {
+		domain, ok := key.(string)
+		if !ok {
+			return true
+		}
+		delta := value.(*atomic.Uint32).Swap(0)
+		if delta == 0 {
+			return true
+		}
+		polCache.Update(haveLock, domain, func(c *CacheStruct, found bool) (*CacheStruct, bool) {
+			if !found || c == nil {
+				return nil, false
+			}
+			updated := cloneCacheStruct(c)
+			updated.Counter += delta
+			return updated, true
+		})
+		return true
+	})
 }
 
 func selectCachedPolicy(c *CacheStruct, now time.Time) (string, string, uint32, bool) {
@@ -886,11 +929,7 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 		if result.TTL != 0 || result.Dane.HasData() || result.MtaSts.HasData() {
 			now := time.Now()
 			cs := mergeCacheResult(c, result, now)
-			if c == nil {
-				cs.Counter = 1
-			} else {
-				cs.Counter++
-			}
+			cs.Counter += drainCacheHitCounter(domain) + 1
 			polCache.Set(domain, cs)
 		}
 	}
@@ -961,8 +1000,10 @@ func queryDomainOnceImpl(domain string) domainResult {
 func dumpCachedPolicies(conn net.Conn, export bool) {
 	items := tidyCache()
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].Value.Counter != items[j].Value.Counter {
-			return items[i].Value.Counter > items[j].Value.Counter
+		iCounter := cacheEntryCounter(items[i].Key, items[i].Value)
+		jCounter := cacheEntryCounter(items[j].Key, items[j].Value)
+		if iCounter != jCounter {
+			return iCounter > jCounter
 		}
 		return items[i].Key < items[j].Key
 	})
@@ -975,7 +1016,7 @@ func dumpCachedPolicies(conn net.Conn, export bool) {
 		if export {
 			fmt.Fprintf(conn, "%-28s %s\n", entry.Key, policy)
 		} else {
-			fmt.Fprintf(conn, "%-28s  %6d  %s\n", entry.Key, entry.Value.Counter, policy)
+			fmt.Fprintf(conn, "%-28s  %6d  %s\n", entry.Key, cacheEntryCounter(entry.Key, entry.Value), policy)
 		}
 	}
 }
@@ -987,8 +1028,7 @@ func purgeCache(conn net.Conn) {
 
 func tidyCache() []cache.Entry[*CacheStruct] {
 	polCache.Lock()
-	defer polCache.Unlock()
-	defer polCache.Save(true)
+	flushCacheHitCounters(true)
 	items := polCache.Items(true)
 	now := time.Now()
 	var entries []cache.Entry[*CacheStruct]
@@ -1004,6 +1044,10 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 		} else {
 			entries = append(entries, entry)
 		}
+	}
+	polCache.Unlock()
+	if err := polCache.Save(false); err != nil {
+		slog.Error("Could not save cache", "error", err)
 	}
 	return entries
 }
