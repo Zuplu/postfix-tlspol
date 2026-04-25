@@ -931,6 +931,7 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			cs := mergeCacheResult(c, result, now)
 			cs.Counter += drainCacheHitCounter(domain) + 1
 			polCache.Set(domain, cs)
+			scheduleCachedPolicyPrefetch(domain, cs, now)
 		}
 	}
 }
@@ -1069,6 +1070,7 @@ func dumpCachedPolicies(conn net.Conn, export bool) {
 
 func purgeCache(conn net.Conn) {
 	polCache.Purge()
+	clearPrefetchSchedule()
 	fmt.Fprintln(conn, "OK")
 }
 
@@ -1087,8 +1089,10 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 			strings.Contains(entry.Value.MtaSts.Policy, "match= ")
 		if removeExpiredNoPolicy || removeStalePolicy || removeLegacyBadPolicy {
 			polCache.Remove(true, entry.Key)
+			unscheduleCachedPolicyPrefetch(entry.Key)
 		} else {
 			entries = append(entries, entry)
+			scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
 		}
 	}
 	polCache.Unlock()

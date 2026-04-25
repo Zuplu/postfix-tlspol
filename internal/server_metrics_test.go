@@ -434,3 +434,33 @@ func TestRefreshDomainReusesFreshMtaStsBranch(t *testing.T) {
 		t.Fatal("expected fresh MTA-STS branch not to be returned as refreshed data")
 	}
 }
+
+func TestNextPrefetchTime(t *testing.T) {
+	now := time.Now()
+	c := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(5 * time.Minute)},
+		Dane: PolicyBranch{
+			Policy:    "dane",
+			TTL:       300,
+			ExpiresAt: now.Add(5 * time.Minute),
+		},
+	}
+
+	due, ok := nextPrefetchTime(c, now)
+	if !ok {
+		t.Fatal("expected policy to be scheduled for prefetch")
+	}
+	expected := now.Add(time.Duration(300-PREFETCH_INTERVAL) * time.Second)
+	if !due.Equal(expected) {
+		t.Fatalf("unexpected prefetch time: got %s want %s", due, expected)
+	}
+
+	c.Dane.ExpiresAt = now.Add(-time.Second)
+	due, ok = nextPrefetchTime(c, now)
+	if !ok {
+		t.Fatal("expected expired policy to be scheduled immediately")
+	}
+	if !due.Equal(now) {
+		t.Fatalf("expected immediate prefetch, got %s", due)
+	}
+}
