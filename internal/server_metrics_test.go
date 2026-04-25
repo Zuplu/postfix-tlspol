@@ -383,3 +383,54 @@ func TestQueryDomainUsesMtaStsOnlyAfterFreshNoDane(t *testing.T) {
 		t.Fatalf("unexpected selected policy: %+v", result)
 	}
 }
+
+func TestRefreshDomainReusesFreshMtaStsBranch(t *testing.T) {
+	origDane := checkDanePolicy
+	origMtaSts := checkMtaStsPolicy
+	defer func() {
+		checkDanePolicy = origDane
+		checkMtaStsPolicy = origMtaSts
+	}()
+
+	var daneCalls atomic.Int32
+	var mtaStsCalls atomic.Int32
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		daneCalls.Add(1)
+		return "", 300
+	}
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		mtaStsCalls.Add(1)
+		return "secure match=mx.example servername=hostname", "policy_type=sts", 600
+	}
+
+	now := time.Now()
+	cached := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Hour)},
+		Dane: PolicyBranch{
+			ExpiresAt: now.Add(-time.Second),
+		},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.cached.example servername=hostname",
+			Report:    "policy_type=sts policy_domain=example.com",
+			TTL:       600,
+			ExpiresAt: now.Add(10 * time.Minute),
+		},
+	}
+
+	result := refreshDomainOnceImpl("example.com", cached)
+	if daneCalls.Load() != 1 {
+		t.Fatalf("expected one DANE refresh, got %d", daneCalls.Load())
+	}
+	if mtaStsCalls.Load() != 0 {
+		t.Fatalf("expected fresh MTA-STS branch to be reused, got %d refreshes", mtaStsCalls.Load())
+	}
+	if result.Policy != cached.MtaSts.Policy {
+		t.Fatalf("expected cached MTA-STS policy, got %q", result.Policy)
+	}
+	if !result.Dane.HasData() {
+		t.Fatal("expected refreshed no-DANE branch to be returned for cache merge")
+	}
+	if result.MtaSts.HasData() {
+		t.Fatal("expected fresh MTA-STS branch not to be returned as refreshed data")
+	}
+}

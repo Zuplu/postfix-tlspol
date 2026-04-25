@@ -922,7 +922,7 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			continue
 		}
 
-		result := queryDomain(domain)
+		result := refreshDomain(domain, c)
 
 		replySocketmap(conn, domain, result.Policy, result.Report, result.TTL, withTlsRpt)
 
@@ -945,6 +945,7 @@ type domainResult struct {
 }
 
 var queryDomainOnce = queryDomainOnceImpl
+var refreshDomainOnce = refreshDomainOnceImpl
 
 func normalizeDomain(domain string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
@@ -958,41 +959,86 @@ func queryDomain(domain string) domainResult {
 }
 
 func queryDomainOnceImpl(domain string) domainResult {
+	return queryDomainBranches(domain, nil, time.Now())
+}
+
+func refreshDomain(domain string, c *CacheStruct) domainResult {
+	res, _, _ := queryGroup.Do(domain, func() (any, error) {
+		return refreshDomainOnce(domain, c), nil
+	})
+	return res.(domainResult)
+}
+
+func refreshDomainOnceImpl(domain string, c *CacheStruct) domainResult {
+	return queryDomainBranches(domain, c, time.Now())
+}
+
+func freshBranchForSelection(branch PolicyBranch, now time.Time) (PolicyBranch, bool) {
+	ttl := branch.RemainingTTL(now)
+	if ttl == 0 {
+		return PolicyBranch{}, false
+	}
+	branch.TTL = ttl
+	return branch, true
+}
+
+func queryDomainBranches(domain string, c *CacheStruct, now time.Time) domainResult {
 	ctx, cancel := context.WithTimeout(bgCtx, time.Duration(POLICY_ATTEMPTS)*REQUEST_TIMEOUT+time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
 	var (
-		danePolicy string
-		daneTTL    uint32
-		mtaStsPol  string
-		mtaStsRpt  string
-		mtaStsTTL  uint32
+		danePolicy        string
+		daneTTL           uint32
+		mtaStsPol         string
+		mtaStsRpt         string
+		mtaStsTTL         uint32
+		daneForSelection  PolicyBranch
+		mtaStsForSelected PolicyBranch
 	)
-	wg.Add(2)
 
-	// DANE query
-	go func() {
-		defer wg.Done()
-		danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
-	}()
+	if c != nil {
+		daneForSelection, _ = freshBranchForSelection(c.Dane, now)
+		mtaStsForSelected, _ = freshBranchForSelection(c.MtaSts, now)
+	}
 
-	// MTA-STS query
-	go func() {
-		defer wg.Done()
-		mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
-	}()
+	queryDane := !daneForSelection.HasData()
+	queryMtaSts := !mtaStsForSelected.HasData()
+
+	if queryDane {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
+		}()
+	}
+
+	if queryMtaSts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
+		}()
+	}
 	wg.Wait()
 
 	daneTemp := danePolicy == "TEMP"
-	dane := branchFromResult(danePolicy, "", daneTTL)
-	mtaSts := branchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
-	policy, report, ttl := selectedPolicyFromBranches(dane, mtaSts, daneTemp)
+	refreshedDane := PolicyBranch{}
+	if queryDane {
+		refreshedDane = branchFromResult(danePolicy, "", daneTTL)
+		daneForSelection = refreshedDane
+	}
+	refreshedMtaSts := PolicyBranch{}
+	if queryMtaSts {
+		refreshedMtaSts = branchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
+		mtaStsForSelected = refreshedMtaSts
+	}
+	policy, report, ttl := selectedPolicyFromBranches(daneForSelection, mtaStsForSelected, daneTemp)
 	return domainResult{
 		Policy:   policy,
 		Report:   report,
 		TTL:      ttl,
-		Dane:     dane,
-		MtaSts:   mtaSts,
+		Dane:     refreshedDane,
+		MtaSts:   refreshedMtaSts,
 		DaneTemp: daneTemp,
 	}
 }

@@ -65,7 +65,7 @@ func prefetchCachedPolicies() {
 				<-semaphore
 			}()
 			// Refresh the cached policy
-			refreshed := queryDomain(c.Key)
+			refreshed := refreshDomain(c.Key, c.Value)
 			if refreshed.Dane.HasData() || refreshed.MtaSts.HasData() {
 				counter.Add(1)
 				polCache.Set(c.Key, mergeCacheResult(c.Value, refreshed, now))
