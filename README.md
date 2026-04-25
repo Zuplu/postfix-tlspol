@@ -10,7 +10,7 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
 
 [<img src="https://zuplu.com/dashboard.png" width="140em" align="right" alt="Grafana Dashboard" />](#)
 
-The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket, including Go runtime metrics and counters for `dane`, `dane-only`, and `secure` (MTA-STS) results.
+The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket, including Go runtime metrics and counters for `dane`, `dane-only`, and `secure` (MTA-STS) results. You can also set `server.metrics-address` for a separate HTTP-only metrics endpoint that does not expose the socketmap protocol.
 
 <br/><br/><br/><br/>
 
@@ -155,6 +155,11 @@ server:
   # server:port to listen as a socketmap server
   # or unix:/run/postfix-tlspol/tlspol.sock for Unix Domain Socket
   address: 127.0.0.1:8642
+
+  # optional HTTP-only metrics endpoint, e.g. 127.0.0.1:9642
+  # or unix:/run/postfix-tlspol/metrics.sock
+  # unset by default because /metrics is also autodetected on the socketmap listener
+  #metrics-address:
 
   # socket file permissions if Unix Domain Sockets are used
   socket-permissions: 0666

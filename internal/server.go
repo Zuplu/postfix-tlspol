@@ -345,7 +345,7 @@ func listenSystemdSocket() ([]net.Listener, bool, error) {
 	return listeners, true, nil
 }
 
-func serveListener(l net.Listener) {
+func serveSocketmapListener(l net.Listener) {
 	defer serverWg.Done()
 
 	for {
@@ -366,9 +366,54 @@ func serveListener(l net.Listener) {
 	}
 }
 
+func serveMetricsListener(l net.Listener) {
+	defer serverWg.Done()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(handleMetricsOnlyHTTPRequest),
+	}
+	err := server.Serve(l)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		addr := l.Addr()
+		if addr == nil {
+			slog.Error("Metrics HTTP server terminated with error", "error", err, "network", "<unknown>", "address", "<unknown>")
+		} else {
+			slog.Error("Metrics HTTP server terminated with error", "error", err, "network", addr.Network(), "address", addr.String())
+		}
+	}
+}
+
+func listenConfiguredAddress(address string, permissions os.FileMode) (net.Listener, error) {
+	if strings.HasPrefix(address, "unix:") {
+		socketPath := address[5:]
+		err := os.Remove(socketPath)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		l, err := net.Listen("unix", socketPath)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(socketPath, permissions); err != nil {
+			l.Close()
+			return nil, err
+		}
+		return l, nil
+	}
+	return net.Listen("tcp", address)
+}
+
+func closeListeners(toClose []net.Listener) {
+	for _, l := range toClose {
+		if l != nil {
+			l.Close()
+		}
+	}
+}
+
 func startServer() {
 	var err error
-	listeners, inherited, err := listenSystemdSocket()
+	socketmapListeners, inherited, err := listenSystemdSocket()
 	if err != nil {
 		slog.Error("Error inheriting systemd-activated socket", "error", err)
 		os.Exit(1)
@@ -376,20 +421,9 @@ func startServer() {
 
 	if !inherited {
 		var directListener net.Listener
-		if strings.HasPrefix(config.Server.Address, "unix:") {
-			socketPath := config.Server.Address[5:]
-			err = os.Remove(socketPath)
-			if err == nil || os.IsNotExist(err) {
-				directListener, err = net.Listen("unix", socketPath)
-				if err == nil {
-					err = os.Chmod(socketPath, config.Server.SocketPermissions)
-				}
-			}
-		} else {
-			directListener, err = net.Listen("tcp", config.Server.Address)
-		}
+		directListener, err = listenConfiguredAddress(config.Server.Address, config.Server.SocketPermissions)
 		if err == nil {
-			listeners = []net.Listener{directListener}
+			socketmapListeners = []net.Listener{directListener}
 		}
 	} else {
 		slog.Info("Using systemd socket activation")
@@ -399,13 +433,13 @@ func startServer() {
 		os.Exit(1)
 	}
 
-	if len(listeners) == 0 {
+	if len(socketmapListeners) == 0 {
 		slog.Error("Error starting socketmap server", "error", "no listeners available")
 		os.Exit(1)
 	}
 
 	if inherited {
-		for _, l := range listeners {
+		for _, l := range socketmapListeners {
 			addr := l.Addr()
 			if addr == nil {
 				slog.Info("Server listening", "activation", "systemd", "network", "<unknown>", "address", "<unknown>")
@@ -414,9 +448,9 @@ func startServer() {
 			slog.Info("Server listening", "activation", "systemd", "network", addr.Network(), "address", addr.String())
 		}
 		slog.Warn("Ignoring configured server.address because systemd socket activation is active", "configured_address", config.Server.Address)
-		slog.Info("Listening on all systemd-provided sockets", "count", len(listeners))
+		slog.Info("Listening on all systemd-provided sockets", "count", len(socketmapListeners))
 	} else {
-		addr := listeners[0].Addr()
+		addr := socketmapListeners[0].Addr()
 		if addr == nil {
 			slog.Info("Server listening", "activation", "direct", "network", "<unknown>", "address", "<unknown>")
 		} else {
@@ -424,17 +458,40 @@ func startServer() {
 		}
 	}
 
+	listeners = append([]net.Listener(nil), socketmapListeners...)
+
+	var metricsListener net.Listener
+	if metricsAddress := strings.TrimSpace(config.Server.MetricsAddress); metricsAddress != "" {
+		metricsListener, err = listenConfiguredAddress(metricsAddress, config.Server.SocketPermissions)
+		if err != nil {
+			closeListeners(listeners)
+			slog.Error("Error starting metrics HTTP server", "error", err)
+			os.Exit(1)
+		}
+		listeners = append(listeners, metricsListener)
+		addr := metricsListener.Addr()
+		if addr == nil {
+			slog.Info("Metrics HTTP server listening", "network", "<unknown>", "address", "<unknown>")
+		} else {
+			slog.Info("Metrics HTTP server listening", "network", addr.Network(), "address", addr.String())
+		}
+	}
+
 	defer func() {
 		listeners = nil
 	}()
 
-	serverWg.Add(len(listeners))
-	for _, l := range listeners {
-		go serveListener(l)
+	serverWg.Add(len(socketmapListeners))
+	for _, l := range socketmapListeners {
+		go serveSocketmapListener(l)
+	}
+	if metricsListener != nil {
+		serverWg.Add(1)
+		go serveMetricsListener(metricsListener)
 	}
 	serverWg.Wait()
 
-	slog.Info("Socketmap server terminated")
+	slog.Info("Servers terminated")
 }
 
 func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruct, bool) {
@@ -744,6 +801,27 @@ func handleHTTPConnection(conn net.Conn, reader *bufio.Reader) {
 		if shouldClose {
 			return
 		}
+	}
+}
+
+func handleMetricsOnlyHTTPRequest(w http.ResponseWriter, req *http.Request) {
+	if req.URL.Path == "/metrics" && (req.Method == http.MethodGet || req.Method == http.MethodHead) {
+		body := buildMetricsText()
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+		if req.Method == http.MethodGet {
+			_, _ = io.WriteString(w, body)
+		}
+		return
+	}
+
+	body := "not found\n"
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusNotFound)
+	if req.Method != http.MethodHead {
+		_, _ = io.WriteString(w, body)
 	}
 }
 

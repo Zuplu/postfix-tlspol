@@ -23,6 +23,7 @@ var defaultConfig = Config{}
 
 type ServerConfig struct {
 	Address           string `yaml:"address"`
+	MetricsAddress    string `yaml:"metrics-address"`
 	CacheFile         string `yaml:"cache-file"`
 	NamedLogLevel     string `yaml:"log-level"`
 	LogFormat         string `yaml:"log-format"`
@@ -35,6 +36,7 @@ type ServerConfig struct {
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	// Set default values
 	c.Address = defaultConfig.Server.Address
+	c.MetricsAddress = defaultConfig.Server.MetricsAddress
 	c.SocketPermissions = defaultConfig.Server.SocketPermissions
 	c.NamedLogLevel = defaultConfig.Server.NamedLogLevel
 	c.TlsRpt = false

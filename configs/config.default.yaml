@@ -6,6 +6,11 @@ server:
   # this line is ignored when systemd socket activation is used (default)
   address: 127.0.0.1:8642
 
+  # optional HTTP-only metrics endpoint, e.g. 127.0.0.1:9642
+  # or unix:/run/postfix-tlspol/metrics.sock
+  # unset by default because /metrics is also autodetected on the socketmap listener
+  #metrics-address:
+
   # socket file permissions if Unix Domain Sockets are used
   socket-permissions: 0666
 

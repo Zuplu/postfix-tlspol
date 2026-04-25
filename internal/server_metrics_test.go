@@ -10,6 +10,8 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +76,43 @@ func TestBuildMetricsTextIncludesExpectedMetrics(t *testing.T) {
 		if !strings.Contains(metrics, expected) {
 			t.Fatalf("expected metrics output to contain %q", expected)
 		}
+	}
+}
+
+func TestMetricsOnlyHTTPHandler(t *testing.T) {
+	metricQueriesTotal.Store(12)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	handleMetricsOnlyHTTPRequest(rec, req)
+
+	resp := rec.Result()
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "postfix_tlspol_queries_total 12") {
+		t.Fatalf("expected metrics body, got %q", string(body))
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Fatalf("unexpected content type %q", got)
+	}
+}
+
+func TestMetricsOnlyHTTPHandlerDoesNotExposeSocketmap(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/socketmap", nil)
+	rec := httptest.NewRecorder()
+
+	handleMetricsOnlyHTTPRequest(rec, req)
+
+	resp := rec.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", resp.StatusCode)
 	}
 }
 
