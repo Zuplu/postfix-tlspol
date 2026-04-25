@@ -25,15 +25,22 @@ type ResultWithTTL struct {
 	TTL    uint32
 }
 
-func getMxRecords(ctx context.Context, domain string) ([]string, uint32, error, bool) {
+type mxRecord struct {
+	host string
+	ttl  uint32
+}
+
+type mxCheckResult struct {
+	host   string
+	ttl    uint32
+	status uint8
+}
+
+func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([]string, uint32, error, bool) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeMX)
 	m.SetEdns0(4096, true)
 
-	resolverAddress, err := config.Dns.GetResolverAddress()
-	if err != nil {
-		return nil, 0, err, false
-	}
 	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
 	if err != nil {
 		return nil, 0, err, false
@@ -48,17 +55,37 @@ func getMxRecords(ctx context.Context, domain string) ([]string, uint32, error, 
 		return nil, 0, errors.New(dns.RcodeToString[r.Rcode]), false
 	}
 
-	var mxRecords []string
-	var ttls []uint32
+	var records []mxRecord
 	for _, answer := range r.Answer {
 		if mx, ok := answer.(*dns.MX); ok {
-			if checkMx(ctx, mx.Mx) != MxOk {
-				incompl = true
-				continue
-			}
-			mxRecords = append(mxRecords, mx.Mx)
-			ttls = append(ttls, mx.Hdr.Ttl)
+			records = append(records, mxRecord{host: mx.Mx, ttl: mx.Hdr.Ttl})
 		}
+	}
+	if len(records) == 0 {
+		return nil, 0, nil, incompl
+	}
+
+	results := make(chan mxCheckResult, len(records))
+	for _, record := range records {
+		go func(record mxRecord) {
+			results <- mxCheckResult{
+				host:   record.host,
+				ttl:    record.ttl,
+				status: checkMx(ctx, record.host, resolverAddress),
+			}
+		}(record)
+	}
+
+	var mxRecords []string
+	var ttls []uint32
+	for range records {
+		result := <-results
+		if result.status != MxOk {
+			incompl = true
+			continue
+		}
+		mxRecords = append(mxRecords, result.host)
+		ttls = append(ttls, result.ttl)
 	}
 
 	return mxRecords, findMin(ttls), nil, incompl
@@ -71,37 +98,45 @@ const (
 )
 
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
-func checkMx(ctx context.Context, mx string) uint8 {
+func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 	if !valid.IsDNSName(mx) {
 		return MxFail
 	}
 	types := []uint16{dns.TypeA, dns.TypeAAAA}
-	hasRecord := false
-ipCheck:
+	results := make(chan uint8, len(types))
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	for _, t := range types {
-		m := new(dns.Msg)
-		m.SetQuestion(dns.Fqdn(mx), t)
-		m.SetEdns0(4096, true)
+		go func(t uint16) {
+			m := new(dns.Msg)
+			m.SetQuestion(dns.Fqdn(mx), t)
+			m.SetEdns0(4096, true)
 
-		resolverAddress, err := config.Dns.GetResolverAddress()
-		if err != nil {
-			return MxFail
-		}
-		r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
-		if err != nil {
-			return MxFail
-		}
-		switch r.Rcode {
-		case dns.RcodeSuccess:
-			if r.MsgHdr.AuthenticatedData {
-				hasRecord = true
-				break ipCheck
+			r, _, err := client.ExchangeContext(cctx, m, resolverAddress)
+			if err != nil {
+				results <- MxFail
+				return
 			}
-		default:
+			if r.Rcode == dns.RcodeSuccess && r.MsgHdr.AuthenticatedData {
+				results <- MxOk
+				return
+			}
+			results <- MxNotSec
+		}(t)
+	}
+
+	failed := false
+	for range types {
+		switch <-results {
+		case MxOk:
+			cancel()
+			return MxOk
+		case MxFail:
+			failed = true
 		}
 	}
-	if hasRecord {
-		return MxOk
+	if failed {
+		return MxFail
 	}
 	return MxNotSec
 }
@@ -140,15 +175,11 @@ func isTlsaUsable(r *dns.TLSA) bool {
 	return true
 }
 
-func checkTlsa(ctx context.Context, mx string) ResultWithTTL {
+func checkTlsa(ctx context.Context, mx string, resolverAddress string) ResultWithTTL {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn("_25._tcp."+mx), dns.TypeTLSA)
 	m.SetEdns0(4096, true)
 
-	resolverAddress, err := config.Dns.GetResolverAddress()
-	if err != nil {
-		return ResultWithTTL{Result: "", TTL: 0, Err: err}
-	}
 	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
 	if err != nil {
 		return ResultWithTTL{Result: "", TTL: 0, Err: err}
@@ -190,12 +221,17 @@ const (
 )
 
 func checkDane(ctx context.Context, domain string, mayRetry bool) (string, uint32) {
+	resolverAddress, err := config.Dns.GetResolverAddress()
+	if err != nil {
+		slog.Warn("DNS resolver configuration error during DANE lookup", "domain", domain, "error", err)
+		return "TEMP", 0
+	}
 	attempts := 1
 	if mayRetry {
 		attempts = POLICY_ATTEMPTS
 	}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		policy, ttl, err := checkDaneOnce(ctx, domain)
+		policy, ttl, err := checkDaneOnce(ctx, domain, resolverAddress)
 		if err == nil {
 			return policy, ttl
 		}
@@ -213,8 +249,8 @@ func checkDane(ctx context.Context, domain string, mayRetry bool) (string, uint3
 	return "TEMP", 0
 }
 
-func checkDaneOnce(ctx context.Context, domain string) (string, uint32, error) {
-	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain)
+func checkDaneOnce(ctx context.Context, domain string, resolverAddress string) (string, uint32, error) {
+	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain, resolverAddress)
 	if err != nil {
 		return "", 0, err
 	}
@@ -226,7 +262,7 @@ func checkDaneOnce(ctx context.Context, domain string) (string, uint32, error) {
 	cctx, cancel := context.WithCancel(ctx)
 	for _, mx := range mxRecords {
 		go func(mx string) {
-			tlsaResults <- checkTlsa(cctx, mx)
+			tlsaResults <- checkTlsa(cctx, mx, resolverAddress)
 		}(mx)
 	}
 	return getDanePolicy(cctx, cancel, ttl, incompl, numRecords, tlsaResults)

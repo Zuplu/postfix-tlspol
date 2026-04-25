@@ -24,15 +24,11 @@ import (
 
 const MTASTS_MAX_AGE uint64 = 31557600 // RFC 8461, 3.2
 
-func checkMtaStsRecord(ctx context.Context, domain string) (bool, error) {
+func checkMtaStsRecord(ctx context.Context, domain string, resolverAddress string) (bool, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn("_mta-sts."+domain), dns.TypeTXT)
 	m.SetEdns0(4096, false)
 
-	resolverAddress, err := config.Dns.GetResolverAddress()
-	if err != nil {
-		return false, err
-	}
 	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
 	if err != nil {
 		return false, err
@@ -194,12 +190,17 @@ func parseMtaStsPolicy(domain string, r io.Reader) (string, string, uint32) {
 }
 
 func checkMtaSts(ctx context.Context, domain string, mayRetry bool) (string, string, uint32) {
+	resolverAddress, err := config.Dns.GetResolverAddress()
+	if err != nil {
+		slog.Warn("DNS resolver configuration error during MTA-STS lookup", "domain", domain, "error", err)
+		return "TEMP", "", 0
+	}
 	attempts := 1
 	if mayRetry {
 		attempts = POLICY_ATTEMPTS
 	}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		policy, report, ttl, err := checkMtaStsOnce(ctx, domain)
+		policy, report, ttl, err := checkMtaStsOnce(ctx, domain, resolverAddress)
 		if err == nil {
 			return policy, report, ttl
 		}
@@ -217,8 +218,8 @@ func checkMtaSts(ctx context.Context, domain string, mayRetry bool) (string, str
 	return "TEMP", "", 0
 }
 
-func checkMtaStsOnce(ctx context.Context, domain string) (string, string, uint32, error) {
-	hasRecord, err := checkMtaStsRecord(ctx, domain)
+func checkMtaStsOnce(ctx context.Context, domain string, resolverAddress string) (string, string, uint32, error) {
+	hasRecord, err := checkMtaStsRecord(ctx, domain, resolverAddress)
 	if err != nil {
 		return "", "", 0, err
 	}
