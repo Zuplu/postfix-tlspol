@@ -129,6 +129,19 @@ ETCDIR="$(resolve_dir "${ETCDIR:-}" /etc/postfix-tlspol)"
 DATADIR="$(resolve_dir "${DATADIR:-}" /var/lib/postfix-tlspol)"
 SYSTEMDUNITDIR="$(resolve_dir "${SYSTEMDUNITDIR:-}" /usr/lib/systemd/system)"
 
+systemd_unit_file_exists() {
+  unit="$1"
+
+  for unit_dir in "$SYSTEMDUNITDIR" /etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+    unit_path="${unit_dir%/}/$unit"
+    if [ -e "$unit_path" ] || [ -L "$unit_path" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 if [ -z "${NOOPT:-}" ]; then
   if [ "$(uname -m)" = "x86_64" ]; then
     detect_goamd64() {
@@ -289,6 +302,16 @@ install_systemd_service() {
     return 1
   fi
 
+  socket_unit_existed=0
+  socket_unit_was_enabled=0
+  if systemd_unit_file_exists postfix-tlspol.socket || systemctl cat postfix-tlspol.socket > /dev/null 2>&1; then
+    socket_unit_existed=1
+  fi
+  if systemctl is-enabled --quiet postfix-tlspol.socket > /dev/null 2>&1; then
+    socket_unit_was_enabled=1
+    socket_unit_existed=1
+  fi
+
   install -d -m 0755 "$SYSTEMDUNITDIR"
   tmp_unit="$(mktemp)"
   trap 'rm -f "$tmp_unit"' EXIT HUP INT TERM
@@ -323,8 +346,12 @@ install_systemd_service() {
   fi
 
   systemctl daemon-reload
-  log_warn "Ensuring socket unit is enabled..."
-  systemctl enable --now postfix-tlspol.socket
+  if [ "$socket_unit_existed" -eq 0 ] || [ "$socket_unit_was_enabled" -eq 1 ]; then
+    log_warn "Ensuring socket unit is enabled..."
+    systemctl enable --now postfix-tlspol.socket
+  else
+    log_warn "Socket unit was already installed but not enabled; leaving it disabled."
+  fi
   log_warn "Restarting service unit..."
   systemctl restart postfix-tlspol.service
 

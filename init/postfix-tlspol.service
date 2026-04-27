@@ -1,8 +1,7 @@
 [Unit]
 Description=postfix-tlspol daemon
-After=nss-lookup.target network-online.target
+After=nss-lookup.target network-online.target postfix-tlspol.socket
 Wants=nss-lookup.target
-Requires=postfix-tlspol.socket
 
 [Service]
 ExecStart=/usr/bin/postfix-tlspol -config /etc/postfix-tlspol/config.yaml
