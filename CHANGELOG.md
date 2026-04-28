@@ -1,3 +1,17 @@
+## What's Changed in v1.10.0 (2026-04-28)
+
+* fix: use relative stats, remove superfluous stats persistence by @DragonWork
+* fix: optimize retry logic and check for DANE even if a previous MTA-STS result exists in cache by @DragonWork
+* feat: enable configuration of an http-only metrics endpoint by @DragonWork
+* perf(cache): reduce cache-hit writes by @DragonWork
+* perf(policy): refresh stale cache branches selectively by @DragonWork
+* perf(dns): parallelize MX validation by @DragonWork
+* perf(prefetch): schedule cache refreshes by expiry by @DragonWork
+* build(deps): update toolchain to go1.26.2 by @DragonWork
+* fix: don't enforce systemd socket usage if the socket is disabled/masked on install by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.9.1...v1.10.0
+
 ## What's Changed in v1.9.1 (2026-04-17)
 
 * fix: fix Docker workflow by @DragonWork
