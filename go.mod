@@ -2,7 +2,7 @@ module github.com/Zuplu/postfix-tlspol
 
 go 1.25.0
 
-toolchain go1.26.3
+toolchain go1.26.4
 
 require (
 	github.com/miekg/dns v1.1.72
