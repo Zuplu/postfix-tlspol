@@ -7,8 +7,8 @@ toolchain go1.26.4
 require (
 	github.com/miekg/dns v1.1.72
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0
 )
 
 require (
