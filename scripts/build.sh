@@ -17,6 +17,7 @@
 #    ETCDIR         config directory override
 #    DATADIR        data directory override
 #    SYSTEMDUNITDIR systemd unit directory override
+#    SYSTEMDOVERRIDEDIR systemd local override directory override
 #
 #  Defaults:
 #    PREFIX="/":
@@ -24,12 +25,14 @@
 #      ETCDIR=/etc/postfix-tlspol
 #      DATADIR=/var/lib/postfix-tlspol
 #      SYSTEMDUNITDIR=/usr/lib/systemd/system
+#      SYSTEMDOVERRIDEDIR=/etc/systemd/system
 #
 #    PREFIX!="/":
 #      BINDIR=$PREFIX/bin
 #      ETCDIR=$PREFIX/etc/postfix-tlspol
 #      DATADIR=$PREFIX/var/lib/postfix-tlspol
 #      SYSTEMDUNITDIR=$PREFIX/usr/lib/systemd/system
+#      SYSTEMDOVERRIDEDIR=$PREFIX/etc/systemd/system
 #
 ###################
 
@@ -69,6 +72,10 @@ log_meta() {
 
 sed_escape_replacement() {
   printf "%s" "$1" | sed 's/[\\&|]/\\&/g'
+}
+
+systemd_escape_value() {
+  printf "%s" "$1" | sed 's/%/%%/g'
 }
 
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
@@ -128,11 +135,13 @@ BINDIR="$(resolve_dir "${BINDIR:-}" "$bindir_default")"
 ETCDIR="$(resolve_dir "${ETCDIR:-}" /etc/postfix-tlspol)"
 DATADIR="$(resolve_dir "${DATADIR:-}" /var/lib/postfix-tlspol)"
 SYSTEMDUNITDIR="$(resolve_dir "${SYSTEMDUNITDIR:-}" /usr/lib/systemd/system)"
+SYSTEMDOVERRIDEDIR="$(resolve_dir "${SYSTEMDOVERRIDEDIR:-}" /etc/systemd/system)"
 
 systemd_unit_file_exists() {
   unit="$1"
+  unit_dirs="${SYSTEMD_UNIT_FILE_SEARCH_DIRS:-$SYSTEMDUNITDIR /etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system /lib/systemd/system}"
 
-  for unit_dir in "$SYSTEMDUNITDIR" /etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+  for unit_dir in $unit_dirs; do
     unit_path="${unit_dir%/}/$unit"
     if [ -e "$unit_path" ] || [ -L "$unit_path" ]; then
       return 0
@@ -140,6 +149,111 @@ systemd_unit_file_exists() {
   done
 
   return 1
+}
+
+server_config_value() {
+  key="$1"
+  file="$2"
+
+  [ -f "$file" ] || return 1
+
+  awk -v wanted="$key" '
+    function trim(s) {
+      sub(/^[ \t\r\n]+/, "", s)
+      sub(/[ \t\r\n]+$/, "", s)
+      return s
+    }
+    /^[ \t]*#/ { next }
+    /^[^ \t].*:/ {
+      section = $0
+      sub(/:.*/, "", section)
+      in_server = trim(section) == "server"
+      next
+    }
+    in_server && $0 ~ "^[ \t]+" wanted "[ \t]*:" {
+      val = $0
+      sub("^[ \t]+" wanted "[ \t]*:[ \t]*", "", val)
+      sub(/[ \t]+#.*/, "", val)
+      val = trim(val)
+      quote = substr(val, 1, 1)
+      if ((quote == "\"" || quote == "'\''") && substr(val, length(val), 1) == quote) {
+        val = substr(val, 2, length(val) - 2)
+      }
+      print val
+      exit
+    }
+  ' "$file"
+}
+
+socket_listenstream_from_config_address() {
+  address="$1"
+
+  case "$address" in
+    unix:*)
+      printf "%s\n" "${address#unix:}"
+      ;;
+    :[0-9]*)
+      printf "%s\n" "${address#:}"
+      ;;
+    *)
+      printf "%s\n" "$address"
+      ;;
+  esac
+}
+
+install_socket_listenstream_override_from_config() {
+  cfg="${ETCDIR%/}/config.yaml"
+  default_listen="127.0.0.1:8642"
+
+  address="$(server_config_value address "$cfg" || true)"
+  if [ -z "$address" ]; then
+    return 0
+  fi
+
+  listen_stream="$(socket_listenstream_from_config_address "$address")"
+  if [ -z "$listen_stream" ] || [ "$listen_stream" = "$default_listen" ]; then
+    return 0
+  fi
+
+  case "$listen_stream" in
+    *" "*|*"	"*)
+      log_warn "Skipping socket ListenStream migration override for unsupported address with whitespace: $address"
+      return 0
+      ;;
+  esac
+
+  dropin_dir="${SYSTEMDOVERRIDEDIR%/}/postfix-tlspol.socket.d"
+  dropin="$dropin_dir/10-listenstream-from-config.conf"
+  if [ -e "$dropin" ]; then
+    log_warn "Socket ListenStream migration override already exists; leaving it unchanged:"
+    log_warn "  $dropin"
+    return 0
+  fi
+
+  install -d -m 0755 "$dropin_dir"
+  tmp_dropin="$(mktemp)"
+  trap 'rm -f "$tmp_dropin"' EXIT HUP INT TERM
+
+  escaped_listen_stream="$(systemd_escape_value "$listen_stream")"
+  {
+    printf "%s\n" "[Socket]"
+    printf "%s\n" "ListenStream="
+    printf "%s\n" "ListenStream=$escaped_listen_stream"
+    if [ "${address#unix:}" != "$address" ]; then
+      socket_mode="$(server_config_value socket-permissions "$cfg" || true)"
+      if [ -n "$socket_mode" ] && [ "$socket_mode" != "0666" ]; then
+        printf "%s\n" "SocketMode=$socket_mode"
+      fi
+    fi
+  } > "$tmp_dropin"
+
+  install -m 0644 "$tmp_dropin" "$dropin"
+  rm -f "$tmp_dropin"
+  trap - EXIT HUP INT TERM
+
+  log_warn "Created socket ListenStream migration override from existing config:"
+  log_warn "  $dropin"
+  log_warn "  ListenStream=$listen_stream"
 }
 
 if [ -z "${NOOPT:-}" ]; then
@@ -304,12 +418,20 @@ install_systemd_service() {
 
   socket_unit_existed=0
   socket_unit_was_enabled=0
+  socket_unit_was_active=0
+  service_was_active=0
   if systemd_unit_file_exists postfix-tlspol.socket || systemctl cat postfix-tlspol.socket > /dev/null 2>&1; then
     socket_unit_existed=1
   fi
   if systemctl is-enabled --quiet postfix-tlspol.socket > /dev/null 2>&1; then
     socket_unit_was_enabled=1
     socket_unit_existed=1
+  fi
+  if systemctl is-active --quiet postfix-tlspol.socket > /dev/null 2>&1; then
+    socket_unit_was_active=1
+  fi
+  if systemctl is-active --quiet postfix-tlspol.service > /dev/null 2>&1; then
+    service_was_active=1
   fi
 
   install -d -m 0755 "$SYSTEMDUNITDIR"
@@ -345,8 +467,24 @@ install_systemd_service() {
     return 0
   fi
 
-  systemctl daemon-reload
+  want_socket=0
   if [ "$socket_unit_existed" -eq 0 ] || [ "$socket_unit_was_enabled" -eq 1 ]; then
+    want_socket=1
+  fi
+
+  if [ "$want_socket" -eq 1 ]; then
+    if [ "$socket_unit_existed" -eq 0 ] || { [ "$socket_unit_was_active" -eq 0 ] && [ "$service_was_active" -eq 1 ]; }; then
+      install_socket_listenstream_override_from_config
+    fi
+  fi
+
+  systemctl daemon-reload
+  if [ "$want_socket" -eq 1 ]; then
+    if ! systemctl is-active --quiet postfix-tlspol.socket > /dev/null 2>&1 &&
+      systemctl is-active --quiet postfix-tlspol.service > /dev/null 2>&1; then
+      log_warn "Stopping service once to migrate listener ownership to postfix-tlspol.socket..."
+      systemctl stop postfix-tlspol.service
+    fi
     log_warn "Ensuring socket unit is enabled..."
     systemctl enable --now postfix-tlspol.socket
   else
