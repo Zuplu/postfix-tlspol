@@ -39,15 +39,15 @@ RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" \
 
 # Setup unbound
 RUN <<EOR
-  chown -R default:default /usr/share/dnssec-root
+  cp /usr/share/dnssec-root/trusted-key.key /etc/unbound/trusted-key.key
   cat <<EOF > /etc/unbound/unbound.conf
 server:
-  username: default
+  username: ""
   chroot: ""
-  do-daemonize: yes
+  do-daemonize: no
   use-syslog: no
   verbosity: 1
-  logfile: /var/log/unbound.log
+  logfile: ""
   log-servfail: yes
   ede: yes
   interface: 127.0.0.1
@@ -60,7 +60,7 @@ server:
   do-tcp: yes
   max-udp-size: 1232
   edns-buffer-size: 1232
-  auto-trust-anchor-file: /usr/share/dnssec-root/trusted-key.key
+  auto-trust-anchor-file: /etc/unbound/trusted-key.key
   cache-min-ttl: 10
   cache-max-ttl: 240
   serve-original-ttl: yes
@@ -95,8 +95,7 @@ remote-control:
   control-enable: no
 EOF
   chown -R default:default /etc/unbound
-  touch /var/log/unbound.log
-  chown default:default /var/log/unbound.log
+  /usr/sbin/unbound-checkconf /etc/unbound/unbound.conf
 EOR
 
 # Setup entrypoint
@@ -107,13 +106,27 @@ set -e
 # Upgrade from old container with persistent config.yaml
 if [ -e /data/config.yaml ]; then
   mv /data/config.yaml /data/config.yaml.bak
-  echo "WARNING: /data/config.yaml is deprecated and removed. See /etc/postfix-tlspol/config.yaml (which will be overriden on each update as it is maintained by the container)"
+  echo "WARNING: /data/config.yaml is deprecated and removed. See /etc/postfix-tlspol/config.yaml (which will be overridden on each update as it is maintained by the container)"
 fi
-truncate -s0 /var/log/unbound.log
-( cd /etc/unbound ; \
-  /usr/sbin/unbound -c /etc/unbound/unbound.conf ) &
-wait
-tail -f /var/log/unbound.log &
+/usr/sbin/unbound -d -c /etc/unbound/unbound.conf &
+unbound_pid="\$!"
+ready=0
+for i in \$(seq 1 30); do
+  if nslookup -type=SOA . 127.0.0.1:8053 >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "\$unbound_pid" 2>/dev/null; then
+    wait "\$unbound_pid"
+  fi
+  sleep 1
+done
+if [ "\$ready" -ne 1 ]; then
+  echo "ERROR: Unbound started but recursive DNS did not become ready. Check container outbound DNS access." >&2
+  kill "\$unbound_pid" 2>/dev/null || true
+  wait "\$unbound_pid" 2>/dev/null || true
+  exit 1
+fi
 cd /data
 exec /usr/bin/postfix-tlspol -config /etc/postfix-tlspol/config.yaml
 EOF
