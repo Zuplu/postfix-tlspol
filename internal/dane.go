@@ -80,12 +80,15 @@ func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([
 	var ttls []uint32
 	for range records {
 		result := <-results
-		if result.status != MxOk {
+		switch result.status {
+		case MxOk:
+			mxRecords = append(mxRecords, result.host)
+			ttls = append(ttls, result.ttl)
+		case MxFail:
+			return nil, 0, errors.New("DNS error during MX address lookup"), false
+		case MxNotSec:
 			incompl = true
-			continue
 		}
-		mxRecords = append(mxRecords, result.host)
-		ttls = append(ttls, result.ttl)
 	}
 
 	return mxRecords, findMin(ttls), nil, incompl
@@ -100,7 +103,7 @@ const (
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
 func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 	if !valid.IsDNSName(mx) {
-		return MxFail
+		return MxNotSec
 	}
 	types := []uint16{dns.TypeA, dns.TypeAAAA}
 	results := make(chan uint8, len(types))
@@ -117,11 +120,22 @@ func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 				results <- MxFail
 				return
 			}
-			if r.Rcode == dns.RcodeSuccess && r.MsgHdr.AuthenticatedData {
-				results <- MxOk
-				return
+			switch r.Rcode {
+			case dns.RcodeSuccess:
+				if r.MsgHdr.AuthenticatedData {
+					results <- MxOk
+				} else {
+					results <- MxNotSec
+				}
+			case dns.RcodeNameError:
+				if r.MsgHdr.AuthenticatedData {
+					results <- MxNotSec
+				} else {
+					results <- MxFail
+				}
+			default:
+				results <- MxFail
 			}
-			results <- MxNotSec
 		}(t)
 	}
 
