@@ -17,16 +17,23 @@ import (
 )
 
 const (
-	PREFETCH_INTERVAL uint32 = 30
+	PREFETCH_INTERVAL           uint32 = 30
+	PREFETCH_RETRY_MAX_AGE             = 30 * time.Minute
+	PREFETCH_RETRY_MAX_INTERVAL        = 5 * time.Minute
 )
 
 var semaphore chan struct{}
 var activePrefetchScheduler atomic.Pointer[prefetchScheduler]
 
 type prefetchItem struct {
-	key   string
 	due   time.Time
+	key   string
 	index int
+}
+
+type prefetchFailure struct {
+	firstFailed time.Time
+	attempts    uint32
 }
 
 type prefetchQueue []*prefetchItem
@@ -62,16 +69,18 @@ func (q *prefetchQueue) Pop() any {
 }
 
 type prefetchScheduler struct {
-	mu    sync.Mutex
-	items map[string]*prefetchItem
-	queue prefetchQueue
-	wake  chan struct{}
+	items    map[string]*prefetchItem
+	failures map[string]prefetchFailure
+	wake     chan struct{}
+	queue    prefetchQueue
+	mu       sync.Mutex
 }
 
 func newPrefetchScheduler() *prefetchScheduler {
 	s := &prefetchScheduler{
-		items: make(map[string]*prefetchItem),
-		wake:  make(chan struct{}, 1),
+		items:    make(map[string]*prefetchItem),
+		failures: make(map[string]prefetchFailure),
+		wake:     make(chan struct{}, 1),
 	}
 	heap.Init(&s.queue)
 	return s
@@ -79,6 +88,12 @@ func newPrefetchScheduler() *prefetchScheduler {
 
 func (s *prefetchScheduler) schedule(key string, due time.Time) {
 	s.mu.Lock()
+	s.scheduleLocked(key, due)
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *prefetchScheduler) scheduleLocked(key string, due time.Time) {
 	if item, ok := s.items[key]; ok {
 		item.due = due
 		heap.Fix(&s.queue, item.index)
@@ -87,8 +102,6 @@ func (s *prefetchScheduler) schedule(key string, due time.Time) {
 		s.items[key] = item
 		heap.Push(&s.queue, item)
 	}
-	s.mu.Unlock()
-	s.notify()
 }
 
 func (s *prefetchScheduler) remove(key string) {
@@ -97,16 +110,71 @@ func (s *prefetchScheduler) remove(key string) {
 		heap.Remove(&s.queue, item.index)
 		delete(s.items, key)
 	}
+	delete(s.failures, key)
 	s.mu.Unlock()
 }
 
 func (s *prefetchScheduler) clear() {
 	s.mu.Lock()
 	s.items = make(map[string]*prefetchItem)
+	s.failures = make(map[string]prefetchFailure)
 	s.queue = nil
 	heap.Init(&s.queue)
 	s.mu.Unlock()
 	s.notify()
+}
+
+func (s *prefetchScheduler) resetFailures(key string) {
+	s.mu.Lock()
+	delete(s.failures, key)
+	s.mu.Unlock()
+}
+
+func (s *prefetchScheduler) scheduleRetry(key string, now time.Time) (time.Time, uint32, time.Duration, bool) {
+	return s.scheduleRetryUntil(key, now, time.Time{})
+}
+
+func (s *prefetchScheduler) scheduleRetryUntil(key string, now time.Time, graceDeadline time.Time) (time.Time, uint32, time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	failure, ok := s.failures[key]
+	if !ok {
+		failure = prefetchFailure{firstFailed: now}
+	}
+	retryDeadline := failure.firstFailed.Add(PREFETCH_RETRY_MAX_AGE)
+	if graceDeadline.After(retryDeadline) {
+		retryDeadline = graceDeadline
+	}
+	if !now.Before(retryDeadline) {
+		if item, ok := s.items[key]; ok {
+			heap.Remove(&s.queue, item.index)
+			delete(s.items, key)
+		}
+		delete(s.failures, key)
+		return time.Time{}, failure.attempts, 0, false
+	}
+
+	failure.attempts++
+	delay := prefetchRetryDelay(failure.attempts)
+	if due := now.Add(delay); due.After(retryDeadline) {
+		delay = retryDeadline.Sub(now)
+	}
+	due := now.Add(delay)
+	s.failures[key] = failure
+	s.scheduleLocked(key, due)
+	return due, failure.attempts, delay, true
+}
+
+func prefetchRetryDelay(attempts uint32) time.Duration {
+	delay := time.Duration(PREFETCH_INTERVAL) * time.Second
+	for i := uint32(1); i < attempts && delay < PREFETCH_RETRY_MAX_INTERVAL; i++ {
+		delay *= 2
+		if delay > PREFETCH_RETRY_MAX_INTERVAL {
+			return PREFETCH_RETRY_MAX_INTERVAL
+		}
+	}
+	return delay
 }
 
 func (s *prefetchScheduler) nextDue() (time.Time, bool) {
@@ -181,6 +249,10 @@ func scheduleCachedPolicyPrefetch(key string, c *CacheStruct, now time.Time) {
 	}
 	due, ok := nextPrefetchTime(c, now)
 	if !ok {
+		if shouldRetryCachedPolicyPrefetch(c, now) {
+			scheduler.schedule(key, now)
+			return
+		}
 		scheduler.remove(key)
 		return
 	}
@@ -201,18 +273,106 @@ func clearPrefetchSchedule() {
 	}
 }
 
+func resetCachedPolicyPrefetchFailures(key string) {
+	scheduler := activePrefetchScheduler.Load()
+	if scheduler != nil {
+		scheduler.resetFailures(key)
+	}
+}
+
 func nextPrefetchTime(c *CacheStruct, now time.Time) (time.Time, bool) {
 	if c == nil || c.Age(now) >= CACHE_MAX_AGE {
 		return time.Time{}, false
 	}
 	policy, _, remainingTTL, usable := selectCachedPolicy(c, now)
-	if usable && policy == "" {
+	if !usable {
+		return time.Time{}, false
+	}
+	if policy == "" {
 		return now.Add(time.Duration(remainingTTL) * time.Second), true
 	}
-	if usable && remainingTTL > PREFETCH_INTERVAL {
+	if remainingTTL > PREFETCH_INTERVAL {
 		return now.Add(time.Duration(remainingTTL-PREFETCH_INTERVAL) * time.Second), true
 	}
 	return now, true
+}
+
+func shouldRetryCachedPolicyPrefetch(c *CacheStruct, now time.Time) bool {
+	return c != nil && c.Age(now) < CACHE_MAX_AGE && c.RemainingTTL(now) != 0
+}
+
+func nextPrefetchTimeAfterMiss(c *CacheStruct, now time.Time) (time.Time, bool) {
+	_, _, remainingTTL, usable := selectCachedPolicy(c, now)
+	if !usable || remainingTTL == 0 {
+		return time.Time{}, false
+	}
+	return now.Add(time.Duration(remainingTTL) * time.Second), true
+}
+
+func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *CacheStruct, result domainResult, now time.Time) {
+	if due, attempts, delay, ok := scheduler.scheduleRetryUntil(key, now, failedPolicyGraceDeadline(c, result)); ok {
+		slog.Debug("Scheduled policy prefetch retry", "domain", key, "attempts", attempts, "delay", delay, "due", due)
+		return
+	}
+	if updated, ok := cacheAfterFailedBranchDiscard(c, result, now); ok {
+		polCache.Set(key, updated)
+		if due, ok := nextPrefetchTime(updated, now); ok {
+			scheduler.schedule(key, due)
+		}
+		if err := polCache.Save(false); err != nil {
+			slog.Error("Could not save cache after failed branch discard", "domain", key, "error", err)
+		}
+		slog.Info("Cleared failed cached policy branch after repeated prefetch failures", "domain", key, "retry_window", PREFETCH_RETRY_MAX_AGE)
+		return
+	}
+	discardCachedPolicyState(false, key, c)
+	if err := polCache.Save(false); err != nil {
+		slog.Error("Could not save cache after failed prefetch discard", "domain", key, "error", err)
+	}
+	slog.Info("Removed cached policy after repeated prefetch failures", "domain", key, "retry_window", PREFETCH_RETRY_MAX_AGE)
+}
+
+func failedPolicyGraceDeadline(c *CacheStruct, result domainResult) time.Time {
+	if c == nil {
+		return time.Time{}
+	}
+	var deadline time.Time
+	if result.DaneAttempted && !result.Dane.HasData() && c.Dane.Policy != "" {
+		deadline = c.Dane.ExpiresAt.Add(POLICY_BRANCH_RECHECK)
+	}
+	if result.MtaStsAttempted && !result.MtaSts.HasData() && c.MtaSts.Policy != "" {
+		mtaStsDeadline := c.MtaSts.ExpiresAt.Add(POLICY_BRANCH_RECHECK)
+		if mtaStsDeadline.After(deadline) {
+			deadline = mtaStsDeadline
+		}
+	}
+	return deadline
+}
+
+func cacheAfterFailedBranchDiscard(c *CacheStruct, result domainResult, now time.Time) (*CacheStruct, bool) {
+	if c == nil {
+		return nil, false
+	}
+	cs := cloneCacheStruct(c)
+	switch {
+	case result.DaneAttempted && !result.Dane.HasData() && c.MtaSts.Policy != "" && c.MtaSts.RemainingTTL(now) != 0:
+		cs.Dane = expireBranch(PolicyBranch{TTL: policyBranchRecheckTTL()}, now)
+		cs.DaneLastAttempt = now
+	case result.MtaStsAttempted && !result.MtaSts.HasData() && c.Dane.Policy != "" && c.Dane.RemainingTTL(now) != 0:
+		cs.MtaSts = expireBranch(PolicyBranch{TTL: policyBranchRecheckTTL()}, now)
+		cs.MtaStsLastAttempt = now
+	default:
+		return nil, false
+	}
+	policy, report, ttl, ok := selectCachedPolicy(cs, now)
+	if !ok {
+		return nil, false
+	}
+	cs.Policy = policy
+	cs.Report = report
+	cs.TTL = ttl
+	cs.Expirable.ExpiresAt = now.Add(time.Duration(ttl) * time.Second)
+	return cs, true
 }
 
 func prefetchDuePolicies(scheduler *prefetchScheduler) {
@@ -228,10 +388,17 @@ func prefetchDuePolicies(scheduler *prefetchScheduler) {
 		}
 		entry := cache.Entry[*CacheStruct]{Key: key, Value: value}
 		policy, _, remainingTTL, usable := selectCachedPolicy(entry.Value, now)
-		if usable && policy == "" {
+		if !usable {
+			if !shouldRetryCachedPolicyPrefetch(entry.Value, now) {
+				itemsCount--
+				discardCachedPolicyState(false, entry.Key, entry.Value)
+				unscheduleCachedPolicyPrefetch(entry.Key)
+				continue
+			}
+		} else if policy == "" {
 			itemsCount--
 			if remainingTTL == 0 {
-				polCache.Remove(false, entry.Key)
+				discardCachedPolicyState(false, entry.Key, entry.Value)
 				unscheduleCachedPolicyPrefetch(entry.Key)
 			} else {
 				scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
@@ -240,11 +407,11 @@ func prefetchDuePolicies(scheduler *prefetchScheduler) {
 		}
 		if entry.Value.Age(now) >= CACHE_MAX_AGE {
 			itemsCount--
-			polCache.Remove(false, entry.Key)
+			discardCachedPolicyState(false, entry.Key, entry.Value)
 			unscheduleCachedPolicyPrefetch(entry.Key)
 			continue
 		}
-		if usable && remainingTTL > PREFETCH_INTERVAL {
+		if remainingTTL > PREFETCH_INTERVAL {
 			scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
 			continue
 		}
@@ -257,14 +424,29 @@ func prefetchDuePolicies(scheduler *prefetchScheduler) {
 			}()
 			// Refresh the cached policy
 			refreshed := refreshDomain(c.Key, c.Value)
-			if refreshed.Dane.HasData() || refreshed.MtaSts.HasData() {
-				counter.Add(1)
-				refreshedAt := time.Now()
+			refreshedAt := time.Now()
+			hasRefreshedData := refreshed.Dane.HasData() || refreshed.MtaSts.HasData()
+			if hasRefreshedData || refreshed.DaneAttempted || refreshed.MtaStsAttempted {
 				merged := mergeCacheResult(c.Value, refreshed, refreshedAt)
 				polCache.Set(c.Key, merged)
-				scheduleCachedPolicyPrefetch(c.Key, merged, refreshedAt)
+				if _, _, _, ok := selectCachedPolicy(merged, refreshedAt); ok {
+					if hasRefreshedData {
+						counter.Add(1)
+					}
+					scheduler.resetFailures(c.Key)
+					scheduleCachedPolicyPrefetch(c.Key, merged, refreshedAt)
+				} else {
+					scheduleFailedPolicyPrefetch(scheduler, c.Key, c.Value, refreshed, refreshedAt)
+				}
+			} else if _, _, _, ok := selectCachedPolicy(c.Value, refreshedAt); ok {
+				scheduler.resetFailures(c.Key)
+				if due, ok := nextPrefetchTimeAfterMiss(c.Value, refreshedAt); ok {
+					scheduler.schedule(c.Key, due)
+				} else {
+					scheduleCachedPolicyPrefetch(c.Key, c.Value, refreshedAt)
+				}
 			} else {
-				scheduler.schedule(c.Key, time.Now().Add(time.Duration(PREFETCH_INTERVAL)*time.Second))
+				scheduleFailedPolicyPrefetch(scheduler, c.Key, c.Value, refreshed, refreshedAt)
 			}
 		}(entry)
 	}
