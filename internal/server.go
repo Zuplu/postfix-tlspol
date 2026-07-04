@@ -196,6 +196,7 @@ const (
 	POLICY_ATTEMPTS                    = 3
 	POLICY_RETRY_BASE                  = 250 * time.Millisecond
 	POLICY_BRANCH_RECHECK              = 24 * time.Hour
+	DNS_UDP_PAYLOAD_SIZE        uint16 = 1232
 	METRICS_MAX_CONNECTIONS            = 64
 	METRICS_MAX_HEADER_BYTES           = 8 << 10
 	METRICS_READ_HEADER_TIMEOUT        = 5 * time.Second
@@ -209,7 +210,7 @@ var (
 	bgCtx             = context.Background()
 	levelVar          = new(slog.LevelVar)
 	queryGroup        singleflight.Group
-	client            = dns.Client{UDPSize: 4096, Timeout: REQUEST_TIMEOUT}
+	client            = dns.Client{UDPSize: DNS_UDP_PAYLOAD_SIZE, Timeout: REQUEST_TIMEOUT}
 	config            Config
 	polCache          *cache.Cache[*CacheStruct]
 	NS_NOTFOUND       = netstring.Marshal("NOTFOUND ")

@@ -25,11 +25,8 @@ import (
 const MTASTS_MAX_AGE uint64 = 31557600 // RFC 8461, 3.2
 
 func checkMtaStsRecord(ctx context.Context, domain string, resolverAddress string) (bool, error) {
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn("_mta-sts."+domain), dns.TypeTXT)
-	m.SetEdns0(4096, false)
-
-	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
+	m := newDNSQuery("_mta-sts."+domain, dns.TypeTXT, false)
+	r, err := exchangeDNS(ctx, m, resolverAddress)
 	if err != nil {
 		return false, err
 	}

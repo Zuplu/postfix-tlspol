@@ -41,11 +41,8 @@ type mxCheckResult struct {
 const DANE_MX_LOOKUP_CONCURRENCY = 4
 
 func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([]string, uint32, error, bool) {
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeMX)
-	m.SetEdns0(4096, true)
-
-	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
+	m := newDNSQuery(domain, dns.TypeMX, true)
+	r, err := exchangeDNS(ctx, m, resolverAddress)
 	if err != nil {
 		return nil, 0, err, false
 	}
@@ -192,11 +189,8 @@ func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 }
 
 func checkMxAddress(ctx context.Context, mx string, resolverAddress string, recordType uint16) uint8 {
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(mx), recordType)
-	m.SetEdns0(4096, true)
-
-	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
+	m := newDNSQuery(mx, recordType, true)
+	r, err := exchangeDNS(ctx, m, resolverAddress)
 	if err != nil {
 		return MxFail
 	}
@@ -251,11 +245,8 @@ func isTlsaUsable(r *dns.TLSA) bool {
 }
 
 func checkTlsa(ctx context.Context, mx string, resolverAddress string) ResultWithTTL {
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn("_25._tcp."+mx), dns.TypeTLSA)
-	m.SetEdns0(4096, true)
-
-	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
+	m := newDNSQuery("_25._tcp."+mx, dns.TypeTLSA, true)
+	r, err := exchangeDNS(ctx, m, resolverAddress)
 	if err != nil {
 		return ResultWithTTL{Result: "", TTL: 0, Err: err}
 	}
