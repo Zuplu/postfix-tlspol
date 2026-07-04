@@ -7,6 +7,7 @@ package tlspol
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -98,6 +99,46 @@ func (c *eofConn) SetReadDeadline(time.Time) error {
 }
 
 func (c *eofConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
+type recordingConn struct {
+	writes        bytes.Buffer
+	readDeadline  time.Time
+	writeDeadline time.Time
+}
+
+func (c *recordingConn) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (c *recordingConn) Write(b []byte) (int, error) {
+	return c.writes.Write(b)
+}
+
+func (c *recordingConn) Close() error {
+	return nil
+}
+
+func (c *recordingConn) LocalAddr() net.Addr {
+	return staticAddr("local")
+}
+
+func (c *recordingConn) RemoteAddr() net.Addr {
+	return staticAddr("remote")
+}
+
+func (c *recordingConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (c *recordingConn) SetReadDeadline(t time.Time) error {
+	c.readDeadline = t
+	return nil
+}
+
+func (c *recordingConn) SetWriteDeadline(t time.Time) error {
+	c.writeDeadline = t
 	return nil
 }
 
@@ -223,6 +264,180 @@ func TestMetricsOnlyHTTPHandlerDoesNotExposeSocketmap(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected status 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestSocketmapHTTPHandlerUsesMetricsDefenses(t *testing.T) {
+	metricQueriesTotal.Store(12)
+	conn := &recordingConn{}
+	reader := bufio.NewReader(strings.NewReader("GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n"))
+
+	handleHTTPConnection(conn, reader)
+
+	if conn.readDeadline.IsZero() {
+		t.Fatal("expected socketmap HTTP handler to set a read deadline")
+	}
+	if conn.writeDeadline.IsZero() {
+		t.Fatal("expected socketmap HTTP handler to set a write deadline")
+	}
+
+	response := conn.writes.String()
+	if !strings.Contains(response, "200 OK") {
+		t.Fatalf("expected metrics response, got %q", response)
+	}
+	if !strings.Contains(response, "Connection: close") {
+		t.Fatalf("expected socketmap HTTP response to force close, got %q", response)
+	}
+	if !strings.Contains(response, "postfix_tlspol_queries_total 12") {
+		t.Fatalf("expected metrics body, got %q", response)
+	}
+}
+
+func TestSocketmapHTTPHandlerLimitsHeaderBytes(t *testing.T) {
+	conn := &recordingConn{}
+	reader := bufio.NewReader(strings.NewReader(
+		"GET /metrics HTTP/1.1\r\nHost: localhost\r\nX-Large: " +
+			strings.Repeat("a", 2*METRICS_MAX_HEADER_BYTES) + "\r\n\r\n",
+	))
+
+	handleHTTPConnection(conn, reader)
+
+	if conn.readDeadline.IsZero() {
+		t.Fatal("expected socketmap HTTP handler to set a read deadline")
+	}
+	if conn.writes.Len() != 0 {
+		t.Fatalf("expected oversized HTTP headers to be rejected before response, got %q", conn.writes.String())
+	}
+}
+
+func TestMetricsHTTPServerHasDefensiveLimits(t *testing.T) {
+	server := newMetricsHTTPServer(metricsHTTPServerConfig{
+		ReadHeaderTimeout: METRICS_READ_HEADER_TIMEOUT,
+		ReadTimeout:       METRICS_READ_TIMEOUT,
+		WriteTimeout:      METRICS_WRITE_TIMEOUT,
+		IdleTimeout:       METRICS_IDLE_TIMEOUT,
+		MaxHeaderBytes:    METRICS_MAX_HEADER_BYTES,
+	})
+	if server.ReadHeaderTimeout == 0 {
+		t.Fatal("expected metrics HTTP server to set ReadHeaderTimeout")
+	}
+	if server.ReadTimeout == 0 {
+		t.Fatal("expected metrics HTTP server to set ReadTimeout")
+	}
+	if server.WriteTimeout == 0 {
+		t.Fatal("expected metrics HTTP server to set WriteTimeout")
+	}
+	if server.IdleTimeout == 0 {
+		t.Fatal("expected metrics HTTP server to set IdleTimeout")
+	}
+	if server.MaxHeaderBytes == 0 {
+		t.Fatal("expected metrics HTTP server to limit header bytes")
+	}
+	if METRICS_MAX_CONNECTIONS == 0 {
+		t.Fatal("expected metrics listener to limit connections")
+	}
+}
+
+func TestMetricsHTTPServerClosesIncompleteHeaders(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not start listener: %v", err)
+	}
+
+	server := newMetricsHTTPServer(metricsHTTPServerConfig{
+		ReadHeaderTimeout: 50 * time.Millisecond,
+		ReadTimeout:       time.Second,
+		WriteTimeout:      time.Second,
+		IdleTimeout:       time.Second,
+		MaxHeaderBytes:    METRICS_MAX_HEADER_BYTES,
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(newLimitedListener(listener, 4))
+	}()
+	defer func() {
+		_ = server.Close()
+		<-done
+	}()
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("could not connect to metrics listener: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("GET /metrics HTTP/1.1\r\nHost: slow")); err != nil {
+		t.Fatalf("could not write partial request: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("could not set read deadline: %v", err)
+	}
+	_, err = conn.Read(make([]byte, 1))
+	if err == nil {
+		t.Fatal("expected incomplete metrics HTTP headers to be closed")
+	}
+}
+
+func TestLimitedListenerCapsActiveConnections(t *testing.T) {
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not start listener: %v", err)
+	}
+	defer base.Close()
+
+	limited := newLimitedListener(base, 1)
+	firstClient, err := net.Dial("tcp", base.Addr().String())
+	if err != nil {
+		t.Fatalf("could not open first client: %v", err)
+	}
+	defer firstClient.Close()
+	firstServer, err := limited.Accept()
+	if err != nil {
+		t.Fatalf("could not accept first connection: %v", err)
+	}
+	defer firstServer.Close()
+
+	secondClient, err := net.Dial("tcp", base.Addr().String())
+	if err != nil {
+		t.Fatalf("could not open second client: %v", err)
+	}
+	defer secondClient.Close()
+
+	accepted := make(chan net.Conn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := limited.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+
+	select {
+	case conn := <-accepted:
+		conn.Close()
+		t.Fatal("expected active connection limit to hold second accept")
+	case err := <-acceptErr:
+		t.Fatalf("unexpected accept error: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := firstServer.Close(); err != nil {
+		t.Fatalf("could not close first server connection: %v", err)
+	}
+	thirdClient, err := net.Dial("tcp", base.Addr().String())
+	if err != nil {
+		t.Fatalf("could not open third client: %v", err)
+	}
+	defer thirdClient.Close()
+
+	select {
+	case conn := <-accepted:
+		conn.Close()
+	case err := <-acceptErr:
+		t.Fatalf("unexpected accept error after releasing slot: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("expected listener to accept after active slot was released")
 	}
 }
 

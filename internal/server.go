@@ -188,14 +188,20 @@ func cloneCacheStruct(c *CacheStruct) *CacheStruct {
 }
 
 const (
-	CACHE_NOTFOUND_TTL    uint32 = 1800
-	CACHE_MIN_TTL         uint32 = 180
-	CACHE_MAX_TTL         uint32 = 2592000
-	CACHE_MAX_AGE         uint32 = 1800 // max age for stale queries (only for prefetching, not served to postfix)
-	REQUEST_TIMEOUT              = 2 * time.Second
-	POLICY_ATTEMPTS              = 3
-	POLICY_RETRY_BASE            = 250 * time.Millisecond
-	POLICY_BRANCH_RECHECK        = 24 * time.Hour
+	CACHE_NOTFOUND_TTL          uint32 = 1800
+	CACHE_MIN_TTL               uint32 = 180
+	CACHE_MAX_TTL               uint32 = 2592000
+	CACHE_MAX_AGE               uint32 = 1800 // max age for stale queries (only for prefetching, not served to postfix)
+	REQUEST_TIMEOUT                    = 2 * time.Second
+	POLICY_ATTEMPTS                    = 3
+	POLICY_RETRY_BASE                  = 250 * time.Millisecond
+	POLICY_BRANCH_RECHECK              = 24 * time.Hour
+	METRICS_MAX_CONNECTIONS            = 64
+	METRICS_MAX_HEADER_BYTES           = 8 << 10
+	METRICS_READ_HEADER_TIMEOUT        = 5 * time.Second
+	METRICS_READ_TIMEOUT               = 10 * time.Second
+	METRICS_WRITE_TIMEOUT              = 10 * time.Second
+	METRICS_IDLE_TIMEOUT               = 30 * time.Second
 )
 
 var (
@@ -403,10 +409,14 @@ func serveSocketmapListener(l net.Listener) {
 func serveMetricsListener(l net.Listener) {
 	defer serverWg.Done()
 
-	server := &http.Server{
-		Handler: http.HandlerFunc(handleMetricsOnlyHTTPRequest),
-	}
-	err := server.Serve(l)
+	server := newMetricsHTTPServer(metricsHTTPServerConfig{
+		ReadHeaderTimeout: METRICS_READ_HEADER_TIMEOUT,
+		ReadTimeout:       METRICS_READ_TIMEOUT,
+		WriteTimeout:      METRICS_WRITE_TIMEOUT,
+		IdleTimeout:       METRICS_IDLE_TIMEOUT,
+		MaxHeaderBytes:    METRICS_MAX_HEADER_BYTES,
+	})
+	err := server.Serve(newLimitedListener(l, METRICS_MAX_CONNECTIONS))
 	if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		addr := l.Addr()
 		if addr == nil {
@@ -415,6 +425,70 @@ func serveMetricsListener(l net.Listener) {
 			slog.Error("Metrics HTTP server terminated with error", "error", err, "network", addr.Network(), "address", addr.String())
 		}
 	}
+}
+
+type metricsHTTPServerConfig struct {
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	MaxHeaderBytes    int
+}
+
+func newMetricsHTTPServer(cfg metricsHTTPServerConfig) *http.Server {
+	return &http.Server{
+		Handler:           http.HandlerFunc(handleMetricsOnlyHTTPRequest),
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    cfg.MaxHeaderBytes,
+	}
+}
+
+type limitedListener struct {
+	net.Listener
+	sem chan struct{}
+}
+
+func newLimitedListener(l net.Listener, limit int) net.Listener {
+	if limit <= 0 {
+		return l
+	}
+	return &limitedListener{
+		Listener: l,
+		sem:      make(chan struct{}, limit),
+	}
+}
+
+func (l *limitedListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		select {
+		case l.sem <- struct{}{}:
+			return &limitedConn{
+				Conn:    conn,
+				release: func() { <-l.sem },
+			}, nil
+		default:
+			_ = conn.Close()
+		}
+	}
+}
+
+type limitedConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (c *limitedConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
+	return err
 }
 
 func listenConfiguredAddress(address string, permissions os.FileMode) (net.Listener, error) {
@@ -893,56 +967,59 @@ func handleConnection(conn net.Conn) {
 }
 
 func handleHTTPConnection(conn net.Conn, reader *bufio.Reader) {
+	if err := conn.SetReadDeadline(time.Now().Add(METRICS_READ_HEADER_TIMEOUT)); err != nil {
+		return
+	}
+
+	limitedReader := bufio.NewReader(io.LimitReader(reader, int64(METRICS_MAX_HEADER_BYTES)))
 	writer := bufio.NewWriter(conn)
-	for {
-		req, err := http.ReadRequest(reader)
-		if err != nil {
-			return
-		}
-		_ = req.Body.Close()
 
-		shouldClose := req.Close || (req.ProtoMajor == 1 && req.ProtoMinor == 0 && !strings.EqualFold(req.Header.Get("Connection"), "keep-alive"))
-		resp := &http.Response{
-			Proto:      req.Proto,
-			ProtoMajor: req.ProtoMajor,
-			ProtoMinor: req.ProtoMinor,
-			Header:     make(http.Header),
-			Close:      shouldClose,
-		}
+	req, err := http.ReadRequest(limitedReader)
+	if err != nil {
+		return
+	}
 
-		if req.URL.Path == "/metrics" && (req.Method == http.MethodGet || req.Method == http.MethodHead) {
-			body := buildMetricsText()
-			resp.StatusCode = http.StatusOK
-			resp.Status = "200 OK"
-			resp.Header.Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-			resp.ContentLength = int64(len(body))
-			if req.Method == http.MethodGet {
-				resp.Body = io.NopCloser(strings.NewReader(body))
-			} else {
-				resp.Body = http.NoBody
-			}
+	resp := &http.Response{
+		Proto:      req.Proto,
+		ProtoMajor: req.ProtoMajor,
+		ProtoMinor: req.ProtoMinor,
+		Header:     make(http.Header),
+		Close:      true,
+	}
+	resp.Header.Set("Connection", "close")
+
+	if req.URL.Path == "/metrics" && (req.Method == http.MethodGet || req.Method == http.MethodHead) {
+		body := buildMetricsText()
+		resp.StatusCode = http.StatusOK
+		resp.Status = "200 OK"
+		resp.Header.Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		resp.ContentLength = int64(len(body))
+		if req.Method == http.MethodGet {
+			resp.Body = io.NopCloser(strings.NewReader(body))
 		} else {
-			body := "not found\n"
-			resp.StatusCode = http.StatusNotFound
-			resp.Status = "404 Not Found"
-			resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
-			resp.ContentLength = int64(len(body))
-			if req.Method == http.MethodHead {
-				resp.Body = http.NoBody
-			} else {
-				resp.Body = io.NopCloser(strings.NewReader(body))
-			}
+			resp.Body = http.NoBody
 		}
+	} else {
+		body := "not found\n"
+		resp.StatusCode = http.StatusNotFound
+		resp.Status = "404 Not Found"
+		resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+		resp.ContentLength = int64(len(body))
+		if req.Method == http.MethodHead {
+			resp.Body = http.NoBody
+		} else {
+			resp.Body = io.NopCloser(strings.NewReader(body))
+		}
+	}
 
-		if err := resp.Write(writer); err != nil {
-			return
-		}
-		if err := writer.Flush(); err != nil {
-			return
-		}
-		if shouldClose {
-			return
-		}
+	if err := conn.SetWriteDeadline(time.Now().Add(METRICS_WRITE_TIMEOUT)); err != nil {
+		return
+	}
+	if err := resp.Write(writer); err != nil {
+		return
+	}
+	if err := writer.Flush(); err != nil {
+		return
 	}
 }
 
