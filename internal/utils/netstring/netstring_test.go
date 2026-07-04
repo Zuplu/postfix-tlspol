@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -166,6 +167,7 @@ func TestSplitNetstring_ValidCases(t *testing.T) {
 func TestSplitNetstring_IncompleteNeedMoreData_NotEOF(t *testing.T) {
 	t.Parallel()
 
+	maxIntLength := strconv.Itoa(int(^uint(0) >> 1))
 	tests := []struct {
 		name  string
 		data  string
@@ -189,6 +191,11 @@ func TestSplitNetstring_IncompleteNeedMoreData_NotEOF(t *testing.T) {
 		{
 			name:  "missing comma terminator yet",
 			data:  "5:hello",
+			atEOF: false,
+		},
+		{
+			name:  "max int length without payload",
+			data:  maxIntLength + ":",
 			atEOF: false,
 		},
 	}
@@ -215,6 +222,7 @@ func TestSplitNetstring_IncompleteNeedMoreData_NotEOF(t *testing.T) {
 func TestSplitNetstring_ErrorCasesAtEOF(t *testing.T) {
 	t.Parallel()
 
+	maxIntLength := strconv.Itoa(int(^uint(0) >> 1))
 	tests := []struct {
 		name    string
 		data    string
@@ -275,6 +283,11 @@ func TestSplitNetstring_ErrorCasesAtEOF(t *testing.T) {
 			data:    "999999999:x,",
 			wantErr: "netstring: unexpected EOF",
 		},
+		{
+			name:    "max int length without payload",
+			data:    maxIntLength + ":",
+			wantErr: "netstring: unexpected EOF",
+		},
 	}
 
 	for _, tt := range tests {
@@ -296,6 +309,7 @@ func TestSplitNetstring_ErrorCasesAtEOF(t *testing.T) {
 func TestScanner_ErrorPropagation(t *testing.T) {
 	t.Parallel()
 
+	maxIntLength := strconv.Itoa(int(^uint(0) >> 1))
 	tests := []struct {
 		name    string
 		input   string
@@ -319,6 +333,11 @@ func TestScanner_ErrorPropagation(t *testing.T) {
 		{
 			name:    "truncated",
 			input:   "4:ab,",
+			wantErr: "netstring: unexpected EOF",
+		},
+		{
+			name:    "max int length without payload",
+			input:   maxIntLength + ":",
 			wantErr: "netstring: unexpected EOF",
 		},
 	}

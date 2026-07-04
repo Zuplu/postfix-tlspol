@@ -55,13 +55,14 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 	if length < 0 {
 		return 0, nil, errors.New("netstring: negative length")
 	}
-	commaPos := colonPos + 1 + length
-	if commaPos >= len(data) {
+	payloadStart := colonPos + 1
+	if length >= len(data)-payloadStart {
 		if atEOF {
 			return 0, nil, errors.New("netstring: unexpected EOF")
 		}
 		return 0, nil, nil
 	}
+	commaPos := payloadStart + length
 	if data[commaPos] != ',' {
 		return 0, nil, errors.New("netstring: missing comma terminator")
 	}
