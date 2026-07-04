@@ -564,6 +564,76 @@ func TestRefreshDomainReusesFreshMtaStsBranch(t *testing.T) {
 	}
 }
 
+func TestPrefetchDomainRenewsNearExpiryMtaStsBranch(t *testing.T) {
+	origDane := checkDanePolicy
+	origMtaSts := checkMtaStsPolicy
+	defer func() {
+		checkDanePolicy = origDane
+		checkMtaStsPolicy = origMtaSts
+	}()
+
+	var daneCalls atomic.Int32
+	var mtaStsCalls atomic.Int32
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		daneCalls.Add(1)
+		return "", 86400
+	}
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		mtaStsCalls.Add(1)
+		return "secure match=mx.example servername=hostname", "policy_type=sts", 600
+	}
+
+	now := time.Now()
+	cached := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
+		Dane: PolicyBranch{
+			TTL:       policyBranchRecheckTTL(),
+			ExpiresAt: now.Add(POLICY_BRANCH_RECHECK),
+		},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.cached.example servername=hostname",
+			Report:    "policy_type=sts policy_domain=example.com",
+			TTL:       600,
+			ExpiresAt: now.Add(20 * time.Second),
+		},
+		DaneLastAttempt: now,
+	}
+
+	refresh := refreshDomainOnceImpl("example.com", cached)
+	if mtaStsCalls.Load() != 0 {
+		t.Fatalf("expected normal refresh to reuse positive-TTL MTA-STS, got %d calls", mtaStsCalls.Load())
+	}
+	if refresh.MtaSts.HasData() {
+		t.Fatalf("expected normal refresh not to return refreshed MTA-STS data, got %+v", refresh)
+	}
+
+	mtaStsCalls.Store(0)
+	prefetch := prefetchDomainOnceImpl("example.com", cached)
+	if mtaStsCalls.Load() != 1 || !prefetch.MtaStsAttempted || !prefetch.MtaSts.HasData() {
+		t.Fatalf("expected prefetch to renew near-expiry MTA-STS, calls=%d result=%+v", mtaStsCalls.Load(), prefetch)
+	}
+
+	daneCalls.Store(0)
+	mtaStsCalls.Store(0)
+	uncached := queryDomainOnceImpl("example.com")
+	if daneCalls.Load() != 1 || mtaStsCalls.Load() != 1 || !uncached.Dane.HasData() || !uncached.MtaSts.HasData() {
+		t.Fatalf("expected uncached query path to refresh both branches, dane=%d mtasts=%d result=%+v", daneCalls.Load(), mtaStsCalls.Load(), uncached)
+	}
+
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		mtaStsCalls.Add(1)
+		return "TEMP", "", 0
+	}
+	expired := cloneCacheStruct(cached)
+	expired.Expirable.ExpiresAt = now.Add(-time.Second)
+	expired.MtaSts.ExpiresAt = now.Add(-time.Second)
+	mtaStsCalls.Store(0)
+	afterExpiry := queryDomainBranches("example.com", expired, now)
+	if mtaStsCalls.Load() != 1 || afterExpiry.Policy != "" || afterExpiry.MtaSts.HasData() {
+		t.Fatalf("expected expired MTA-STS plus fetch failure to fall back without refreshed data, calls=%d result=%+v", mtaStsCalls.Load(), afterExpiry)
+	}
+}
+
 func TestQueryDomainThrottlesMtaStsWhenDanePolicyCached(t *testing.T) {
 	origDane := checkDanePolicy
 	origMtaSts := checkMtaStsPolicy
@@ -821,10 +891,7 @@ func TestNextPrefetchTime(t *testing.T) {
 	if !ok {
 		t.Fatal("expected policy to be scheduled for prefetch")
 	}
-	expected := now.Add(time.Duration(300-PREFETCH_INTERVAL) * time.Second)
-	if !due.Equal(expected) {
-		t.Fatalf("unexpected prefetch time: got %s want %s", due, expected)
-	}
+	assertPolicyPrefetchDueInWindow(t, due, now, 300)
 
 	c.Dane.ExpiresAt = now.Add(-time.Second)
 	due, ok = nextPrefetchTime(c, now)
@@ -848,6 +915,53 @@ func TestNextPrefetchTime(t *testing.T) {
 	}
 }
 
+func TestFreshNoPolicyDoesNotEnterPrefetchLoop(t *testing.T) {
+	oldScheduler := activePrefetchScheduler.Load()
+	scheduler := newPrefetchScheduler()
+	activePrefetchScheduler.Store(scheduler)
+	defer activePrefetchScheduler.Store(oldScheduler)
+
+	now := time.Now()
+	c := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(CACHE_NOTFOUND_TTL) * time.Second)},
+		Dane: PolicyBranch{
+			TTL:       CACHE_NOTFOUND_TTL,
+			ExpiresAt: now.Add(time.Duration(CACHE_NOTFOUND_TTL) * time.Second),
+		},
+		MtaSts: PolicyBranch{
+			TTL:       CACHE_NOTFOUND_TTL,
+			ExpiresAt: now.Add(time.Duration(CACHE_NOTFOUND_TTL) * time.Second),
+		},
+	}
+
+	if due, ok := nextPrefetchTime(c, now); ok {
+		t.Fatalf("expected fresh no-policy entry not to schedule prefetch, got %s", due)
+	}
+	if shouldRetryCachedPolicyPrefetch(c, now) {
+		t.Fatal("expected fresh no-policy entry not to enter retry prefetch")
+	}
+	if due, ok := nextPrefetchTimeAfterMiss(c, now); ok {
+		t.Fatalf("expected fresh no-policy miss not to schedule another prefetch, got %s", due)
+	}
+
+	scheduleCachedPolicyPrefetch("fresh-no-policy.example", c, now)
+	if due, ok := scheduler.nextDue(); ok {
+		t.Fatalf("expected no scheduled prefetch for fresh no-policy entry, got %s", due)
+	}
+}
+
+func assertPolicyPrefetchDueInWindow(t *testing.T, due time.Time, now time.Time, ttl uint32) {
+	t.Helper()
+	earliest := now.Add(time.Duration(ttl-PREFETCH_INTERVAL) * time.Second)
+	expiry := now.Add(time.Duration(ttl) * time.Second)
+	if due.Before(earliest) || due.After(expiry) {
+		t.Fatalf("expected prefetch due between %s and %s, got %s", earliest, expiry, due)
+	}
+	if !due.Equal(due.Truncate(PREFETCH_SLOT_INTERVAL)) {
+		t.Fatalf("expected prefetch due time to align to %s slot, got %s", PREFETCH_SLOT_INTERVAL, due)
+	}
+}
+
 func TestNextPrefetchTimeAfterMissWaitsForUsablePolicyExpiry(t *testing.T) {
 	now := time.Now()
 	c := &CacheStruct{
@@ -863,9 +977,12 @@ func TestNextPrefetchTimeAfterMissWaitsForUsablePolicyExpiry(t *testing.T) {
 	if !ok {
 		t.Fatal("expected still-usable policy to be retried at expiry")
 	}
-	expected := now.Add(20 * time.Second)
-	if !due.Equal(expected) {
-		t.Fatalf("unexpected retry time: got %s want %s", due, expected)
+	expectedEarliest := now.Add(20 * time.Second)
+	if due.Before(expectedEarliest) || due.After(expectedEarliest.Add(PREFETCH_SLOT_INTERVAL)) {
+		t.Fatalf("unexpected retry time: got %s want about %s", due, expectedEarliest)
+	}
+	if !due.Equal(due.Truncate(PREFETCH_SLOT_INTERVAL)) {
+		t.Fatalf("expected retry time to align to %s slot, got %s", PREFETCH_SLOT_INTERVAL, due)
 	}
 
 	c.Dane.ExpiresAt = now.Add(-time.Second)
@@ -902,8 +1019,145 @@ func TestScheduleCachedPolicyPrefetchRetriesUnusableSplitEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("expected unservable split entry to enter prefetch retry")
 	}
-	if !due.Equal(now) {
-		t.Fatalf("expected immediate retry for split entry, got %s want %s", due, now)
+	if due.Before(now) || due.After(now.Add(PREFETCH_SLOT_INTERVAL)) {
+		t.Fatalf("expected split entry retry in the next slot, got %s from %s", due, now)
+	}
+	if !due.Equal(due.Truncate(PREFETCH_SLOT_INTERVAL)) {
+		t.Fatalf("expected split entry retry to align to %s slot, got %s", PREFETCH_SLOT_INTERVAL, due)
+	}
+}
+
+func TestPrefetchDuePoliciesExtendsNearExpiryMtaSts(t *testing.T) {
+	oldPolCache := polCache
+	oldScheduler := activePrefetchScheduler.Load()
+	oldSemaphore := semaphore
+	origDane := checkDanePolicy
+	origMtaSts := checkMtaStsPolicy
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	scheduler := newPrefetchScheduler()
+	activePrefetchScheduler.Store(scheduler)
+	semaphore = make(chan struct{}, 1)
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+		activePrefetchScheduler.Store(oldScheduler)
+		semaphore = oldSemaphore
+		checkDanePolicy = origDane
+		checkMtaStsPolicy = origMtaSts
+	}()
+
+	var daneCalls atomic.Int32
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		daneCalls.Add(1)
+		return "", 0
+	}
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		return "secure match=mx.example servername=hostname", "policy_type=sts", 600
+	}
+
+	now := time.Now()
+	key := "prefetch-mtasts.example"
+	polCache.Set(key, &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
+		Dane: PolicyBranch{
+			TTL:       policyBranchRecheckTTL(),
+			ExpiresAt: now.Add(time.Hour),
+		},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.cached.example servername=hostname",
+			Report:    "policy_type=sts policy_domain=example.com",
+			TTL:       600,
+			ExpiresAt: now.Add(20 * time.Second),
+		},
+		DaneLastAttempt: now,
+	})
+	scheduler.schedule(key, now.Add(-time.Second))
+
+	prefetchDuePolicies(scheduler)
+	if daneCalls.Load() != 0 {
+		t.Fatalf("expected DANE not to refresh while no-DANE branch is still outside the prefetch window, calls=%d", daneCalls.Load())
+	}
+
+	stored, found := polCache.Get(key)
+	if !found {
+		t.Fatal("expected cache entry to remain after prefetch")
+	}
+	if stored.MtaSts.Policy != "secure match=mx.example servername=hostname" {
+		t.Fatalf("expected MTA-STS branch to be refreshed, got %+v", stored.MtaSts)
+	}
+	if ttl := stored.MtaSts.RemainingTTL(time.Now()); ttl < 500 {
+		t.Fatalf("expected MTA-STS expiry to be extended, remaining TTL=%d", ttl)
+	}
+}
+
+func TestPrefetchDuePoliciesBacksOffNearExpiryMtaStsFailure(t *testing.T) {
+	oldPolCache := polCache
+	oldScheduler := activePrefetchScheduler.Load()
+	oldSemaphore := semaphore
+	origDane := checkDanePolicy
+	origMtaSts := checkMtaStsPolicy
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	scheduler := newPrefetchScheduler()
+	activePrefetchScheduler.Store(scheduler)
+	semaphore = make(chan struct{}, 1)
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+		activePrefetchScheduler.Store(oldScheduler)
+		semaphore = oldSemaphore
+		checkDanePolicy = origDane
+		checkMtaStsPolicy = origMtaSts
+	}()
+
+	var daneCalls atomic.Int32
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		daneCalls.Add(1)
+		return "", 0
+	}
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		return "TEMP", "", 0
+	}
+
+	now := time.Now()
+	key := "prefetch-mtasts-fail.example"
+	cachedPolicy := "secure match=mx.cached.example servername=hostname"
+	polCache.Set(key, &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
+		Dane: PolicyBranch{
+			TTL:       policyBranchRecheckTTL(),
+			ExpiresAt: now.Add(time.Hour),
+		},
+		MtaSts: PolicyBranch{
+			Policy:    cachedPolicy,
+			Report:    "policy_type=sts policy_domain=example.com",
+			TTL:       600,
+			ExpiresAt: now.Add(20 * time.Second),
+		},
+		DaneLastAttempt: now,
+	})
+	scheduler.schedule(key, now.Add(-time.Second))
+
+	prefetchDuePolicies(scheduler)
+	if daneCalls.Load() != 0 {
+		t.Fatalf("expected DANE not to refresh while no-DANE branch is still outside the prefetch window, calls=%d", daneCalls.Load())
+	}
+
+	stored, found := polCache.Get(key)
+	if !found || stored.MtaSts.Policy != cachedPolicy {
+		t.Fatalf("expected failed prefetch to keep cached MTA-STS during retry, found=%v entry=%+v", found, stored)
+	}
+	failure, found := scheduler.failures[key]
+	if !found || failure.attempts != 1 {
+		t.Fatalf("expected first prefetch failure to be tracked, found=%v failure=%+v", found, failure)
+	}
+	due, ok := scheduler.nextDue()
+	if !ok {
+		t.Fatal("expected failed MTA-STS prefetch to be rescheduled")
+	}
+	delay := due.Sub(now)
+	expectedDelay := time.Duration(PREFETCH_INTERVAL) * time.Second
+	if delay < expectedDelay || delay > expectedDelay+PREFETCH_SLOT_INTERVAL {
+		t.Fatalf("expected first retry after about %d seconds, got %s", PREFETCH_INTERVAL, delay)
 	}
 }
 

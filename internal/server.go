@@ -1011,6 +1011,11 @@ type domainResult struct {
 
 var queryDomainOnce = queryDomainOnceImpl
 var refreshDomainOnce = refreshDomainOnceImpl
+var prefetchDomainOnce = prefetchDomainOnceImpl
+
+type queryBranchOptions struct {
+	renewBefore uint32
+}
 
 func normalizeDomain(domain string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
@@ -1036,6 +1041,16 @@ func refreshDomain(domain string, c *CacheStruct) domainResult {
 
 func refreshDomainOnceImpl(domain string, c *CacheStruct) domainResult {
 	return queryDomainBranches(domain, c, time.Now())
+}
+
+func prefetchDomain(domain string, c *CacheStruct) domainResult {
+	return prefetchDomainOnce(domain, c)
+}
+
+func prefetchDomainOnceImpl(domain string, c *CacheStruct) domainResult {
+	return queryDomainBranchesWithOptions(domain, c, time.Now(), queryBranchOptions{
+		renewBefore: PREFETCH_INTERVAL,
+	})
 }
 
 func freshBranchForSelection(branch PolicyBranch, now time.Time) (PolicyBranch, bool) {
@@ -1065,6 +1080,10 @@ func daneBranchForSelection(c *CacheStruct, now time.Time) (PolicyBranch, bool) 
 }
 
 func queryDomainBranches(domain string, c *CacheStruct, now time.Time) domainResult {
+	return queryDomainBranchesWithOptions(domain, c, now, queryBranchOptions{})
+}
+
+func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time, opts queryBranchOptions) domainResult {
 	ctx, cancel := context.WithTimeout(bgCtx, time.Duration(POLICY_ATTEMPTS)*REQUEST_TIMEOUT+time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -1076,15 +1095,19 @@ func queryDomainBranches(domain string, c *CacheStruct, now time.Time) domainRes
 		mtaStsTTL         uint32
 		daneForSelection  PolicyBranch
 		mtaStsForSelected PolicyBranch
+		daneForQuery      PolicyBranch
+		mtaStsForQuery    PolicyBranch
 	)
 
 	if c != nil {
 		mtaStsForSelected, _ = freshBranchForSelection(c.MtaSts, now)
 		daneForSelection, _ = daneBranchForSelection(c, now)
+		mtaStsForQuery = branchForQuerySuppression(mtaStsForSelected, opts.renewBefore)
+		daneForQuery = branchForQuerySuppression(daneForSelection, opts.renewBefore)
 	}
 
-	queryDane := shouldQueryDane(c, daneForSelection, mtaStsForSelected, now)
-	queryMtaSts := shouldQueryMtaSts(c, daneForSelection, mtaStsForSelected, now)
+	queryDane := shouldQueryDane(c, daneForQuery, mtaStsForQuery, now, opts.renewBefore)
+	queryMtaSts := shouldQueryMtaSts(c, daneForQuery, mtaStsForQuery, now, opts.renewBefore)
 
 	if queryDane {
 		wg.Add(1)
@@ -1127,22 +1150,40 @@ func queryDomainBranches(domain string, c *CacheStruct, now time.Time) domainRes
 	}
 }
 
-func shouldQueryDane(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForSelection PolicyBranch, now time.Time) bool {
+func branchForQuerySuppression(branch PolicyBranch, renewBefore uint32) PolicyBranch {
+	if renewBefore != 0 && branch.HasData() && branch.TTL <= renewBefore {
+		return PolicyBranch{}
+	}
+	return branch
+}
+
+func beforeBranchRecheck(lastAttempt time.Time, now time.Time, renewBefore uint32) bool {
+	if lastAttempt.IsZero() {
+		return false
+	}
+	nextAttempt := lastAttempt.Add(POLICY_BRANCH_RECHECK)
+	if renewBefore != 0 {
+		return now.Add(time.Duration(renewBefore) * time.Second).Before(nextAttempt)
+	}
+	return now.Before(nextAttempt)
+}
+
+func shouldQueryDane(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForSelection PolicyBranch, now time.Time, renewBefore uint32) bool {
 	if daneForSelection.HasData() {
 		return false
 	}
 	if c != nil && c.MtaSts.Policy != "" && c.Dane.HasData() && c.Dane.Policy == "" &&
-		!c.DaneLastAttempt.IsZero() && now.Sub(c.DaneLastAttempt) < POLICY_BRANCH_RECHECK {
+		beforeBranchRecheck(c.DaneLastAttempt, now, renewBefore) {
 		return false
 	}
 	return true
 }
 
-func shouldQueryMtaSts(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForSelection PolicyBranch, now time.Time) bool {
+func shouldQueryMtaSts(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForSelection PolicyBranch, now time.Time, renewBefore uint32) bool {
 	if mtaStsForSelection.HasData() {
 		return false
 	}
-	if c != nil && c.Dane.Policy != "" && !c.MtaStsLastAttempt.IsZero() && now.Sub(c.MtaStsLastAttempt) < POLICY_BRANCH_RECHECK {
+	if c != nil && c.Dane.Policy != "" && beforeBranchRecheck(c.MtaStsLastAttempt, now, renewBefore) {
 		return false
 	}
 	return true
