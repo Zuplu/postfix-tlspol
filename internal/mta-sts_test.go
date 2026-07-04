@@ -40,6 +40,7 @@ func TestParseMtaStsPolicy(t *testing.T) {
 			"mx_host_pattern=mail.example.com",
 			"mx_host_pattern=*.backup.example.com",
 			"policy_string = version: STSv1",
+			"policy_string = mx: *.backup.example.com",
 		} {
 			if !strings.Contains(report, expected) {
 				t.Fatalf("expected report to contain %q; report=%q", expected, report)
@@ -123,6 +124,43 @@ func TestParseMtaStsPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid extension names are rejected", func(t *testing.T) {
+		t.Parallel()
+
+		for _, extLine := range []string{
+			"_comment: ok",
+			"-comment: ok",
+			".comment: ok",
+			"bad name: ok",
+			"x+comment: ok",
+			"café: ok",
+			strings.Repeat("a", 33) + ": ok",
+		} {
+			policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"+extLine+"\n"))
+			if policy != "" || report != "" || ttl != 0 {
+				t.Fatalf("expected invalid extension name %q to be rejected, got policy=%q report=%q ttl=%d", extLine, policy, report, ttl)
+			}
+		}
+	})
+
+	t.Run("invalid extension values are rejected", func(t *testing.T) {
+		t.Parallel()
+
+		for _, extLine := range []string{
+			"comment:",
+			"comment: ok\x00bad",
+			"comment: ok\tbad",
+			"comment: ok\rbad",
+			"comment: ok\x7fbad",
+			"comment: ok" + string([]byte{0xff}) + "bad",
+		} {
+			policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"+extLine+"\n"))
+			if policy != "" || report != "" || ttl != 0 {
+				t.Fatalf("expected invalid extension value %q to be rejected, got policy=%q report=%q ttl=%d", extLine, policy, report, ttl)
+			}
+		}
+	})
+
 	t.Run("printable extension lines remain reportable", func(t *testing.T) {
 		t.Parallel()
 
@@ -132,6 +170,33 @@ func TestParseMtaStsPolicy(t *testing.T) {
 		}
 		if !strings.Contains(report, "policy_string = x-report: safe-value") {
 			t.Fatalf("expected printable extension line in report, got %q", report)
+		}
+	})
+
+	t.Run("utf8 extension lines without x prefix remain reportable", func(t *testing.T) {
+		t.Parallel()
+
+		policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\ncomment: café au lait\n"))
+		if policy != "secure match=mail.example.com servername=hostname" {
+			t.Fatalf("unexpected policy: %q", policy)
+		}
+		if ttl != 86400 {
+			t.Fatalf("unexpected ttl: %d", ttl)
+		}
+		if !strings.Contains(report, "policy_string = comment: café au lait") {
+			t.Fatalf("expected UTF-8 extension line in report, got %q", report)
+		}
+	})
+
+	t.Run("extension braces are ignored after validation", func(t *testing.T) {
+		t.Parallel()
+
+		policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\ncomment: {café}\n"))
+		if policy != "secure match=mail.example.com servername=hostname" || ttl != 86400 {
+			t.Fatalf("expected brace extension policy to remain valid, got policy=%q ttl=%d", policy, ttl)
+		}
+		if strings.Contains(report, "comment: {café}") {
+			t.Fatalf("expected brace extension to be omitted from report, got %q", report)
 		}
 	})
 }

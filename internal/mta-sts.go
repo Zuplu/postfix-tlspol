@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
@@ -89,39 +91,94 @@ func newMtaStsPolicyParser() mtaStsPolicyParser {
 	}
 }
 
-//gocyclo:ignore
-func (p *mtaStsPolicyParser) parseLine(line string) bool {
-	line = strings.TrimSpace(line)
-	lineLen := len(line)
-	if lineLen == 0 {
-		return true
+func isMtaStsAlphanum(b byte) bool {
+	return b >= 'a' && b <= 'z' ||
+		b >= 'A' && b <= 'Z' ||
+		b >= '0' && b <= '9'
+}
+
+func isMtaStsExtensionName(s string) bool {
+	if len(s) == 0 || len(s) > 32 {
+		return false
 	}
-	if !valid.IsPrintableASCII(line) && !valid.IsUTFLetterNumeric(line) {
-		return false // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
+	if !isMtaStsAlphanum(s[0]) {
+		return false
 	}
-	if strings.ContainsAny(line, "{}") {
-		return true // skip lines containing { or }, they are only allowed in  extended key/vals, and we don't need them anyway
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !isMtaStsAlphanum(c) && c != '_' && c != '-' && c != '.' {
+			return false
+		}
 	}
-	keyValPair := strings.SplitN(line, ":", 2)
-	if len(keyValPair) != 2 {
-		return false // invalid policy
+	return true
+}
+
+func isMtaStsExtensionValue(s string) bool {
+	if len(s) == 0 || !utf8.ValidString(s) {
+		return false
 	}
-	key, val := strings.TrimSpace(keyValPair[0]), strings.TrimSpace(keyValPair[1])
-	if key != "mx" && p.existingKeys[key] {
-		return true // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		switch {
+		case r == ' ':
+		case r >= 0x21 && r <= 0x7e:
+		case r >= 0x80 && !unicode.IsControl(r):
+		default:
+			return false
+		}
+		s = s[size:]
 	}
-	p.existingKeys[key] = true
+	return true
+}
+
+func isMtaStsDigits(s string) bool {
+	if len(s) == 0 || len(s) > 10 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *mtaStsPolicyParser) writeReportField(key, val string) {
 	p.report.WriteString(" { policy_string = ")
 	p.report.WriteString(key)
 	p.report.WriteString(": ")
 	p.report.WriteString(val)
 	p.report.WriteString(" }")
+}
+
+//gocyclo:ignore
+func (p *mtaStsPolicyParser) parseLine(line string) bool {
+	line = strings.TrimRight(line, " \t")
+	lineLen := len(line)
+	if lineLen == 0 {
+		return true
+	}
+	keyValPair := strings.SplitN(line, ":", 2)
+	if len(keyValPair) != 2 {
+		return false // invalid policy
+	}
+	key, val := keyValPair[0], strings.TrimLeft(keyValPair[1], " \t")
+	reportVal := val
+	isExtension := key != "version" && key != "mode" && key != "mx" && key != "max_age"
+	if isExtension && !isMtaStsExtensionName(key) {
+		return false
+	}
+	if key != "mx" && p.existingKeys[key] {
+		return true // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
+	}
+	p.existingKeys[key] = true
 	switch key {
 	case "version":
 		if val != "STSv1" {
 			return false
 		}
 		p.hasVersion = true
+		p.writeReportField(key, reportVal)
 	case "mx":
 		if strings.HasPrefix(val, "*.") {
 			if !valid.IsDNSName(val[2:]) {
@@ -137,12 +194,17 @@ func (p *mtaStsPolicyParser) parseLine(line string) bool {
 			val = val[1:]
 		}
 		p.mxServers = append(p.mxServers, val)
+		p.writeReportField(key, reportVal)
 	case "mode":
 		if val != "enforce" && val != "testing" && val != "none" {
 			return false
 		}
 		p.mode = val
+		p.writeReportField(key, reportVal)
 	case "max_age":
+		if !isMtaStsDigits(val) {
+			return false
+		}
 		age, err := strconv.ParseUint(val, 10, 64) // 10-digit value allowed despite upper limit fitting in 32 bits (see RFC Errata 7282)
 		if err != nil {
 			return false
@@ -153,7 +215,15 @@ func (p *mtaStsPolicyParser) parseLine(line string) bool {
 			p.maxAge = uint32(age)
 		}
 		p.hasMaxAge = true
+		p.writeReportField(key, reportVal)
 	default:
+		if !isMtaStsExtensionValue(val) {
+			return false
+		}
+		if strings.ContainsAny(val, "{}") {
+			return true // avoid copying extension braces into the report field syntax
+		}
+		p.writeReportField(key, reportVal)
 	}
 	return true
 }
