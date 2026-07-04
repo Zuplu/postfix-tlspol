@@ -6,13 +6,16 @@
 package tlspol
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/miekg/dns"
 	"go.yaml.in/yaml/v4"
@@ -65,46 +68,98 @@ type ResolvConf struct {
 	sync.RWMutex
 }
 
+type resolvConfWatcher struct {
+	rc     *ResolvConf
+	fd     int
+	dir    string
+	base   string
+	dirWD  int
+	fileWD int
+}
+
 var resolvConf = sync.OnceValue(func() *ResolvConf {
 	return NewResolvConf("/etc/resolv.conf")
 })
 
 func NewResolvConf(path string) *ResolvConf {
-	cfg, err := dns.ClientConfigFromFile(path)
-	if err != nil {
-		slog.Error("Reading DNS configuration failed", "path", path, "error", err)
-		return nil
-	}
-	slog.Info("Read DNS configuration", "path", path)
 	rc := &ResolvConf{
-		config: cfg,
-		path:   path,
+		path: path,
 	}
-	go rc.watch()
+	rc.load("Read DNS configuration")
+	rc.startWatch()
 	return rc
 }
 
 func (rc *ResolvConf) Get() *dns.ClientConfig {
 	rc.RLock()
+	cfg := rc.config
+	rc.RUnlock()
+	if cfg != nil {
+		return cfg
+	}
+	rc.load("Read DNS configuration")
+	rc.RLock()
 	defer rc.RUnlock()
 	return rc.config
 }
 
-func (rc *ResolvConf) watch() {
+func (rc *ResolvConf) load(successMessage string) bool {
+	cfg, err := dns.ClientConfigFromFile(rc.path)
+	if err != nil {
+		slog.Error("Reading DNS configuration failed", "path", rc.path, "error", err)
+		return false
+	}
+	rc.Lock()
+	rc.config = cfg
+	rc.Unlock()
+	slog.Info(successMessage, "path", rc.path)
+	return true
+}
+
+func (rc *ResolvConf) startWatch() {
 	fd, err := unix.InotifyInit()
 	if err != nil {
 		slog.Error("InotifyInit() failed", "path", rc.path, "error", err)
 		return
 	}
-	defer unix.Close(fd)
-	_, err = unix.InotifyAddWatch(fd, rc.path, unix.IN_CLOSE_WRITE)
-	if err != nil {
-		slog.Error("InotifyAddWatch() failed", "path", rc.path, "error", err)
+	watcher := &resolvConfWatcher{
+		rc:   rc,
+		fd:   fd,
+		dir:  filepath.Dir(rc.path),
+		base: filepath.Base(rc.path),
+	}
+	if err := watcher.addDirWatch(); err != nil {
+		slog.Error("InotifyAddWatch() failed", "path", watcher.dir, "error", err)
+		_ = unix.Close(fd)
 		return
 	}
+	watcher.addFileWatch()
+	go watcher.watch()
+}
+
+func (w *resolvConfWatcher) addDirWatch() error {
+	wd, err := unix.InotifyAddWatch(w.fd, w.dir, unix.IN_CLOSE_WRITE|unix.IN_CREATE|unix.IN_MOVED_TO|unix.IN_DELETE_SELF|unix.IN_MOVE_SELF|unix.IN_ONLYDIR)
+	if err != nil {
+		return err
+	}
+	w.dirWD = wd
+	return nil
+}
+
+func (w *resolvConfWatcher) addFileWatch() {
+	wd, err := unix.InotifyAddWatch(w.fd, w.rc.path, unix.IN_CLOSE_WRITE|unix.IN_DELETE_SELF|unix.IN_MOVE_SELF)
+	if err != nil {
+		slog.Warn("InotifyAddWatch() failed", "path", w.rc.path, "error", err)
+		return
+	}
+	w.fileWD = wd
+}
+
+func (w *resolvConfWatcher) watch() {
+	defer unix.Close(w.fd)
 	buf := make([]byte, 4096)
 	for {
-		n, err := unix.Read(fd, buf)
+		n, err := unix.Read(w.fd, buf)
 		if err != nil {
 			if err == unix.EINTR {
 				continue
@@ -112,17 +167,44 @@ func (rc *ResolvConf) watch() {
 			runtime.Gosched()
 			continue
 		}
-		if n > 0 {
-			cfg, err := dns.ClientConfigFromFile(rc.path)
-			if err == nil {
-				rc.Lock()
-				rc.config = cfg
-				rc.Unlock()
-				slog.Info("Reloaded DNS configuration", "path", rc.path)
-			} else {
-				slog.Error("Failed to reload DNS configuration", "path", rc.path, "error", err)
-			}
+		w.handleEvents(buf[:n])
+	}
+}
+
+func (w *resolvConfWatcher) handleEvents(data []byte) {
+	for len(data) >= unix.SizeofInotifyEvent {
+		event := (*unix.InotifyEvent)(unsafe.Pointer(&data[0]))
+		if event.Len > uint32(len(data)-unix.SizeofInotifyEvent) {
+			return
 		}
+		eventLen := unix.SizeofInotifyEvent + int(event.Len)
+		name := ""
+		if event.Len > 0 {
+			nameBytes := data[unix.SizeofInotifyEvent:eventLen]
+			if nul := bytes.IndexByte(nameBytes, 0); nul >= 0 {
+				nameBytes = nameBytes[:nul]
+			}
+			name = string(nameBytes)
+		}
+		w.handleEvent(int(event.Wd), event.Mask, name)
+		data = data[eventLen:]
+	}
+}
+
+func (w *resolvConfWatcher) handleEvent(wd int, mask uint32, name string) {
+	isFileEvent := wd == w.fileWD
+	isPathEvent := isFileEvent || (wd == w.dirWD && name == w.base)
+	if !isPathEvent {
+		return
+	}
+	if isFileEvent && mask&(unix.IN_IGNORED|unix.IN_DELETE_SELF|unix.IN_MOVE_SELF) != 0 {
+		w.fileWD = 0
+	}
+	if mask&(unix.IN_CREATE|unix.IN_MOVED_TO|unix.IN_IGNORED|unix.IN_DELETE_SELF|unix.IN_MOVE_SELF) != 0 {
+		w.addFileWatch()
+	}
+	if mask&(unix.IN_CLOSE_WRITE|unix.IN_MOVED_TO|unix.IN_IGNORED|unix.IN_DELETE_SELF|unix.IN_MOVE_SELF) != 0 {
+		w.rc.load("Reloaded DNS configuration")
 	}
 }
 
