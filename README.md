@@ -46,7 +46,7 @@ List of repositories serving prebuilt and packaged versions of postfix-tlspol:
 
 Installation with Docker simplifies setup, as it contains its own properly configured DNS resolver, `Unbound`. The image itself is only about 8 MB (compressed).
 
-```
+```sh
 docker volume create postfix-tlspol-data
 docker run -d \
     -v postfix-tlspol-data:/data \
@@ -66,7 +66,7 @@ To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
 
 ## Build a Docker container from source
 
-```
+```sh
 git clone https://github.com/Zuplu/postfix-tlspol
 cd postfix-tlspol
 scripts/build.sh
@@ -85,7 +85,7 @@ These requirements only apply if you use the non-Docker variant for installation
 
 ### Build and install
 
-```
+```sh
 git clone https://github.com/Zuplu/postfix-tlspol
 cd postfix-tlspol
 scripts/build.sh
@@ -93,7 +93,7 @@ scripts/build.sh
 Press _s_ for systemd when prompted or select it if a terminal UI appears.
 
 Edit `/etc/postfix-tlspol/config.yaml` as needed. After any change, a restart is required:
-```
+```sh
 service postfix-tlspol restart
 ```
 
@@ -103,7 +103,7 @@ In `/etc/postfix/main.cf`:
 
 ### Before Postfix 3.10
 
-```
+```conf
 smtp_dns_support_level = dnssec
 smtp_tls_security_level = dane
 smtp_tls_dane_insecure_mx_policy = dane
@@ -122,7 +122,7 @@ smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:QUERY
 
 ### For Postfix 3.10 and later
 
-```
+```conf
 smtp_dns_support_level = dnssec
 smtp_tls_security_level = dane
 smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:QUERYwithTLSRPT
@@ -133,14 +133,14 @@ Note the `QUERYwithTLSRPT` that enables TLSRPT support for Postfix 3.10+.
 ### Reload
 
 After changing the Postfix configuration, do:
-```
+```sh
 postfix reload
 ```
 
 # Update (from source)
 
 You can update postfix-tlspol (both the Docker container and the systemd service variant), by simply doing:
-```
+```sh
 git pull
 scripts/build.sh
 ```
@@ -150,7 +150,7 @@ scripts/build.sh
 _*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is autoconfigured._
 
 Configuration example for `/etc/postfix-tlspol/config.yaml`:
-```
+```yaml
 server:
   # server:port to listen as a socketmap server
   # or unix:/run/postfix-tlspol/tlspol.sock for Unix Domain Socket

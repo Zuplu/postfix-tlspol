@@ -70,9 +70,9 @@ type ResolvConf struct {
 
 type resolvConfWatcher struct {
 	rc     *ResolvConf
-	fd     int
 	dir    string
 	base   string
+	fd     int
 	dirWD  int
 	fileWD int
 }
