@@ -12,6 +12,8 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
@@ -36,6 +38,8 @@ type mxCheckResult struct {
 	status uint8
 }
 
+const DANE_MX_LOOKUP_CONCURRENCY = 4
+
 func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([]string, uint32, error, bool) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeMX)
@@ -55,43 +59,109 @@ func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([
 		return nil, 0, errors.New(dns.RcodeToString[r.Rcode]), false
 	}
 
-	var records []mxRecord
+	records := make([]mxRecord, 0, len(r.Answer))
+	seen := make(map[string]int)
 	for _, answer := range r.Answer {
 		if mx, ok := answer.(*dns.MX); ok {
-			records = append(records, mxRecord{host: mx.Mx, ttl: mx.Hdr.Ttl})
+			host := strings.ToLower(strings.TrimSpace(mx.Mx))
+			key := strings.TrimSuffix(host, ".")
+			if index, ok := seen[key]; ok {
+				if mx.Hdr.Ttl < records[index].ttl {
+					records[index].ttl = mx.Hdr.Ttl
+				}
+				continue
+			}
+			seen[key] = len(records)
+			records = append(records, mxRecord{host: dns.Fqdn(host), ttl: mx.Hdr.Ttl})
 		}
 	}
 	if len(records) == 0 {
 		return nil, 0, nil, incompl
 	}
 
-	results := make(chan mxCheckResult, len(records))
-	for _, record := range records {
-		go func(record mxRecord) {
-			results <- mxCheckResult{
-				host:   record.host,
-				ttl:    record.ttl,
-				status: checkMx(ctx, record.host, resolverAddress),
-			}
-		}(record)
-	}
-
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var lookupErr error
 	var mxRecords []string
 	var ttls []uint32
-	for range records {
-		result := <-results
+	for result := range checkMxRecords(cctx, records, resolverAddress) {
 		switch result.status {
 		case MxOk:
 			mxRecords = append(mxRecords, result.host)
 			ttls = append(ttls, result.ttl)
 		case MxFail:
-			return nil, 0, errors.New("DNS error during MX address lookup"), false
+			if lookupErr == nil {
+				lookupErr = errors.New("DNS error during MX address lookup")
+				cancel()
+			}
 		case MxNotSec:
 			incompl = true
 		}
 	}
+	if lookupErr != nil {
+		return nil, 0, lookupErr, false
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err, false
+	}
 
 	return mxRecords, findMin(ttls), nil, incompl
+}
+
+func checkMxRecords(ctx context.Context, records []mxRecord, resolverAddress string) <-chan mxCheckResult {
+	results := make(chan mxCheckResult, len(records))
+	if len(records) == 0 {
+		close(results)
+		return results
+	}
+
+	jobs := make(chan mxRecord)
+	workers := min(DANE_MX_LOOKUP_CONCURRENCY, len(records))
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case record, ok := <-jobs:
+					if !ok {
+						return
+					}
+					result := mxCheckResult{
+						host:   record.host,
+						ttl:    record.ttl,
+						status: checkMx(ctx, record.host, resolverAddress),
+					}
+					select {
+					case results <- result:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, record := range records {
+			select {
+			case jobs <- record:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	return results
 }
 
 const (
@@ -105,45 +175,11 @@ func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 	if !valid.IsDNSName(mx) {
 		return MxNotSec
 	}
-	types := []uint16{dns.TypeA, dns.TypeAAAA}
-	results := make(chan uint8, len(types))
-	cctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	for _, t := range types {
-		go func(t uint16) {
-			m := new(dns.Msg)
-			m.SetQuestion(dns.Fqdn(mx), t)
-			m.SetEdns0(4096, true)
-
-			r, _, err := client.ExchangeContext(cctx, m, resolverAddress)
-			if err != nil {
-				results <- MxFail
-				return
-			}
-			switch r.Rcode {
-			case dns.RcodeSuccess:
-				if r.MsgHdr.AuthenticatedData {
-					results <- MxOk
-				} else {
-					results <- MxNotSec
-				}
-			case dns.RcodeNameError:
-				if r.MsgHdr.AuthenticatedData {
-					results <- MxNotSec
-				} else {
-					results <- MxFail
-				}
-			default:
-				results <- MxFail
-			}
-		}(t)
-	}
 
 	failed := false
-	for range types {
-		switch <-results {
+	for _, t := range []uint16{dns.TypeA, dns.TypeAAAA} {
+		switch checkMxAddress(ctx, mx, resolverAddress, t) {
 		case MxOk:
-			cancel()
 			return MxOk
 		case MxFail:
 			failed = true
@@ -153,6 +189,31 @@ func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 		return MxFail
 	}
 	return MxNotSec
+}
+
+func checkMxAddress(ctx context.Context, mx string, resolverAddress string, recordType uint16) uint8 {
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(mx), recordType)
+	m.SetEdns0(4096, true)
+
+	r, _, err := client.ExchangeContext(ctx, m, resolverAddress)
+	if err != nil {
+		return MxFail
+	}
+	switch r.Rcode {
+	case dns.RcodeSuccess:
+		if r.MsgHdr.AuthenticatedData {
+			return MxOk
+		}
+		return MxNotSec
+	case dns.RcodeNameError:
+		if r.MsgHdr.AuthenticatedData {
+			return MxNotSec
+		}
+		return MxFail
+	default:
+		return MxFail
+	}
 }
 
 func isTlsaUsable(r *dns.TLSA) bool {
@@ -272,14 +333,44 @@ func checkDaneOnce(ctx context.Context, domain string, resolverAddress string) (
 	if numRecords == 0 {
 		return "", 0, nil
 	}
-	tlsaResults := make(chan ResultWithTTL, numRecords)
 	cctx, cancel := context.WithCancel(ctx)
-	for _, mx := range mxRecords {
-		go func(mx string) {
-			tlsaResults <- checkTlsa(cctx, mx, resolverAddress)
-		}(mx)
-	}
+	tlsaResults := checkTlsaRecords(cctx, mxRecords, resolverAddress)
 	return getDanePolicy(cctx, cancel, ttl, incompl, numRecords, tlsaResults)
+}
+
+func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress string) <-chan ResultWithTTL {
+	results := make(chan ResultWithTTL, len(mxRecords))
+	if len(mxRecords) == 0 {
+		close(results)
+		return results
+	}
+
+	jobs := make(chan string)
+	workers := min(DANE_MX_LOOKUP_CONCURRENCY, len(mxRecords))
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for mx := range jobs {
+				results <- checkTlsa(ctx, mx, resolverAddress)
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, mx := range mxRecords {
+			jobs <- mx
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	return results
 }
 
 func getDanePolicy(ctx context.Context, cancel func(), ttl uint32, incompl bool, numRecords int, tlsaResults <-chan ResultWithTTL) (string, uint32, error) {
