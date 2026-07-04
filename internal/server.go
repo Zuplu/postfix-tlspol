@@ -162,11 +162,13 @@ func discardCachedPolicyState(haveLock bool, key string, c *CacheStruct) {
 	}
 	if counter == 0 {
 		polCache.Remove(haveLock, key)
+		cleanupCacheHitCounterIfUnused(haveLock, key)
 		return
 	}
 	polCache.Update(haveLock, key, func(*CacheStruct, bool) (*CacheStruct, bool) {
 		return statsOnlyCacheEntry(counter), true
 	})
+	cleanupCacheHitCounterIfUnused(haveLock, key)
 }
 
 func cloneCacheStruct(c *CacheStruct) *CacheStruct {
@@ -581,10 +583,17 @@ func flushCacheHitCounters(haveLock bool) {
 	cacheHitCounters.Range(func(key any, value any) bool {
 		domain, ok := key.(string)
 		if !ok {
+			cacheHitCounters.Delete(key)
 			return true
 		}
-		delta := value.(*atomic.Uint32).Swap(0)
+		counter, ok := value.(*atomic.Uint32)
+		if !ok {
+			cacheHitCounters.Delete(domain)
+			return true
+		}
+		delta := counter.Swap(0)
 		if delta == 0 {
+			cleanupCacheHitCounterIfUnused(haveLock, domain)
 			return true
 		}
 		polCache.Update(haveLock, domain, func(c *CacheStruct, found bool) (*CacheStruct, bool) {
@@ -595,8 +604,40 @@ func flushCacheHitCounters(haveLock bool) {
 			updated.Counter += delta
 			return updated, true
 		})
+		cleanupCacheHitCounterIfUnused(haveLock, domain)
 		return true
 	})
+}
+
+func cachedPolicyExists(haveLock bool, domain string) bool {
+	exists := false
+	polCache.Update(haveLock, domain, func(c *CacheStruct, found bool) (*CacheStruct, bool) {
+		exists = found && cacheStructHasPolicy(c)
+		return nil, false
+	})
+	return exists
+}
+
+func cacheStructHasPolicy(c *CacheStruct) bool {
+	return c != nil && (c.Policy != "" || c.Dane.Policy != "" || c.MtaSts.Policy != "")
+}
+
+func cleanupCacheHitCounterIfUnused(haveLock bool, domain string) {
+	value, ok := cacheHitCounters.Load(domain)
+	if !ok {
+		return
+	}
+	counter, ok := value.(*atomic.Uint32)
+	if !ok {
+		cacheHitCounters.Delete(domain)
+		return
+	}
+	if counter.Load() != 0 || cachedPolicyExists(haveLock, domain) {
+		return
+	}
+	if counter.Load() == 0 {
+		cacheHitCounters.Delete(domain)
+	}
 }
 
 func selectCachedPolicy(c *CacheStruct, now time.Time) (string, string, uint32, bool) {
@@ -1215,6 +1256,7 @@ func dumpCachedPolicies(conn net.Conn, export bool) {
 
 func purgeCache(conn net.Conn) {
 	polCache.Purge()
+	flushCacheHitCounters(false)
 	clearPrefetchSchedule()
 	fmt.Fprintln(conn, "OK")
 }

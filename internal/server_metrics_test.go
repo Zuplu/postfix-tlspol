@@ -389,6 +389,119 @@ func TestTryCachedPolicyDoesNotRewriteCacheEntry(t *testing.T) {
 	}
 }
 
+func TestCacheHitCounterCleanupRequiresZeroAndNoCachedPolicy(t *testing.T) {
+	oldPolCache := polCache
+	oldCounters := cacheHitCounters
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	cacheHitCounters = sync.Map{}
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+		cacheHitCounters = oldCounters
+	}()
+
+	zeroNoPolicy := &atomic.Uint32{}
+	cacheHitCounters.Store("zero-no-policy.example", zeroNoPolicy)
+	cleanupCacheHitCounterIfUnused(false, "zero-no-policy.example")
+	if _, ok := cacheHitCounters.Load("zero-no-policy.example"); ok {
+		t.Fatal("expected zero counter without cached policy to be removed")
+	}
+
+	nonzeroNoPolicy := &atomic.Uint32{}
+	nonzeroNoPolicy.Add(1)
+	cacheHitCounters.Store("nonzero-no-policy.example", nonzeroNoPolicy)
+	cleanupCacheHitCounterIfUnused(false, "nonzero-no-policy.example")
+	if _, ok := cacheHitCounters.Load("nonzero-no-policy.example"); !ok {
+		t.Fatal("expected nonzero counter without cached policy to be retained")
+	}
+
+	polCache.Set("zero-with-policy.example", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Minute)},
+		Policy:    "dane",
+		Dane: PolicyBranch{
+			Policy:    "dane",
+			TTL:       60,
+			ExpiresAt: time.Now().Add(time.Minute),
+		},
+	})
+	zeroWithPolicy := &atomic.Uint32{}
+	cacheHitCounters.Store("zero-with-policy.example", zeroWithPolicy)
+	flushCacheHitCounters(false)
+	if _, ok := cacheHitCounters.Load("zero-with-policy.example"); !ok {
+		t.Fatal("expected zero counter with cached policy to be retained")
+	}
+}
+
+func TestTidyCacheRemovesUnusedHitCounterAfterPolicyDiscard(t *testing.T) {
+	oldPolCache := polCache
+	oldCounters := cacheHitCounters
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	cacheHitCounters = sync.Map{}
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+		cacheHitCounters = oldCounters
+	}()
+
+	now := time.Now()
+	polCache.Set("stale-policy.example", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Duration(CACHE_MAX_AGE+1) * time.Second)},
+		Policy:    "dane",
+		Dane: PolicyBranch{
+			Policy:    "dane",
+			TTL:       60,
+			ExpiresAt: now.Add(-time.Duration(CACHE_MAX_AGE+1) * time.Second),
+		},
+	})
+	cacheHitCounters.Store("stale-policy.example", &atomic.Uint32{})
+
+	_ = tidyCache()
+
+	if _, ok := cacheHitCounters.Load("stale-policy.example"); ok {
+		t.Fatal("expected zero counter to be removed after stale policy discard")
+	}
+}
+
+func TestPurgeCacheRemovesFlushedHitCounters(t *testing.T) {
+	oldPolCache := polCache
+	oldCounters := cacheHitCounters
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	cacheHitCounters = sync.Map{}
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+		cacheHitCounters = oldCounters
+	}()
+
+	polCache.Set("purged.example", &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Minute)},
+		Policy:    "dane",
+		Dane: PolicyBranch{
+			Policy:    "dane",
+			TTL:       60,
+			ExpiresAt: time.Now().Add(time.Minute),
+		},
+	})
+	counter := &atomic.Uint32{}
+	counter.Add(1)
+	cacheHitCounters.Store("purged.example", counter)
+
+	c1, c2 := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.ReadAll(c2)
+		close(done)
+	}()
+	purgeCache(c1)
+	c1.Close()
+	c2.Close()
+	<-done
+
+	if _, ok := cacheHitCounters.Load("purged.example"); ok {
+		t.Fatal("expected purge to remove flushed hit counter without cached policy")
+	}
+}
+
 func TestQueryDomainSingleflight(t *testing.T) {
 	origFn := queryDomainOnce
 	origGroup := queryGroup
