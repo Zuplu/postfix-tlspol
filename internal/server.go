@@ -285,9 +285,7 @@ func StartDaemon(v string, licenseText string) {
 	readEnv()
 
 	go startPrefetching()
-	go startServer()
-
-	select {}
+	startServer()
 }
 
 func listenForSignals() {
@@ -393,7 +391,8 @@ func serveSocketmapListener(l net.Listener) {
 			} else {
 				slog.Error("Error accepting connection", "error", err, "network", addr.Network(), "address", addr.String())
 			}
-			break
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 		go handleConnection(conn)
 	}

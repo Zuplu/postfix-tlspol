@@ -8,6 +8,7 @@ package tlspol
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -23,12 +24,121 @@ import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/cache"
 )
 
+type scriptedAcceptResult struct {
+	conn net.Conn
+	err  error
+}
+
+type scriptedListener struct {
+	addr    net.Addr
+	accepts chan scriptedAcceptResult
+}
+
+func (l *scriptedListener) Accept() (net.Conn, error) {
+	result := <-l.accepts
+	return result.conn, result.err
+}
+
+func (l *scriptedListener) Close() error {
+	return nil
+}
+
+func (l *scriptedListener) Addr() net.Addr {
+	return l.addr
+}
+
+type staticAddr string
+
+func (a staticAddr) Network() string {
+	return "test"
+}
+
+func (a staticAddr) String() string {
+	return string(a)
+}
+
+type eofConn struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newEOFConn() *eofConn {
+	return &eofConn{closed: make(chan struct{})}
+}
+
+func (c *eofConn) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (c *eofConn) Write(b []byte) (int, error) {
+	return len(b), nil
+}
+
+func (c *eofConn) Close() error {
+	c.once.Do(func() {
+		close(c.closed)
+	})
+	return nil
+}
+
+func (c *eofConn) LocalAddr() net.Addr {
+	return staticAddr("local")
+}
+
+func (c *eofConn) RemoteAddr() net.Addr {
+	return staticAddr("remote")
+}
+
+func (c *eofConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (c *eofConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (c *eofConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
 func TestIsLikelyHTTP(t *testing.T) {
 	if !isLikelyHTTP(bufio.NewReader(strings.NewReader("GET /metrics HTTP/1.1\r\n"))) {
 		t.Fatal("expected HTTP request to be detected")
 	}
 	if isLikelyHTTP(bufio.NewReader(strings.NewReader("14:QUERY example,"))) {
 		t.Fatal("expected netstring payload not to be detected as HTTP")
+	}
+}
+
+func TestServeSocketmapListenerContinuesAfterAcceptError(t *testing.T) {
+	conn := newEOFConn()
+	accepts := make(chan scriptedAcceptResult, 3)
+	accepts <- scriptedAcceptResult{err: errors.New("temporary accept failure")}
+	accepts <- scriptedAcceptResult{conn: conn}
+	accepts <- scriptedAcceptResult{err: net.ErrClosed}
+	listener := &scriptedListener{
+		addr:    staticAddr("listener"),
+		accepts: accepts,
+	}
+
+	serverWg.Add(1)
+	go serveSocketmapListener(listener)
+
+	select {
+	case <-conn.closed:
+	case <-time.After(time.Second):
+		t.Fatal("expected connection after transient accept error to be handled")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		serverWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected listener to terminate after net.ErrClosed")
 	}
 }
 
