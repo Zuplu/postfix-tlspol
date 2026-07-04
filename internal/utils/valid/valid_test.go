@@ -106,8 +106,11 @@ func TestIsDNSName(t *testing.T) {
 		{"double_dot", "ba..d.com", false},
 		{"label_too_long_64", tooLong64 + ".com", false},
 		{"total_too_long_254", tooLong254, false},
+		{"localhost_ipv4_literal_not_dns", "127.0.0.1", false},
+		{"short_ipv4_literal_not_dns", "1.2.3.4", false},
 		{"ipv4_literal_not_dns", "192.168.1.1", false},
 		{"ipv6_literal_not_dns", "2001:db8::1", false},
+		{"ipv4_mapped_ipv6_literal_not_dns", "::ffff:127.0.0.1", false},
 		{"underscore_not_allowed", "bad_name.example", false},
 		{"space_not_allowed", "bad name.example", false},
 	}
@@ -166,6 +169,31 @@ func TestASCIIAndUTF8(t *testing.T) {
 		for _, tc := range cases {
 			if got := IsUTF8(tc.in); got != tc.want {
 				t.Fatalf("IsUTF8(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("utf_letter_numeric", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			in   string
+			want bool
+		}{
+			{"Hällo42", true},
+			{"安全123", true},
+			{"", true},
+			{"Hällo 42", false},
+			{"key:value", false},
+			{"Hello\x00", false},
+			{"Hello\t", false},
+			{"Hello\x7f", false},
+			{string([]byte{0xff, 0xfe}), false},
+		}
+
+		for _, tc := range cases {
+			if got := IsUTFLetterNumeric(tc.in); got != tc.want {
+				t.Fatalf("IsUTFLetterNumeric(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		}
 	})

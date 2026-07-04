@@ -99,7 +99,7 @@ func (p *mtaStsPolicyParser) parseLine(line string) bool {
 	if lineLen == 0 {
 		return true
 	}
-	if !valid.IsPrintableASCII(line) && !valid.IsUTF8(line) {
+	if !valid.IsPrintableASCII(line) && !valid.IsUTFLetterNumeric(line) {
 		return false // invalid policy, neither printable ASCII nor alphanumeric UTF-8 (latter is allowed in extended key/vals only)
 	}
 	if strings.ContainsAny(line, "{}") {

@@ -91,6 +91,49 @@ func TestParseMtaStsPolicy(t *testing.T) {
 			t.Fatalf("expected invalid policy to be rejected, got policy=%q report=%q ttl=%d", policy, report, ttl)
 		}
 	})
+
+	t.Run("ip literal mx patterns are rejected", func(t *testing.T) {
+		t.Parallel()
+
+		for _, policyText := range []string{
+			"version: STSv1\nmode: enforce\nmx: 127.0.0.1\nmax_age: 86400\n",
+			"version: STSv1\nmode: enforce\nmx: 1.2.3.4\nmax_age: 86400\n",
+			"version: STSv1\nmode: enforce\nmx: *.1.2.3.4\nmax_age: 86400\n",
+		} {
+			policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader(policyText))
+			if policy != "" || report != "" || ttl != 0 {
+				t.Fatalf("expected IP literal MX policy to be rejected, got policy=%q report=%q ttl=%d", policy, report, ttl)
+			}
+		}
+	})
+
+	t.Run("control bytes in extension lines are rejected", func(t *testing.T) {
+		t.Parallel()
+
+		for _, policyText := range []string{
+			"version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\nx-report: ok\x00bad\n",
+			"version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\nx-report: ok\tbad\n",
+			"version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\nx-report: ok\rbad\n",
+			"version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\nx-report: ok\x7fbad\n",
+		} {
+			policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader(policyText))
+			if policy != "" || report != "" || ttl != 0 {
+				t.Fatalf("expected control-bearing policy line to be rejected, got policy=%q report=%q ttl=%d", policy, report, ttl)
+			}
+		}
+	})
+
+	t.Run("printable extension lines remain reportable", func(t *testing.T) {
+		t.Parallel()
+
+		policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\nx-report: safe-value\n"))
+		if policy == "" || ttl != 86400 {
+			t.Fatalf("expected printable extension policy to remain valid, got policy=%q ttl=%d", policy, ttl)
+		}
+		if !strings.Contains(report, "policy_string = x-report: safe-value") {
+			t.Fatalf("expected printable extension line in report, got %q", report)
+		}
+	})
 }
 
 func TestMtaSts(t *testing.T) {

@@ -7,6 +7,7 @@ package valid
 
 import (
 	"net"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -77,6 +78,18 @@ func IsDNSName(s string) bool {
 func IsPrintableASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func IsUTFLetterNumeric(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
 			return false
 		}
 	}
