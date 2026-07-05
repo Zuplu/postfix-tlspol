@@ -1,3 +1,32 @@
+## What's Changed in v1.11.0 (2026-07-05)
+
+* build(deps): update toolchain to go1.26.3 by @DragonWork
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#146](https://github.com/Zuplu/postfix-tlspol/pull/146)
+* build(deps): update toolchain to go1.26.4 by @DragonWork
+* build(docker): bump golang from 1.26.3-alpine3.23 to 1.26.4-alpine3.23 in /deployments by @dependabot[bot] in [#149](https://github.com/Zuplu/postfix-tlspol/pull/149)
+* build(deps): bump the golang-x group across 1 directory with 5 updates by @dependabot[bot] in [#153](https://github.com/Zuplu/postfix-tlspol/pull/153)
+* build(deps): bump go.yaml.in/yaml/v4 from 4.0.0-rc.4 to 4.0.0-rc.5 by @dependabot[bot] in [#154](https://github.com/Zuplu/postfix-tlspol/pull/154)
+* build(deps): bump go.yaml.in/yaml/v4 from 4.0.0-rc.5 to 4.0.0-rc.6 by @dependabot[bot] in [#159](https://github.com/Zuplu/postfix-tlspol/pull/159)
+* build(deps): bump golang.org/x/tools from 0.46.0 to 0.47.0 in the golang-x group by @dependabot[bot] in [#160](https://github.com/Zuplu/postfix-tlspol/pull/160)
+* build(docker): bump golang from `f23e8b2` to `eb5a920` in /deployments by @dependabot[bot] in [#157](https://github.com/Zuplu/postfix-tlspol/pull/157)
+* fix(docker): fix unbound auto-trust-anchor ownership problems by @DragonWork
+* feat: auto-setup systemd socket address when upgrading from a legacy version that did not support systemd sockets by @DragonWork
+* fix: return TEMP on MX address lookup failures and prevent downgrades in DANE path by @DragonWork
+* fix: back off failed policy prefetch retries by @DragonWork
+* build(docker): bump golang from `eb5a920` to `18b460d` in /deployments by @dependabot[bot] in [#164](https://github.com/Zuplu/postfix-tlspol/pull/164)
+* fix: prevent accept errors from putting the server in a state of no-operation by @DragonWork
+* fix: harden netstring length parsing by @DragonWork
+* fix: harden resolv.conf reloads and prevent sticking to stale configuration by @DragonWork
+* feat: optimize prefetch renewal for near-expiry policies and batch them to use resources more efficiently by @DragonWork
+* fix: prune unused cache hit counters by @DragonWork
+* fix: harden metrics HTTP handling with timeouts and limits by @DragonWork
+* fix: harden DANE MX lookup concurrency by @DragonWork
+* fix: tighten MTA-STS policy input validation by @DragonWork
+* fix: harden DNS UDP payload sizing by @DragonWork
+* fix: validate MTA-STS extensions by RFC grammar by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.10.0...v1.11.0
+
 ## What's Changed in v1.10.0 (2026-04-28)
 
 * fix: use relative stats, remove superfluous stats persistence by @DragonWork
