@@ -146,6 +146,12 @@ func (c *Cache[T]) Items(haveLock bool) []Entry[T] {
 	return entries
 }
 
+func (c *Cache[T]) Len() int {
+	c.RLock()
+	defer c.RUnlock()
+	return len(c.data)
+}
+
 func (c *Cache[T]) Close() {
 	c.closeOnce.Do(func() {
 		close(c.quit)

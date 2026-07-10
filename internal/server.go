@@ -192,6 +192,8 @@ const (
 	CACHE_MIN_TTL               uint32 = 180
 	CACHE_MAX_TTL               uint32 = 2592000
 	CACHE_MAX_AGE               uint32 = 1800 // max age for stale queries (only for prefetching, not served to postfix)
+	CACHE_MAX_ENTRIES                  = 50000
+	CACHE_PRUNE_TARGET                 = 45000
 	REQUEST_TIMEOUT                    = 2 * time.Second
 	POLICY_ATTEMPTS                    = 3
 	POLICY_RETRY_BASE                  = 250 * time.Millisecond
@@ -225,6 +227,7 @@ var (
 	listenersMu       sync.Mutex
 	serverWg          sync.WaitGroup
 	connectionWg      sync.WaitGroup
+	cachePruneMu      sync.Mutex
 	cacheHitCounters  sync.Map
 	showVersion       = false
 	showLicense       = false
@@ -1174,6 +1177,7 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			cs := mergeCacheResult(c, result, now)
 			cs.Counter += drainCacheHitCounter(domain) + 1
 			polCache.Set(domain, cs)
+			enforceCacheLimit()
 			if _, _, _, ok := selectCachedPolicy(cs, now); ok {
 				resetCachedPolicyPrefetchFailures(domain)
 			}
@@ -1453,11 +1457,56 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 			scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
 		}
 	}
+	entries, evicted := partitionCacheEntriesForLimit(entries, now, CACHE_MAX_ENTRIES, CACHE_PRUNE_TARGET)
+	for _, entry := range evicted {
+		polCache.Remove(true, entry.Key)
+		cacheHitCounters.Delete(entry.Key)
+		unscheduleCachedPolicyPrefetch(entry.Key)
+	}
 	polCache.Unlock()
+	if len(evicted) != 0 {
+		slog.Warn("Pruned policy cache to entry limit", "removed", len(evicted), "remaining", len(entries))
+	}
 	if err := polCache.Save(false); err != nil {
 		slog.Error("Could not save cache", "error", err)
 	}
 	return entries
+}
+
+func enforceCacheLimit() {
+	if polCache.Len() <= CACHE_MAX_ENTRIES || !cachePruneMu.TryLock() {
+		return
+	}
+	defer cachePruneMu.Unlock()
+	if polCache.Len() > CACHE_MAX_ENTRIES {
+		_ = tidyCache()
+	}
+}
+
+func partitionCacheEntriesForLimit(entries []cache.Entry[*CacheStruct], now time.Time, maxEntries int, targetEntries int) ([]cache.Entry[*CacheStruct], []cache.Entry[*CacheStruct]) {
+	if len(entries) <= maxEntries {
+		return entries, nil
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		iHasPolicy := cacheStructHasPolicy(entries[i].Value)
+		jHasPolicy := cacheStructHasPolicy(entries[j].Value)
+		if iHasPolicy != jHasPolicy {
+			return !iHasPolicy
+		}
+		iCounter := cacheEntryCounter(entries[i].Key, entries[i].Value)
+		jCounter := cacheEntryCounter(entries[j].Key, entries[j].Value)
+		if iCounter != jCounter {
+			return iCounter < jCounter
+		}
+		iTTL := entries[i].Value.RemainingTTL(now)
+		jTTL := entries[j].Value.RemainingTTL(now)
+		if iTTL != jTTL {
+			return iTTL < jTTL
+		}
+		return entries[i].Key < entries[j].Key
+	})
+	evictCount := len(entries) - targetEntries
+	return entries[evictCount:], entries[:evictCount]
 }
 
 func firstWord(s string) string {

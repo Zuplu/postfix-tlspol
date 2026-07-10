@@ -552,6 +552,45 @@ func TestTidyCacheRemovesExpiredNoPolicyAndOldStalePolicy(t *testing.T) {
 	}
 }
 
+func TestPartitionCacheEntriesPrefersUsefulPolicies(t *testing.T) {
+	now := time.Now()
+	entry := func(key string, policy string, counter uint32, ttl time.Duration) cache.Entry[*CacheStruct] {
+		return cache.Entry[*CacheStruct]{
+			Key: key,
+			Value: &CacheStruct{
+				Expirable: &cache.Expirable{ExpiresAt: now.Add(ttl)},
+				Policy:    policy,
+				Counter:   counter,
+			},
+		}
+	}
+	entries := []cache.Entry[*CacheStruct]{
+		entry("unused-policy.example", "dane", 0, time.Minute),
+		entry("popular-policy.example", "dane-only", 20, time.Hour),
+		entry("unused-miss.example", "", 0, time.Minute),
+		entry("popular-miss.example", "", 20, time.Hour),
+	}
+
+	kept, evicted := partitionCacheEntriesForLimit(entries, now, 3, 2)
+	if len(kept) != 2 || len(evicted) != 2 {
+		t.Fatalf("unexpected partition sizes: kept=%d evicted=%d", len(kept), len(evicted))
+	}
+	for _, removed := range evicted {
+		if cacheStructHasPolicy(removed.Value) {
+			t.Fatalf("expected no-policy entries to be evicted first, got %q", removed.Key)
+		}
+	}
+	keptKeys := map[string]bool{}
+	for _, retained := range kept {
+		keptKeys[retained.Key] = true
+	}
+	for _, want := range []string{"unused-policy.example", "popular-policy.example"} {
+		if !keptKeys[want] {
+			t.Fatalf("expected policy entry %q to be retained", want)
+		}
+	}
+}
+
 func TestTryCachedPolicyDoesNotRewriteCacheEntry(t *testing.T) {
 	oldCacheFile := config.Server.CacheFile
 	oldPolCache := polCache

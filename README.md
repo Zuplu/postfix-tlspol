@@ -170,6 +170,7 @@ server:
   prefetch: true
 
   # cache file (default /var/lib/postfix-tlspol/cache.db)
+  # in-memory entries are bounded to 50,000 and pruned to 45,000 in batches
   cache-file: /var/lib/postfix-tlspol/cache.db
 
 dns:

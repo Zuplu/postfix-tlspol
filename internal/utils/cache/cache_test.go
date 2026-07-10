@@ -135,6 +135,9 @@ func TestCacheSetGetRemoveItemsPurge(t *testing.T) {
 
 	c.Set("k1", v1)
 	c.Set("k2", v2)
+	if got := c.Len(); got != 2 {
+		t.Fatalf("expected cache length 2, got %d", got)
+	}
 
 	got1, ok := c.Get("k1")
 	if !ok {
@@ -155,6 +158,9 @@ func TestCacheSetGetRemoveItemsPurge(t *testing.T) {
 	}
 
 	c.Purge()
+	if got := c.Len(); got != 0 {
+		t.Fatalf("expected cache length 0 after purge, got %d", got)
+	}
 	entries = c.Items(false)
 	if len(entries) != 0 {
 		t.Fatalf("expected cache to be empty after purge, got %d entries", len(entries))
