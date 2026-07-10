@@ -50,9 +50,17 @@ Installation with Docker simplifies setup, as it contains its own properly confi
 
 ```sh
 docker volume create postfix-tlspol-data
+docker volume create postfix-tlspol-unbound
 docker run -d \
     -v postfix-tlspol-data:/data \
+    -v postfix-tlspol-unbound:/var/lib/unbound \
     -p 127.0.0.1:8642:8642 \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --pids-limit 256 \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+    --stop-timeout 30 \
     --restart unless-stopped \
     --name postfix-tlspol \
     zuplu/postfix-tlspol:latest
@@ -63,6 +71,8 @@ Jump to *Postfix configuration* to integrate the socketmap server.
 To update the image, stop and remove the container, and run the `docker run ...` command again.
 
 To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
+
+The image health check verifies both the local validating resolver and the policy server. The entrypoint supervises both processes and exits if either one fails, allowing the restart policy to recover the complete service.
 
 # Install from source
 

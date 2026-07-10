@@ -8,13 +8,24 @@ services:
       args:
         TARGETPLATFORM: ${TARGETPLATFORM:-}
         GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
-        VERSION: ${VERSION:-undefined}
+        VERSION: ${VERSION:-0.0.0-dev}
     ports:
       - "127.0.0.1:8642:8642"
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 30s
     network_mode: bridge
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
     volumes:
       - postfix-tlspol-data:/data
+      - postfix-tlspol-unbound:/var/lib/unbound
 
 volumes:
   postfix-tlspol-data:
+  postfix-tlspol-unbound:
