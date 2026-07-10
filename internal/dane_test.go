@@ -144,17 +144,17 @@ func TestGetMxRecordsDeduplicatesAndLimitsAddressLookups(t *testing.T) {
 			addressQueries.Add(1)
 			current := inFlight.Add(1)
 			updateMaxInt32(&maxInFlight, current)
-			defer inFlight.Add(-1)
 
 			name := strings.ToLower(q.Name)
 			seenMu.Lock()
 			seenQueries[name]++
 			seenMu.Unlock()
 
+			slow := false
 			switch name {
 			case "mx0.many.test.", "mx1.many.test.", "mx2.many.test.":
+				slow = true
 				slowInFlight.Add(1)
-				defer slowInFlight.Add(-1)
 				time.Sleep(200 * time.Millisecond)
 			case "mx4.many.test.":
 				if slowInFlight.Load() != 0 {
@@ -164,6 +164,10 @@ func TestGetMxRecordsDeduplicatesAndLimitsAddressLookups(t *testing.T) {
 			default:
 				time.Sleep(10 * time.Millisecond)
 			}
+			if slow {
+				slowInFlight.Add(-1)
+			}
+			inFlight.Add(-1)
 
 			msg.Answer = append(msg.Answer, &dns.A{
 				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
@@ -243,12 +247,12 @@ func TestCheckTlsaRecordsLimitsConcurrentLookups(t *testing.T) {
 		if q.Qtype == dns.TypeTLSA && strings.HasSuffix(q.Name, ".tlsa.test.") {
 			current := inFlight.Add(1)
 			updateMaxInt32(&maxInFlight, current)
-			defer inFlight.Add(-1)
 
+			slow := false
 			switch q.Name {
 			case "_25._tcp.mx0.tlsa.test.", "_25._tcp.mx1.tlsa.test.", "_25._tcp.mx2.tlsa.test.":
+				slow = true
 				slowInFlight.Add(1)
-				defer slowInFlight.Add(-1)
 				time.Sleep(200 * time.Millisecond)
 			case "_25._tcp.mx4.tlsa.test.":
 				if slowInFlight.Load() != 0 {
@@ -258,6 +262,10 @@ func TestCheckTlsaRecordsLimitsConcurrentLookups(t *testing.T) {
 			default:
 				time.Sleep(10 * time.Millisecond)
 			}
+			if slow {
+				slowInFlight.Add(-1)
+			}
+			inFlight.Add(-1)
 			msg.Rcode = dns.RcodeNameError
 		} else {
 			msg.Rcode = dns.RcodeNameError

@@ -50,6 +50,13 @@ func (l *scriptedListener) Addr() net.Addr {
 
 type staticAddr string
 
+func clearCacheHitCountersForTest() {
+	cacheHitCounters.Range(func(key, _ any) bool {
+		cacheHitCounters.Delete(key)
+		return true
+	})
+}
+
 func (a staticAddr) Network() string {
 	return "test"
 }
@@ -548,16 +555,15 @@ func TestTidyCacheRemovesExpiredNoPolicyAndOldStalePolicy(t *testing.T) {
 func TestTryCachedPolicyDoesNotRewriteCacheEntry(t *testing.T) {
 	oldCacheFile := config.Server.CacheFile
 	oldPolCache := polCache
-	oldCounters := cacheHitCounters
+	clearCacheHitCountersForTest()
 	defer func() {
 		config.Server.CacheFile = oldCacheFile
 		polCache = oldPolCache
-		cacheHitCounters = oldCounters
+		clearCacheHitCountersForTest()
 	}()
 
 	config.Server.CacheFile = filepath.Join(t.TempDir(), "cache.db")
 	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Hour)
-	cacheHitCounters = sync.Map{}
 	defer polCache.Close()
 
 	original := &CacheStruct{
@@ -606,13 +612,12 @@ func TestTryCachedPolicyDoesNotRewriteCacheEntry(t *testing.T) {
 
 func TestCacheHitCounterCleanupRequiresZeroAndNoCachedPolicy(t *testing.T) {
 	oldPolCache := polCache
-	oldCounters := cacheHitCounters
+	clearCacheHitCountersForTest()
 	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
-	cacheHitCounters = sync.Map{}
 	defer func() {
 		polCache.Close()
 		polCache = oldPolCache
-		cacheHitCounters = oldCounters
+		clearCacheHitCountersForTest()
 	}()
 
 	zeroNoPolicy := &atomic.Uint32{}
@@ -649,13 +654,12 @@ func TestCacheHitCounterCleanupRequiresZeroAndNoCachedPolicy(t *testing.T) {
 
 func TestTidyCacheRemovesUnusedHitCounterAfterPolicyDiscard(t *testing.T) {
 	oldPolCache := polCache
-	oldCounters := cacheHitCounters
+	clearCacheHitCountersForTest()
 	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
-	cacheHitCounters = sync.Map{}
 	defer func() {
 		polCache.Close()
 		polCache = oldPolCache
-		cacheHitCounters = oldCounters
+		clearCacheHitCountersForTest()
 	}()
 
 	now := time.Now()
@@ -679,13 +683,12 @@ func TestTidyCacheRemovesUnusedHitCounterAfterPolicyDiscard(t *testing.T) {
 
 func TestPurgeCacheRemovesFlushedHitCounters(t *testing.T) {
 	oldPolCache := polCache
-	oldCounters := cacheHitCounters
+	clearCacheHitCountersForTest()
 	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
-	cacheHitCounters = sync.Map{}
 	defer func() {
 		polCache.Close()
 		polCache = oldPolCache
-		cacheHitCounters = oldCounters
+		clearCacheHitCountersForTest()
 	}()
 
 	polCache.Set("purged.example", &CacheStruct{
@@ -719,10 +722,10 @@ func TestPurgeCacheRemovesFlushedHitCounters(t *testing.T) {
 
 func TestQueryDomainSingleflight(t *testing.T) {
 	origFn := queryDomainOnce
-	origGroup := queryGroup
+	queryGroup.Forget("example.com")
 	defer func() {
 		queryDomainOnce = origFn
-		queryGroup = origGroup
+		queryGroup.Forget("example.com")
 	}()
 
 	var calls atomic.Int32

@@ -8,6 +8,7 @@ package tlspol
 import (
 	"context"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,7 +83,11 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 	}
 	server.PacketConn = packetConn
 	go func() { _ = server.ActivateAndServe() }()
-	t.Cleanup(func() { _ = server.Shutdown() })
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() { _ = server.Shutdown() })
+	}
+	t.Cleanup(shutdown)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -95,6 +100,7 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 	if ok, err := checkMtaStsRecord(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil || !ok {
 		t.Fatalf("expected MTA-STS TXT path to complete, ok=%v err=%v", ok, err)
 	}
+	shutdown()
 	close(observed)
 
 	seen := map[uint16]int{}
