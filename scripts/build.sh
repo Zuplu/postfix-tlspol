@@ -333,8 +333,9 @@ VERSION="${VERSION:-}"
 if [ -z "$VERSION" ] && command -v git > /dev/null 2>&1; then
   VERSION="$(git describe --tags --abbrev=0 --match 'v*' 2> /dev/null || true)"
 fi
-VERSION="${VERSION:-undefined}"
+VERSION="${VERSION:-0.0.0-dev}"
 VERSION="${VERSION#v}"
+export VERSION
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -393,16 +394,15 @@ build_go() {
   install -d -m 0755 "$DATADIR"
 
   if [ ! -f "$ETCDIR/config.yaml" ]; then
+    config_source="configs/config.default.yaml"
     if [ -f config.yaml ]; then
-      # Migrate config.yaml to new directory structure
-      mv config.yaml configs/config.yaml
-    elif [ ! -f configs/config.yaml ]; then
-      # Create scripts/config.yaml from blueprint if it does not exist
-      cp -a configs/config.default.yaml configs/config.yaml
+      # Prefer the legacy root-level configuration without mutating the checkout.
+      config_source="config.yaml"
+    elif [ -f configs/config.yaml ]; then
+      config_source="configs/config.yaml"
     fi
 
-    install -m 0644 configs/config.yaml "$ETCDIR/config.yaml"
-    rm -f configs/config.yaml
+    install -m 0644 "$config_source" "$ETCDIR/config.yaml"
   fi
 
   install -m 0755 build/postfix-tlspol "$BINDIR/postfix-tlspol"
