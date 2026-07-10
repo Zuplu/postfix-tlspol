@@ -12,6 +12,8 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
 
 The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket, including Go runtime metrics and counters for `dane`, `dane-only`, and `secure` (MTA-STS) results. You can also set `server.metrics-address` for a separate HTTP-only metrics endpoint that does not expose the socketmap protocol.
 
+Keep the socketmap listener bound to loopback or a protected Unix socket. Postfix policy queries are available on every configured listener, while the diagnostic and cache-management commands used by `-query`, `-dump`, `-export`, and `-purge` are accepted only from loopback or Unix-socket peers. For Docker deployments, run those administrative commands with `docker exec`.
+
 <br/><br/><br/><br/>
 
 # Logic

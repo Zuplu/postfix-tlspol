@@ -197,6 +197,10 @@ const (
 	POLICY_RETRY_BASE                  = 250 * time.Millisecond
 	POLICY_BRANCH_RECHECK              = 24 * time.Hour
 	DNS_UDP_PAYLOAD_SIZE        uint16 = 1232
+	SOCKETMAP_MAX_CONNECTIONS          = 128
+	SOCKETMAP_MAX_REQUEST_BYTES        = 1024
+	SOCKETMAP_READ_TIMEOUT             = 30 * time.Second
+	SOCKETMAP_WRITE_TIMEOUT            = 30 * time.Second
 	METRICS_MAX_CONNECTIONS            = 64
 	METRICS_MAX_HEADER_BYTES           = 8 << 10
 	METRICS_READ_HEADER_TIMEOUT        = 5 * time.Second
@@ -387,9 +391,10 @@ func listenSystemdSocket() ([]net.Listener, bool, error) {
 
 func serveSocketmapListener(l net.Listener) {
 	defer serverWg.Done()
+	limited := newLimitedListener(l, SOCKETMAP_MAX_CONNECTIONS)
 
 	for {
-		conn, err := l.Accept()
+		conn, err := limited.Accept()
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				break
@@ -484,6 +489,18 @@ type limitedConn struct {
 	net.Conn
 	release func()
 	once    sync.Once
+}
+
+type writeDeadlineConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *writeDeadlineConn) Write(p []byte) (int, error) {
+	if err := c.SetWriteDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(p)
 }
 
 func (c *limitedConn) Close() error {
@@ -959,12 +976,15 @@ func isLikelyHTTP(reader *bufio.Reader) bool {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
+	if err := conn.SetReadDeadline(time.Now().Add(SOCKETMAP_READ_TIMEOUT)); err != nil {
+		return
+	}
 	reader := bufio.NewReader(conn)
 	if isLikelyHTTP(reader) {
 		handleHTTPConnection(conn, reader)
 		return
 	}
-	handleSocketmapConnection(conn, reader)
+	handleSocketmapConnection(&writeDeadlineConn{Conn: conn, timeout: SOCKETMAP_WRITE_TIMEOUT}, reader)
 }
 
 func handleHTTPConnection(conn net.Conn, reader *bufio.Reader) {
@@ -1048,11 +1068,23 @@ func handleMetricsOnlyHTTPRequest(w http.ResponseWriter, req *http.Request) {
 //gocyclo:ignore
 func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 	ns := netstring.NewScanner(reader)
+	ns.Buffer(make([]byte, 512), SOCKETMAP_MAX_REQUEST_BYTES)
 
-	for ns.Scan() {
+	for {
+		if err := conn.SetReadDeadline(time.Now().Add(SOCKETMAP_READ_TIMEOUT)); err != nil {
+			return
+		}
+		if !ns.Scan() {
+			return
+		}
 		query := ns.Text()
 		parts := strings.SplitN(query, " ", 2)
 		cmd := strings.ToUpper(parts[0])
+		if isControlCommand(cmd) && !isLocalControlConnection(conn) {
+			slog.Warn("Rejected non-local control command", "command", cmd, "remote", conn.RemoteAddr())
+			_, _ = conn.Write(NS_PERM)
+			return
+		}
 		withTlsRpt := config.Server.TlsRpt
 		switch cmd {
 		case "QUERYWITHTLSRPT": // QUERYwithTLSRPT
@@ -1081,16 +1113,15 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 		}
 
 		domain := normalizeDomain(parts[1])
+		if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
+			_, _ = conn.Write(NS_NOTFOUND)
+			continue
+		}
 
 		if cmd == "JSON" {
 			ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
 			replyJson(ctx, conn, domain)
 			cancel()
-			continue
-		}
-
-		if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
-			conn.Write(NS_NOTFOUND)
 			continue
 		}
 
@@ -1115,6 +1146,33 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			scheduleCachedPolicyPrefetch(domain, cs, now)
 		}
 	}
+}
+
+func isControlCommand(cmd string) bool {
+	switch cmd {
+	case "JSON", "DUMP", "EXPORT", "PURGE":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLocalControlConnection(conn net.Conn) bool {
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return false
+	}
+	switch a := addr.(type) {
+	case *net.UnixAddr:
+		return true
+	case *net.TCPAddr:
+		return a.IP.IsLoopback()
+	}
+	if strings.HasPrefix(addr.Network(), "unix") {
+		return true
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	return err == nil && net.ParseIP(host).IsLoopback()
 }
 
 type domainResult struct {
