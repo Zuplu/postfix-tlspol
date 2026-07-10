@@ -835,11 +835,36 @@ func branchFromResult(policy string, report string, ttl uint32) PolicyBranch {
 	}
 }
 
+func mtaStsBranchFromResult(policy string, report string, ttl uint32) PolicyBranch {
+	if policy == "TEMP" {
+		return PolicyBranch{}
+	}
+	if policy == "" && ttl == 0 {
+		ttl = CACHE_NOTFOUND_TTL
+	}
+	if ttl > CACHE_MAX_TTL {
+		ttl = CACHE_MAX_TTL
+	}
+	return PolicyBranch{
+		Policy: policy,
+		Report: report,
+		TTL:    ttl,
+	}
+}
+
 func expireBranch(branch PolicyBranch, now time.Time) PolicyBranch {
 	if !branch.HasData() {
 		return branch
 	}
 	branch.ExpiresAt = now.Add(time.Duration(branch.TTL+rand.Uint32N(20)) * time.Second)
+	return branch
+}
+
+func expireMtaStsBranch(branch PolicyBranch, now time.Time) PolicyBranch {
+	if !branch.HasData() {
+		return branch
+	}
+	branch.ExpiresAt = now.Add(time.Duration(branch.TTL) * time.Second)
 	return branch
 }
 
@@ -883,7 +908,7 @@ func mergeCacheResult(c *CacheStruct, result domainResult, now time.Time) *Cache
 		if mtaSts.Policy == "" && danePolicy != "" {
 			mtaSts.TTL = policyBranchRecheckTTL()
 		}
-		cs.MtaSts = expireBranch(mtaSts, now)
+		cs.MtaSts = expireMtaStsBranch(mtaSts, now)
 	}
 	if result.DaneAttempted {
 		cs.DaneLastAttempt = now
@@ -1349,7 +1374,7 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 	}
 	refreshedMtaSts := PolicyBranch{}
 	if queryMtaSts {
-		refreshedMtaSts = branchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
+		refreshedMtaSts = mtaStsBranchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
 		mtaStsForSelected = refreshedMtaSts
 	}
 	policy, report, ttl := selectedPolicyFromBranches(daneForSelection, mtaStsForSelected, daneTemp)
@@ -1396,6 +1421,9 @@ func shouldQueryDane(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForSel
 
 func shouldQueryMtaSts(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForSelection PolicyBranch, now time.Time, renewBefore uint32) bool {
 	if mtaStsForSelection.HasData() {
+		return false
+	}
+	if c != nil && !c.MtaStsLastAttempt.IsZero() && now.Before(c.MtaStsLastAttempt.Add(MTA_STS_FETCH_RETRY_INTERVAL)) {
 		return false
 	}
 	if c != nil && c.Dane.Policy != "" && beforeBranchRecheck(c.MtaStsLastAttempt, now, renewBefore) {

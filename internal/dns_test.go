@@ -68,7 +68,7 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 		case dns.TypeTXT:
 			msg.Answer = append(msg.Answer, &dns.TXT{
 				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300},
-				Txt: []string{"v=STSv1"},
+				Txt: []string{"v=STSv1; id=edns1;"},
 			})
 		default:
 			msg.SetRcode(r, dns.RcodeNameError)
@@ -147,7 +147,7 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 		msg.SetReply(r)
 		msg.Answer = append(msg.Answer, &dns.TXT{
 			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300},
-			Txt: []string{"v=STSv1"},
+			Txt: []string{"v=STSv1; id=tcp1;"},
 		})
 		_ = w.WriteMsg(msg)
 	})

@@ -34,7 +34,7 @@ Keep the socketmap listener bound to loopback or a protected Unix socket. Postfi
   - MTA-STS and DANE state are cached independently, so a later refreshed DANE result immediately overrides a still-fresh MTA-STS policy.
   - If there is no TLSA record available for at least one MX record, so that the DANE query returns an empty policy, then the MTA-STS policy will take effect and result in a `secure` policy and explicitly enforce a `match=` with the policy-provided MX hostnames.
 
-- DANE and MTA-STS branches are cached by `minimum TTL of all DNSSEC/DANE queries` and MTA-STS `max_age` seconds respectively. The served result is derived from the fresh branch state on every cache hit, with mandatory DANE (`dane-only`) taking precedence.
+- DANE and MTA-STS branches are cached by `minimum TTL of all DNSSEC/DANE queries` and for no longer than the MTA-STS `max_age`, respectively. The served result is derived from the fresh branch state on every cache hit, with mandatory DANE (`dane-only`) taking precedence.
 
 It is recommended to still set the default TLS policy to `dane` (Opportunistic DANE) in Postfix (see below).
 

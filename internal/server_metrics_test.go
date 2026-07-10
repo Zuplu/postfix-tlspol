@@ -838,6 +838,36 @@ func TestSelectCachedPolicyPrioritizesFreshDane(t *testing.T) {
 	}
 }
 
+func TestMtaStsBranchHonorsMaxAge(t *testing.T) {
+	now := time.Now()
+	branch := mtaStsBranchFromResult("secure match=mx.example servername=hostname", "policy_type=sts", 1)
+	if branch.TTL != 1 {
+		t.Fatalf("expected one-second MTA-STS max_age to remain unchanged, got %d", branch.TTL)
+	}
+	branch = expireMtaStsBranch(branch, now)
+	if want := now.Add(time.Second); !branch.ExpiresAt.Equal(want) {
+		t.Fatalf("MTA-STS expiry = %s, want %s", branch.ExpiresAt, want)
+	}
+
+	zero := mtaStsBranchFromResult("secure match=mx.example servername=hostname", "policy_type=sts", 0)
+	if zero.HasData() {
+		t.Fatalf("expected max_age=0 policy not to be cached, got %+v", zero)
+	}
+}
+
+func TestShouldQueryMtaStsBacksOffRecentFailure(t *testing.T) {
+	now := time.Now()
+	cached := &CacheStruct{MtaStsLastAttempt: now.Add(-time.Minute)}
+	if shouldQueryMtaSts(cached, PolicyBranch{}, PolicyBranch{}, now, 0) {
+		t.Fatal("expected a recent failed MTA-STS fetch to be throttled")
+	}
+
+	cached.MtaStsLastAttempt = now.Add(-MTA_STS_FETCH_RETRY_INTERVAL - time.Second)
+	if !shouldQueryMtaSts(cached, PolicyBranch{}, PolicyBranch{}, now, 0) {
+		t.Fatal("expected MTA-STS fetch to resume after the retry interval")
+	}
+}
+
 func TestQueryDomainDaneTempDoesNotDowngradeToMtaSts(t *testing.T) {
 	origDane := checkDanePolicy
 	origMtaSts := checkMtaStsPolicy

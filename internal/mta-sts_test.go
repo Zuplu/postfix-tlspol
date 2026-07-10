@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/miekg/dns"
 )
 
 func init() {
@@ -18,6 +20,48 @@ func init() {
 		Dns: DnsConfig{
 			Address: &address,
 		},
+	}
+}
+
+func TestMtaStsRecordAvailable(t *testing.T) {
+	txt := func(chunks ...string) dns.RR {
+		return &dns.TXT{
+			Hdr: dns.RR_Header{Name: "_mta-sts.example.com.", Rrtype: dns.TypeTXT, Class: dns.ClassINET},
+			Txt: chunks,
+		}
+	}
+	tests := []struct {
+		name    string
+		rcode   int
+		answers []dns.RR
+		want    bool
+		wantErr bool
+	}{
+		{name: "valid split record", answers: []dns.RR{txt("v=STSv1; id=", "policy1;")}, want: true},
+		{name: "valid whitespace delimiters", answers: []dns.RR{txt("v=STSv1 \t; \tid=policy1 \t;")}, want: true},
+		{name: "unrelated record discarded", answers: []dns.RR{txt("verification=abc"), txt("v=STSv1; id=policy1;")}, want: true},
+		{name: "missing id", answers: []dns.RR{txt("v=STSv1; x-note=ok;")}},
+		{name: "wrong version", answers: []dns.RR{txt("v=STSv10; id=policy1;")}},
+		{name: "multiple candidates", answers: []dns.RR{txt("v=STSv1; id=policy1;"), txt("v=STSv1; id=policy2;")}},
+		{name: "invalid id", answers: []dns.RR{txt("v=STSv1; id=bad-value;")}},
+		{name: "invalid extension value", answers: []dns.RR{txt("v=STSv1; id=policy1; note=has space;")}},
+		{name: "trailing whitespace without delimiter", answers: []dns.RR{txt("v=STSv1; id=policy1 ")}},
+		{name: "non ascii", answers: []dns.RR{txt("v=STSv1; id=policy1; note=café;")}},
+		{name: "servfail is temporary", rcode: dns.RcodeServerFailure, wantErr: true},
+		{name: "nxdomain means unavailable", rcode: dns.RcodeNameError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: tt.rcode}, Answer: tt.answers}
+			got, err := mtaStsRecordAvailable(msg)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("available = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -69,6 +113,54 @@ func TestParseMtaStsPolicy(t *testing.T) {
 		}
 		if ttl != 0 {
 			t.Fatalf("expected ttl 0 without max_age, got %d", ttl)
+		}
+	})
+
+	t.Run("missing mode is invalid", func(t *testing.T) {
+		t.Parallel()
+
+		policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmx: mail.example.com\nmax_age: 86400\n"))
+		if policy != "" || report != "" || ttl != 0 {
+			t.Fatalf("expected policy without mode to be rejected, got policy=%q report=%q ttl=%d", policy, report, ttl)
+		}
+	})
+
+	t.Run("enforce and testing require mx", func(t *testing.T) {
+		t.Parallel()
+
+		for _, mode := range []string{"enforce", "testing"} {
+			policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmode: "+mode+"\nmax_age: 86400\n"))
+			if policy != "" || report != "" || ttl != 0 {
+				t.Fatalf("expected %s policy without mx to be rejected, got policy=%q report=%q ttl=%d", mode, policy, report, ttl)
+			}
+		}
+	})
+
+	t.Run("none mode permits no mx", func(t *testing.T) {
+		t.Parallel()
+
+		policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\nmode: none\nmax_age: 86400\n"))
+		if policy != "" || report != "" || ttl != 86400 {
+			t.Fatalf("unexpected none policy result: policy=%q report=%q ttl=%d", policy, report, ttl)
+		}
+	})
+
+	t.Run("blank policy line is invalid", func(t *testing.T) {
+		t.Parallel()
+
+		policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader("version: STSv1\n\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n"))
+		if policy != "" || report != "" || ttl != 0 {
+			t.Fatalf("expected blank line to invalidate policy, got policy=%q report=%q ttl=%d", policy, report, ttl)
+		}
+	})
+
+	t.Run("oversized policy is invalid", func(t *testing.T) {
+		t.Parallel()
+
+		body := "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\nnote: " + strings.Repeat("a", MTASTS_MAX_POLICY_SIZE)
+		policy, report, ttl := parseMtaStsPolicy("example.com", strings.NewReader(body))
+		if policy != "" || report != "" || ttl != 0 {
+			t.Fatalf("expected oversized policy to be rejected, got policy=%q report=%q ttl=%d", policy, report, ttl)
 		}
 	})
 
@@ -199,6 +291,29 @@ func TestParseMtaStsPolicy(t *testing.T) {
 			t.Fatalf("expected brace extension to be omitted from report, got %q", report)
 		}
 	})
+}
+
+func TestMtaStsPolicyMediaType(t *testing.T) {
+	tests := []struct {
+		contentType string
+		want        bool
+	}{
+		{contentType: "text/plain", want: true},
+		{contentType: "text/plain; charset=utf-8", want: true},
+		{contentType: "TEXT/PLAIN; charset=US-ASCII; x-extra=ignored", want: true},
+		{contentType: ""},
+		{contentType: "text/html"},
+		{contentType: "text/plain; charset=iso-8859-1", want: true},
+		{contentType: "not a media type"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.contentType, func(t *testing.T) {
+			if got := isValidMtaStsPolicyMediaType(tt.contentType); got != tt.want {
+				t.Fatalf("isValidMtaStsPolicyMediaType(%q) = %v, want %v", tt.contentType, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestMtaSts(t *testing.T) {

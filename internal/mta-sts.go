@@ -7,11 +7,13 @@ package tlspol
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +26,11 @@ import (
 	"github.com/miekg/dns"
 )
 
-const MTASTS_MAX_AGE uint64 = 31557600 // RFC 8461, 3.2
+const (
+	MTASTS_MAX_AGE               uint64 = 31557600 // RFC 8461, 3.2
+	MTASTS_MAX_POLICY_SIZE              = 64 << 10 // RFC 8461, 3.3 recommended maximum
+	MTA_STS_FETCH_RETRY_INTERVAL        = 5 * time.Minute
+)
 
 func checkMtaStsRecord(ctx context.Context, domain string, resolverAddress string) (bool, error) {
 	m := newDNSQuery("_mta-sts."+domain, dns.TypeTXT, false)
@@ -32,26 +38,112 @@ func checkMtaStsRecord(ctx context.Context, domain string, resolverAddress strin
 	if err != nil {
 		return false, err
 	}
+	return mtaStsRecordAvailable(r)
+}
+
+func mtaStsRecordAvailable(r *dns.Msg) (bool, error) {
 	switch r.Rcode {
-	case dns.RcodeSuccess, dns.RcodeNameError, dns.RcodeServerFailure:
+	case dns.RcodeSuccess:
+	case dns.RcodeNameError:
+		return false, nil
 	default:
 		return false, errors.New(dns.RcodeToString[r.Rcode])
 	}
-	if len(r.Answer) == 0 {
-		return false, nil
-	}
 
+	var candidates []string
 	for _, answer := range r.Answer {
-		if txt, ok := answer.(*dns.TXT); ok {
-			for _, txtRecord := range txt.Txt {
-				if strings.HasPrefix(txtRecord, "v=STSv1") {
-					return true, nil
-				}
-			}
+		txt, ok := answer.(*dns.TXT)
+		if !ok {
+			continue
+		}
+		record := strings.Join(txt.Txt, "")
+		if isMtaStsTXTVersionCandidate(record) {
+			candidates = append(candidates, record)
 		}
 	}
+	return len(candidates) == 1 && isValidMtaStsTXTRecord(candidates[0]), nil
+}
 
-	return false, nil
+func isMtaStsTXTVersionCandidate(record string) bool {
+	const version = "v=STSv1"
+	if !strings.HasPrefix(record, version) {
+		return false
+	}
+	rest := record[len(version):]
+	for len(rest) != 0 && (rest[0] == ' ' || rest[0] == '\t') {
+		rest = rest[1:]
+	}
+	return len(rest) != 0 && rest[0] == ';'
+}
+
+func isValidMtaStsTXTRecord(record string) bool {
+	if !isMtaStsTXTASCII(record) || !isMtaStsTXTVersionCandidate(record) {
+		return false
+	}
+	fields := strings.Split(record, ";")
+	if strings.TrimRight(fields[0], " \t") != "v=STSv1" {
+		return false
+	}
+	hasID := false
+	for i, rawField := range fields[1:] {
+		lastField := i == len(fields)-2
+		field := strings.TrimLeft(rawField, " \t")
+		if !lastField {
+			field = strings.TrimRight(field, " \t")
+		}
+		if field == "" {
+			if lastField {
+				continue
+			}
+			return false
+		}
+		keyValue := strings.SplitN(field, "=", 2)
+		if len(keyValue) != 2 {
+			return false
+		}
+		key, value := keyValue[0], keyValue[1]
+		if key == "id" {
+			if hasID {
+				continue
+			}
+			if len(value) == 0 || len(value) > 32 {
+				return false
+			}
+			for i := 0; i < len(value); i++ {
+				if !isMtaStsAlphanum(value[i]) {
+					return false
+				}
+			}
+			hasID = true
+			continue
+		}
+		if !isMtaStsExtensionName(key) || !isMtaStsTXTExtensionValue(value) {
+			return false
+		}
+	}
+	return hasID
+}
+
+func isMtaStsTXTASCII(record string) bool {
+	for i := 0; i < len(record); i++ {
+		if record[i] != '\t' && (record[i] < 0x20 || record[i] > 0x7e) {
+			return false
+		}
+	}
+	return true
+}
+
+func isMtaStsTXTExtensionValue(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if !(c >= 0x21 && c <= 0x3a || c == 0x3c || c >= 0x3e && c <= 0x7e) {
+			return false
+		}
+	}
+	return true
 }
 
 var httpClient = &http.Client{
@@ -82,6 +174,7 @@ type mtaStsPolicyParser struct {
 	mxServers    []string
 	maxAge       uint32
 	hasMaxAge    bool
+	hasMode      bool
 	hasVersion   bool
 }
 
@@ -156,7 +249,7 @@ func (p *mtaStsPolicyParser) parseLine(line string) bool {
 	line = strings.TrimRight(line, " \t")
 	lineLen := len(line)
 	if lineLen == 0 {
-		return true
+		return false
 	}
 	keyValPair := strings.SplitN(line, ":", 2)
 	if len(keyValPair) != 2 {
@@ -169,7 +262,7 @@ func (p *mtaStsPolicyParser) parseLine(line string) bool {
 		return false
 	}
 	if key != "mx" && p.existingKeys[key] {
-		return true // only mx keys can be duplicated, others are ignored (as of [RFC 8641, 3.2])
+		return true // Only mx keys can be repeated; later values are ignored per RFC 8461, Section 3.2.
 	}
 	p.existingKeys[key] = true
 	switch key {
@@ -200,6 +293,7 @@ func (p *mtaStsPolicyParser) parseLine(line string) bool {
 			return false
 		}
 		p.mode = val
+		p.hasMode = true
 		p.writeReportField(key, reportVal)
 	case "max_age":
 		if !isMtaStsDigits(val) {
@@ -233,8 +327,12 @@ func (p *mtaStsPolicyParser) reportFor(domain string) string {
 }
 
 func parseMtaStsPolicy(domain string, r io.Reader) (string, string, uint32) {
+	body, err := io.ReadAll(io.LimitReader(r, MTASTS_MAX_POLICY_SIZE+1))
+	if err != nil || len(body) > MTASTS_MAX_POLICY_SIZE {
+		return "", "", 0
+	}
 	parser := newMtaStsPolicyParser()
-	scanner := bufio.NewScanner(r)
+	scanner := bufio.NewScanner(bytes.NewReader(body))
 	for scanner.Scan() {
 		if !parser.parseLine(scanner.Text()) {
 			return "", "", 0
@@ -243,7 +341,7 @@ func parseMtaStsPolicy(domain string, r io.Reader) (string, string, uint32) {
 	if scanner.Err() != nil {
 		return "", "", 0
 	}
-	if !parser.hasVersion || !parser.hasMaxAge {
+	if !parser.hasVersion || !parser.hasMode || !parser.hasMaxAge || (parser.mode != "none" && len(parser.mxServers) == 0) {
 		return "", "", 0
 	}
 	report := parser.reportFor(domain)
@@ -254,6 +352,14 @@ func parseMtaStsPolicy(domain string, r io.Reader) (string, string, uint32) {
 	}
 
 	return "", "", parser.maxAge
+}
+
+func isValidMtaStsPolicyMediaType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.EqualFold(mediaType, "text/plain") {
+		return false
+	}
+	return true
 }
 
 func checkMtaSts(ctx context.Context, domain string, mayRetry bool) (string, string, uint32) {
@@ -306,6 +412,9 @@ func checkMtaStsOnce(ctx context.Context, domain string, resolverAddress string)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		return "", "", 0, nil
+	}
+	if !isValidMtaStsPolicyMediaType(resp.Header.Get("Content-Type")) {
 		return "", "", 0, nil
 	}
 
