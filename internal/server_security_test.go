@@ -115,5 +115,27 @@ func TestIsLocalControlConnection(t *testing.T) {
 	}
 }
 
+func TestCloseActiveConnections(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	activeConnections.Store(server, struct{}{})
+	defer activeConnections.Delete(server)
+
+	closeActiveConnections()
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Read(make([]byte, 1))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected peer close after shutdown")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active connection was not closed")
+	}
+}
+
 var _ net.Conn = (*securityTestConn)(nil)
 var _ io.Reader = (*securityTestConn)(nil)

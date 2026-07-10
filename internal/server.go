@@ -227,6 +227,7 @@ var (
 	listenersMu       sync.Mutex
 	serverWg          sync.WaitGroup
 	connectionWg      sync.WaitGroup
+	activeConnections sync.Map
 	cachePruneMu      sync.Mutex
 	cacheHitCounters  sync.Map
 	showVersion       = false
@@ -312,6 +313,7 @@ func StartDaemon(v string, licenseText string) {
 	}()
 	startServer()
 	cancelDaemon()
+	closeActiveConnections()
 	connectionWg.Wait()
 	prefetchWg.Wait()
 	_ = tidyCache()
@@ -336,6 +338,7 @@ func listenForSignals(cancel context.CancelFunc) {
 			slog.Info("Received signal, shutting down", "signal", sig)
 			cancel()
 			closeActiveListeners()
+			closeActiveConnections()
 			return
 		}
 	}()
@@ -420,8 +423,12 @@ func serveSocketmapListener(l net.Listener) {
 			continue
 		}
 		connectionWg.Add(1)
+		activeConnections.Store(conn, struct{}{})
 		go func() {
-			defer connectionWg.Done()
+			defer func() {
+				activeConnections.Delete(conn)
+				connectionWg.Done()
+			}()
 			handleConnection(conn)
 		}()
 	}
@@ -569,6 +576,15 @@ func closeActiveListeners() {
 	active := append([]net.Listener(nil), listeners...)
 	listenersMu.Unlock()
 	closeListeners(active)
+}
+
+func closeActiveConnections() {
+	activeConnections.Range(func(conn, _ any) bool {
+		if c, ok := conn.(net.Conn); ok {
+			_ = c.Close()
+		}
+		return true
+	})
 }
 
 func startServer() {
