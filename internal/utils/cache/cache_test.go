@@ -330,7 +330,8 @@ func TestCacheCloseIsSafeAfterUse(t *testing.T) {
 	// Allow at least one periodic tick to happen.
 	time.Sleep(30 * time.Millisecond)
 
-	// Must not block or panic.
+	// Repeated closes must not block, save twice, or panic.
+	c.Close()
 	c.Close()
 
 	// Ensure persisted content can still be read.

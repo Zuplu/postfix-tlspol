@@ -58,6 +58,7 @@ type Cache[T Cacheable] struct {
 	quit       chan struct{}
 	filePath   string
 	wg         sync.WaitGroup
+	closeOnce  sync.Once
 	savePeriod time.Duration
 	dirty      bool
 	generation uint64
@@ -146,11 +147,13 @@ func (c *Cache[T]) Items(haveLock bool) []Entry[T] {
 }
 
 func (c *Cache[T]) Close() {
-	close(c.quit)
-	c.wg.Wait()
-	if err := c.Save(false); err != nil {
-		slog.Error("cache: error during final save", "error", err)
-	}
+	c.closeOnce.Do(func() {
+		close(c.quit)
+		c.wg.Wait()
+		if err := c.Save(false); err != nil {
+			slog.Error("cache: error during final save", "error", err)
+		}
+	})
 }
 
 func (c *Cache[T]) periodicSave() {
@@ -275,7 +278,16 @@ func (c *Cache[T]) writeSnapshot(data map[string]T) error {
 		return err
 	}
 	removeTmp = false
-	return nil
+	return syncDirectory(dir)
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func (c *Cache[T]) load() error {

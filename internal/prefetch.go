@@ -7,6 +7,7 @@ package tlspol
 
 import (
 	"container/heap"
+	"context"
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
@@ -211,7 +212,7 @@ func (s *prefetchScheduler) notify() {
 	}
 }
 
-func startPrefetching() {
+func startPrefetching(ctx context.Context) {
 	if !config.Server.Prefetch {
 		return
 	}
@@ -219,6 +220,7 @@ func startPrefetching() {
 	semaphore = make(chan struct{}, runtime.NumCPU()*4+2)
 	scheduler := newPrefetchScheduler()
 	activePrefetchScheduler.Store(scheduler)
+	defer activePrefetchScheduler.CompareAndSwap(scheduler, nil)
 	now := time.Now()
 	for _, entry := range polCache.Items(false) {
 		scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
@@ -226,7 +228,11 @@ func startPrefetching() {
 	for {
 		due, ok := scheduler.nextDue()
 		if !ok {
-			<-scheduler.wake
+			select {
+			case <-scheduler.wake:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 		wait := time.Until(due)
@@ -235,6 +241,7 @@ func startPrefetching() {
 			select {
 			case <-timer.C:
 			case <-scheduler.wake:
+			case <-ctx.Done():
 			}
 			if !timer.Stop() {
 				select {
@@ -242,9 +249,12 @@ func startPrefetching() {
 				default:
 				}
 			}
+			if ctx.Err() != nil {
+				return
+			}
 			continue
 		}
-		prefetchDuePolicies(scheduler)
+		prefetchDuePoliciesContext(ctx, scheduler)
 	}
 }
 
@@ -454,12 +464,20 @@ func cacheAfterFailedBranchDiscard(c *CacheStruct, result domainResult, now time
 }
 
 func prefetchDuePolicies(scheduler *prefetchScheduler) {
+	prefetchDuePoliciesContext(bgCtx, scheduler)
+}
+
+func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchScheduler) {
 	var wg sync.WaitGroup
 	var counter atomic.Uint32
 	now := time.Now()
 	keys := scheduler.popDue(now)
 	itemsCount := len(keys)
 	for _, key := range keys {
+		if ctx.Err() != nil {
+			wg.Wait()
+			return
+		}
 		value, found := polCache.Get(key)
 		if !found {
 			continue
@@ -493,12 +511,18 @@ func prefetchDuePolicies(scheduler *prefetchScheduler) {
 			scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
 			continue
 		}
-		semaphore <- struct{}{}
+		sem := semaphore
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		}
 		wg.Add(1)
-		go func(c cache.Entry[*CacheStruct]) {
+		go func(c cache.Entry[*CacheStruct], sem chan struct{}) {
 			defer func() {
+				<-sem
 				wg.Done()
-				<-semaphore
 			}()
 			// Refresh the cached policy
 			refreshed := prefetchDomain(c.Key, c.Value)
@@ -532,7 +556,7 @@ func prefetchDuePolicies(scheduler *prefetchScheduler) {
 			} else {
 				scheduleFailedPolicyPrefetch(scheduler, c.Key, c.Value, refreshed, refreshedAt)
 			}
-		}(entry)
+		}(entry, sem)
 	}
 	wg.Wait()
 	count := counter.Load()

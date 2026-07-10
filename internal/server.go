@@ -222,7 +222,9 @@ var (
 	NS_PERM           = netstring.Marshal("PERM ")
 	NS_TIMEOUT        = netstring.Marshal("TIMEOUT ")
 	listeners         []net.Listener
+	listenersMu       sync.Mutex
 	serverWg          sync.WaitGroup
+	connectionWg      sync.WaitGroup
 	cacheHitCounters  sync.Map
 	showVersion       = false
 	showLicense       = false
@@ -291,41 +293,47 @@ func StartDaemon(v string, licenseText string) {
 	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n", curYear, Version)
 
 	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Duration(600*time.Second))
-	defer polCache.Close()
 	_ = tidyCache()
-	listenForSignals()
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	bgCtx = daemonCtx
+	defer cancelDaemon()
+	listenForSignals(cancelDaemon)
 
 	readEnv()
 
-	go startPrefetching()
+	var prefetchWg sync.WaitGroup
+	prefetchWg.Add(1)
+	go func() {
+		defer prefetchWg.Done()
+		startPrefetching(daemonCtx)
+	}()
 	startServer()
+	cancelDaemon()
+	connectionWg.Wait()
+	prefetchWg.Wait()
+	_ = tidyCache()
+	polCache.Close()
 }
 
-func listenForSignals() {
+func listenForSignals(cancel context.CancelFunc) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	go func() {
+		defer signal.Stop(signals)
 		for {
 			sig := <-signals
-			slog.Info("Received signal, saving cache...", "signal", sig)
-			_ = tidyCache()
-			if err := polCache.ForceSave(false); err != nil {
-				slog.Error("Could not save cache", "error", err)
-			}
 			if sig == syscall.SIGHUP {
+				slog.Info("Received signal, saving cache", "signal", sig)
+				_ = tidyCache()
+				if err := polCache.ForceSave(false); err != nil {
+					slog.Error("Could not save cache", "error", err)
+				}
 				continue
 			}
-			polCache.Close()
-			if len(listeners) > 0 {
-				for _, l := range listeners {
-					if l != nil {
-						l.Close()
-					}
-				}
-				serverWg.Wait()
-			}
-			os.Exit(0)
-			break
+			slog.Info("Received signal, shutting down", "signal", sig)
+			cancel()
+			closeActiveListeners()
+			return
 		}
 	}()
 }
@@ -408,7 +416,11 @@ func serveSocketmapListener(l net.Listener) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		go handleConnection(conn)
+		connectionWg.Add(1)
+		go func() {
+			defer connectionWg.Done()
+			handleConnection(conn)
+		}()
 	}
 }
 
@@ -537,6 +549,25 @@ func closeListeners(toClose []net.Listener) {
 	}
 }
 
+func setActiveListeners(active []net.Listener) {
+	listenersMu.Lock()
+	listeners = append([]net.Listener(nil), active...)
+	listenersMu.Unlock()
+}
+
+func clearActiveListeners() {
+	listenersMu.Lock()
+	listeners = nil
+	listenersMu.Unlock()
+}
+
+func closeActiveListeners() {
+	listenersMu.Lock()
+	active := append([]net.Listener(nil), listeners...)
+	listenersMu.Unlock()
+	closeListeners(active)
+}
+
 func startServer() {
 	var err error
 	socketmapListeners, inherited, err := listenSystemdSocket()
@@ -584,17 +615,17 @@ func startServer() {
 		}
 	}
 
-	listeners = append([]net.Listener(nil), socketmapListeners...)
+	activeListeners := append([]net.Listener(nil), socketmapListeners...)
 
 	var metricsListener net.Listener
 	if metricsAddress := strings.TrimSpace(config.Server.MetricsAddress); metricsAddress != "" {
 		metricsListener, err = listenConfiguredAddress(metricsAddress, config.Server.SocketPermissions)
 		if err != nil {
-			closeListeners(listeners)
+			closeListeners(activeListeners)
 			slog.Error("Error starting metrics HTTP server", "error", err)
 			os.Exit(1)
 		}
-		listeners = append(listeners, metricsListener)
+		activeListeners = append(activeListeners, metricsListener)
 		addr := metricsListener.Addr()
 		if addr == nil {
 			slog.Info("Metrics HTTP server listening", "network", "<unknown>", "address", "<unknown>")
@@ -603,9 +634,12 @@ func startServer() {
 		}
 	}
 
-	defer func() {
-		listeners = nil
-	}()
+	setActiveListeners(activeListeners)
+	defer clearActiveListeners()
+	if bgCtx.Err() != nil {
+		closeListeners(activeListeners)
+		return
+	}
 
 	serverWg.Add(len(socketmapListeners))
 	for _, l := range socketmapListeners {
