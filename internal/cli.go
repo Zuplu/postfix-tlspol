@@ -110,7 +110,10 @@ func flagCliConnFunc(f *flag.Flag) {
 }
 
 func cliQuery(conn net.Conn, value string) {
-	conn.Write(netstring.Marshal("JSON " + value))
+	if _, err := conn.Write(netstring.Marshal("JSON " + value)); err != nil {
+		slog.Error("Could not query domain", "domain", value, "error", err)
+		return
+	}
 	raw, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
 		slog.Error("Could not query domain", "domain", value, "error", err)
@@ -125,7 +128,7 @@ func cliQuery(conn net.Conn, value string) {
 	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
 		var buf io.WriteCloser
 		var jq *exec.Cmd
-		if _, err := exec.LookPath("jq"); err == nil {
+		if _, lookErr := exec.LookPath("jq"); lookErr == nil {
 			jq = exec.Command("jq")
 			buf, err = jq.StdinPipe()
 			if err == nil {
@@ -160,9 +163,7 @@ func cliQuery(conn net.Conn, value string) {
 	}
 	if err != nil {
 		slog.Error("Could not query domain", "domain", value, "error", err)
-		return
 	}
-	return
 }
 
 type nopWriteCloser struct {
