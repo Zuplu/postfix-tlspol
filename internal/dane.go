@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -80,12 +79,16 @@ func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([
 	defer cancel()
 	var lookupErr error
 	var mxRecords []string
-	var ttls []uint32
+	var minTTL uint32
+	haveTTL := false
 	for result := range checkMxRecords(cctx, records, resolverAddress) {
 		switch result.status {
 		case MxOk:
 			mxRecords = append(mxRecords, result.host)
-			ttls = append(ttls, result.ttl)
+			if !haveTTL || result.ttl < minTTL {
+				minTTL = result.ttl
+				haveTTL = true
+			}
 		case MxFail:
 			if lookupErr == nil {
 				lookupErr = errors.New("DNS error during MX address lookup")
@@ -102,7 +105,7 @@ func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([
 		return nil, 0, err, false
 	}
 
-	return mxRecords, findMin(ttls), nil, incompl
+	return mxRecords, minTTL, nil, incompl
 }
 
 func checkMxRecords(ctx context.Context, records []mxRecord, resolverAddress string) <-chan mxCheckResult {
@@ -196,8 +199,20 @@ func checkMxAddress(ctx context.Context, mx string, resolverAddress string, reco
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess:
-		if r.MsgHdr.AuthenticatedData {
-			return MxOk
+		if !r.MsgHdr.AuthenticatedData {
+			return MxNotSec
+		}
+		for _, answer := range r.Answer {
+			switch recordType {
+			case dns.TypeA:
+				if _, ok := answer.(*dns.A); ok {
+					return MxOk
+				}
+			case dns.TypeAAAA:
+				if _, ok := answer.(*dns.AAAA); ok {
+					return MxOk
+				}
+			}
 		}
 		return MxNotSec
 	case dns.RcodeNameError:
@@ -263,7 +278,8 @@ func checkTlsa(ctx context.Context, mx string, resolverAddress string) ResultWit
 	}
 
 	result := ""
-	var ttls []uint32
+	var minTTL uint32
+	haveTTL := false
 	for _, answer := range r.Answer {
 		if tlsa, ok := answer.(*dns.TLSA); ok {
 			if isTlsaUsable(tlsa) {
@@ -272,12 +288,15 @@ func checkTlsa(ctx context.Context, mx string, resolverAddress string) ResultWit
 			} else {
 				// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not; continue searching
 				result = "dane"
-				ttls = append(ttls, tlsa.Hdr.Ttl)
+				if !haveTTL || tlsa.Hdr.Ttl < minTTL {
+					minTTL = tlsa.Hdr.Ttl
+					haveTTL = true
+				}
 			}
 		}
 	}
 
-	return ResultWithTTL{Result: result, TTL: findMin(ttls)}
+	return ResultWithTTL{Result: result, TTL: minTTL}
 }
 
 const (
@@ -343,8 +362,21 @@ func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress s
 	for range workers {
 		go func() {
 			defer wg.Done()
-			for mx := range jobs {
-				results <- checkTlsa(ctx, mx, resolverAddress)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case mx, ok := <-jobs:
+					if !ok {
+						return
+					}
+					result := checkTlsa(ctx, mx, resolverAddress)
+					select {
+					case results <- result:
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
 		}()
 	}
@@ -352,7 +384,11 @@ func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress s
 	go func() {
 		defer close(jobs)
 		for _, mx := range mxRecords {
-			jobs <- mx
+			select {
+			case jobs <- mx:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -366,36 +402,57 @@ func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress s
 
 func getDanePolicy(ctx context.Context, cancel func(), ttl uint32, incompl bool, numRecords int, tlsaResults <-chan ResultWithTTL) (string, uint32, error) {
 	defer cancel()
-	var ttls []uint32
-	ttls = append(ttls, ttl)
-	var pols []uint8
+	minTTL := ttl
+	minPolicy := uint8(DaneOnly)
+	maxPolicy := uint8(NoDane)
 	if incompl {
-		pols = append(pols, NoDane)
+		minPolicy = NoDane
 	}
 	for i := 0; i < numRecords; i++ {
-		res := <-tlsaResults
+		var res ResultWithTTL
+		select {
+		case result, ok := <-tlsaResults:
+			if !ok {
+				if err := ctx.Err(); err != nil {
+					return "", 0, err
+				}
+				return "", 0, errors.New("incomplete TLSA lookup results")
+			}
+			res = result
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		}
 		if res.Err != nil {
 			return "", 0, res.Err
 		}
-		ttls = append(ttls, res.TTL)
+		if res.TTL < minTTL {
+			minTTL = res.TTL
+		}
+		var policy uint8
 		switch res.Result {
 		case "dane-only":
-			pols = append(pols, DaneOnly)
+			policy = DaneOnly
 		case "dane":
-			pols = append(pols, Dane)
+			policy = Dane
 		default:
-			pols = append(pols, NoDane)
+			policy = NoDane
+		}
+		if policy < minPolicy {
+			minPolicy = policy
+		}
+		if policy > maxPolicy {
+			maxPolicy = policy
 		}
 	}
 	pol := ""
-	if findMax(pols) >= Dane {
-		if findMin(pols) <= Dane {
+	if maxPolicy >= Dane {
+		if minPolicy <= Dane {
 			pol = "dane"
 		} else {
 			pol = "dane-only"
 		}
 	}
-	return pol, findMin(ttls), nil
+	return pol, minTTL, nil
 }
 
 func waitPolicyRetry(ctx context.Context, attempt int) bool {
@@ -408,18 +465,4 @@ func waitPolicyRetry(ctx context.Context, attempt int) bool {
 	case <-ctx.Done():
 		return false
 	}
-}
-
-func findMin[T uint8 | uint32](s []T) T {
-	if len(s) == 0 {
-		return 0
-	}
-	return slices.Min(s)
-}
-
-func findMax[T uint8 | uint32](s []T) T {
-	if len(s) == 0 {
-		return 0
-	}
-	return slices.Max(s)
 }

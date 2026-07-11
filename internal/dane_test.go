@@ -54,6 +54,27 @@ func TestDane(t *testing.T) {
 	}
 }
 
+func BenchmarkGetDanePolicy(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		results := make(chan ResultWithTTL, 1)
+		results <- ResultWithTTL{Result: "dane-only", TTL: 120}
+		if _, _, err := getDanePolicy(context.Background(), func() {}, 300, false, 1, results); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestGetDanePolicyRejectsIncompleteResults(t *testing.T) {
+	t.Parallel()
+
+	results := make(chan ResultWithTTL)
+	close(results)
+	if _, _, err := getDanePolicy(context.Background(), func() {}, 300, false, 1, results); err == nil {
+		t.Fatal("expected incomplete TLSA lookup results to fail")
+	}
+}
+
 func TestCheckDaneOnceReturnsErrorWhenMxAddressLookupTimesOut(t *testing.T) {
 	originalTimeout := client.Timeout
 	client.Timeout = 50 * time.Millisecond
@@ -397,5 +418,59 @@ func TestDaneUnauthenticatedSuccessfulMxAddressLookupIsNotTemporary(t *testing.T
 	}
 	if policy != "" || ttl != 0 {
 		t.Fatalf("expected no DANE policy for unsigned MX address lookup, got policy=%q ttl=%d", policy, ttl)
+	}
+}
+
+func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
+	var tlsaQueries atomic.Int32
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.AuthenticatedData = true
+
+		q := r.Question[0]
+		switch {
+		case q.Name == "nodata.test." && q.Qtype == dns.TypeMX:
+			msg.Answer = append(msg.Answer, &dns.MX{
+				Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
+				Preference: 10,
+				Mx:         "mx.nodata.test.",
+			})
+		case q.Name == "mx.nodata.test." && (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA):
+			// Authenticated NODATA: the host has no address and is not reachable.
+		case q.Name == "_25._tcp.mx.nodata.test." && q.Qtype == dns.TypeTLSA:
+			tlsaQueries.Add(1)
+			msg.Answer = append(msg.Answer, &dns.TLSA{
+				Hdr:          dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTLSA, Class: dns.ClassINET, Ttl: 300},
+				Usage:        3,
+				Selector:     1,
+				MatchingType: 1,
+				Certificate:  strings.Repeat("a", 64),
+			})
+		default:
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = w.WriteMsg(msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+
+	policy, ttl, err := checkDaneOnce(context.Background(), "nodata.test", packetConn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("expected authenticated NODATA to be treated as unreachable, got %v", err)
+	}
+	if policy != "" || ttl != 0 {
+		t.Fatalf("expected no DANE policy for unreachable MX, got policy=%q ttl=%d", policy, ttl)
+	}
+	if got := tlsaQueries.Load(); got != 0 {
+		t.Fatalf("expected TLSA lookup to be skipped, got %d queries", got)
 	}
 }
