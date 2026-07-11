@@ -476,7 +476,10 @@ func newMetricsHTTPServer(cfg metricsHTTPServerConfig) *http.Server {
 
 type limitedListener struct {
 	net.Listener
-	sem chan struct{}
+	sem       chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func newLimitedListener(l net.Listener, limit int) net.Listener {
@@ -486,25 +489,34 @@ func newLimitedListener(l net.Listener, limit int) net.Listener {
 	return &limitedListener{
 		Listener: l,
 		sem:      make(chan struct{}, limit),
+		done:     make(chan struct{}),
 	}
 }
 
 func (l *limitedListener) Accept() (net.Conn, error) {
-	for {
-		conn, err := l.Listener.Accept()
-		if err != nil {
-			return nil, err
-		}
-		select {
-		case l.sem <- struct{}{}:
-			return &limitedConn{
-				Conn:    conn,
-				release: func() { <-l.sem },
-			}, nil
-		default:
-			_ = conn.Close()
-		}
+	select {
+	case l.sem <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
 	}
+
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		<-l.sem
+		return nil, err
+	}
+	return &limitedConn{
+		Conn:    conn,
+		release: func() { <-l.sem },
+	}, nil
+}
+
+func (l *limitedListener) Close() error {
+	l.closeOnce.Do(func() {
+		close(l.done)
+		l.closeErr = l.Listener.Close()
+	})
+	return l.closeErr
 }
 
 type limitedConn struct {

@@ -35,6 +35,16 @@ type scriptedListener struct {
 	accepts chan scriptedAcceptResult
 }
 
+type notifyingListener struct {
+	net.Listener
+	acceptCalled chan struct{}
+}
+
+func (l *notifyingListener) Accept() (net.Conn, error) {
+	l.acceptCalled <- struct{}{}
+	return l.Listener.Accept()
+}
+
 func (l *scriptedListener) Accept() (net.Conn, error) {
 	result := <-l.accepts
 	return result.conn, result.err
@@ -234,6 +244,104 @@ func TestBuildMetricsTextIncludesExpectedMetrics(t *testing.T) {
 		if !strings.Contains(metrics, expected) {
 			t.Fatalf("expected metrics output to contain %q", expected)
 		}
+	}
+}
+
+func BenchmarkBuildMetricsText(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = buildMetricsText()
+	}
+}
+
+func TestLimitedListenerAppliesBackpressureBeforeAccept(t *testing.T) {
+	server1, client1 := net.Pipe()
+	server2, client2 := net.Pipe()
+	t.Cleanup(func() {
+		_ = client1.Close()
+		_ = client2.Close()
+	})
+
+	accepts := make(chan scriptedAcceptResult, 2)
+	accepts <- scriptedAcceptResult{conn: server1}
+	accepts <- scriptedAcceptResult{conn: server2}
+	acceptCalled := make(chan struct{}, 2)
+	listener := &notifyingListener{
+		Listener:     &scriptedListener{accepts: accepts},
+		acceptCalled: acceptCalled,
+	}
+	limited := newLimitedListener(listener, 1)
+	t.Cleanup(func() { _ = limited.Close() })
+
+	first, err := limited.Accept()
+	if err != nil {
+		t.Fatalf("first accept failed: %v", err)
+	}
+	<-acceptCalled
+
+	type acceptResult struct {
+		conn net.Conn
+		err  error
+	}
+	secondResult := make(chan acceptResult, 1)
+	go func() {
+		conn, err := limited.Accept()
+		secondResult <- acceptResult{conn: conn, err: err}
+	}()
+
+	select {
+	case <-acceptCalled:
+		t.Fatal("underlying listener accepted while the connection limit was full")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first connection: %v", err)
+	}
+	select {
+	case <-acceptCalled:
+	case <-time.After(time.Second):
+		t.Fatal("underlying accept did not resume after capacity was released")
+	}
+	select {
+	case result := <-secondResult:
+		if result.err != nil {
+			t.Fatalf("second accept failed: %v", result.err)
+		}
+		_ = result.conn.Close()
+	case <-time.After(time.Second):
+		t.Fatal("second accept did not complete")
+	}
+}
+
+func TestLimitedListenerCloseUnblocksSaturatedAccept(t *testing.T) {
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	accepts := make(chan scriptedAcceptResult, 1)
+	accepts <- scriptedAcceptResult{conn: server}
+	limited := newLimitedListener(&scriptedListener{accepts: accepts}, 1)
+
+	first, err := limited.Accept()
+	if err != nil {
+		t.Fatalf("first accept failed: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := limited.Accept()
+		result <- err
+	}()
+	if err := limited.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("expected net.ErrClosed, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("saturated accept did not unblock on close")
 	}
 }
 

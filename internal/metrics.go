@@ -43,7 +43,7 @@ func buildMetricsText() string {
 	runtime.ReadMemStats(&mem)
 
 	var b strings.Builder
-	b.Grow(1024)
+	b.Grow(3072)
 	fmt.Fprintf(&b, "# HELP postfix_tlspol_queries_total Total socketmap query commands handled.\n")
 	fmt.Fprintf(&b, "# TYPE postfix_tlspol_queries_total counter\n")
 	fmt.Fprintf(&b, "postfix_tlspol_queries_total %d\n", metricQueriesTotal.Load())
