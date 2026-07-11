@@ -45,9 +45,7 @@ func init() {
 		}
 	}
 	Version = cleanVersion(Version)
-	if strings.HasPrefix(Version, "v") {
-		Version = Version[1:]
-	}
+	Version = strings.TrimPrefix(Version, "v")
 }
 
 func main() {
