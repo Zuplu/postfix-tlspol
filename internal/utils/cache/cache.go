@@ -6,7 +6,6 @@
 package cache
 
 import (
-	"bytes"
 	"compress/gzip"
 	"encoding/gob"
 	"log/slog"
@@ -54,14 +53,17 @@ func (e *Expirable) RemainingTTL(t ...time.Time) uint32 {
 }
 
 type Cache[T Cacheable] struct {
-	data       map[string]T
-	quit       chan struct{}
-	filePath   string
-	wg         sync.WaitGroup
-	closeOnce  sync.Once
-	savePeriod time.Duration
-	dirty      bool
-	generation uint64
+	data                   map[string]T
+	quit                   chan struct{}
+	filePath               string
+	wg                     sync.WaitGroup
+	closeOnce              sync.Once
+	persistMu              sync.Mutex
+	savePeriod             time.Duration
+	dirty                  bool
+	generation             uint64
+	persistedGeneration    uint64
+	hasPersistedGeneration bool
 	sync.RWMutex
 }
 
@@ -119,6 +121,9 @@ func (c *Cache[T]) Remove(haveLock bool, key string) {
 	if !haveLock {
 		c.Lock()
 		defer c.Unlock()
+	}
+	if _, ok := c.data[key]; !ok {
+		return
 	}
 	delete(c.data, key)
 	c.dirty = true
@@ -206,7 +211,7 @@ func (c *Cache[T]) save(haveLock bool, force bool) error {
 		c.Unlock()
 	}
 
-	if err := c.writeSnapshot(snapshot); err != nil {
+	if err := c.persistSnapshot(snapshot, generation, force); err != nil {
 		return err
 	}
 
@@ -225,6 +230,23 @@ func (c *Cache[T]) save(haveLock bool, force bool) error {
 	return nil
 }
 
+func (c *Cache[T]) persistSnapshot(data map[string]T, generation uint64, force bool) error {
+	c.persistMu.Lock()
+	defer c.persistMu.Unlock()
+
+	if c.hasPersistedGeneration {
+		if generation < c.persistedGeneration || generation == c.persistedGeneration && !force {
+			return nil
+		}
+	}
+	if err := c.writeSnapshot(data); err != nil {
+		return err
+	}
+	c.persistedGeneration = generation
+	c.hasPersistedGeneration = true
+	return nil
+}
+
 func (c *Cache[T]) snapshotLocked() (map[string]T, uint64) {
 	snapshot := make(map[string]T, len(c.data))
 	for k, v := range c.data {
@@ -234,12 +256,6 @@ func (c *Cache[T]) snapshotLocked() (map[string]T, uint64) {
 }
 
 func (c *Cache[T]) writeSnapshot(data map[string]T) error {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(data); err != nil {
-		return err
-	}
-
 	dir := filepath.Dir(c.filePath)
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -264,7 +280,7 @@ func (c *Cache[T]) writeSnapshot(data map[string]T) error {
 		_ = tmp.Close()
 		return err
 	}
-	if _, err := g.Write(buf.Bytes()); err != nil {
+	if err := gob.NewEncoder(g).Encode(data); err != nil {
 		_ = g.Close()
 		_ = tmp.Close()
 		return err
@@ -318,6 +334,7 @@ func (c *Cache[T]) load() error {
 	c.Lock()
 	c.data = stored
 	c.dirty = false
+	c.hasPersistedGeneration = true
 	c.Unlock()
 	return nil
 }

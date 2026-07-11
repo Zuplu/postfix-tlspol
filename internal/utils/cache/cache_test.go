@@ -9,6 +9,8 @@ import (
 	"encoding/gob"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -201,6 +203,36 @@ func TestCacheSaveAndLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCacheRejectsStaleSnapshotWrite(t *testing.T) {
+	t.Parallel()
+
+	tmpFile := filepath.Join(t.TempDir(), "cache.gz")
+	expiresAt := time.Now().Add(time.Minute)
+	c := &Cache[*testValue]{filePath: tmpFile}
+	newer := map[string]*testValue{
+		"new": newTestValue(expiresAt, "new"),
+	}
+	older := map[string]*testValue{
+		"old": newTestValue(expiresAt, "old"),
+	}
+
+	if err := c.persistSnapshot(newer, 2, false); err != nil {
+		t.Fatalf("persist newer snapshot: %v", err)
+	}
+	if err := c.persistSnapshot(older, 1, false); err != nil {
+		t.Fatalf("persist stale snapshot: %v", err)
+	}
+
+	loaded := New[*testValue](tmpFile, time.Hour)
+	t.Cleanup(loaded.Close)
+	if _, ok := loaded.Get("new"); !ok {
+		t.Fatal("newer snapshot was overwritten")
+	}
+	if _, ok := loaded.Get("old"); ok {
+		t.Fatal("stale snapshot reached disk")
+	}
+}
+
 func TestCacheClosePersistsDirtyEntries(t *testing.T) {
 	t.Parallel()
 
@@ -254,6 +286,18 @@ func TestCacheSaveSkipsWhenNotDirty(t *testing.T) {
 	// Should not fail and should do nothing when not dirty.
 	if err := c.Save(false); err != nil {
 		t.Fatalf("expected no error on save when not dirty, got %v", err)
+	}
+}
+
+func TestCacheRemoveMissingDoesNotMarkDirty(t *testing.T) {
+	t.Parallel()
+
+	c := New[*testValue](filepath.Join(t.TempDir(), "cache.gz"), time.Hour)
+	t.Cleanup(c.Close)
+
+	c.Remove(false, "missing")
+	if c.dirty {
+		t.Fatal("removing a missing key marked the cache dirty")
 	}
 }
 
@@ -349,5 +393,25 @@ func TestCacheCloseIsSafeAfterUse(t *testing.T) {
 	}
 	if _, ok := c2.Get("y"); !ok {
 		t.Fatalf("expected key y to be persisted")
+	}
+}
+
+func BenchmarkWriteSnapshot(b *testing.B) {
+	const entries = 10_000
+	payload := strings.Repeat("x", 128)
+	data := make(map[string]*testValue, entries)
+	expiresAt := time.Date(2026, 4, 2, 16, 0, 0, 0, time.UTC)
+	for i := 0; i < entries; i++ {
+		key := "domain-" + strconv.Itoa(i) + ".example"
+		data[key] = newTestValue(expiresAt, payload)
+	}
+
+	c := &Cache[*testValue]{filePath: filepath.Join(b.TempDir(), "cache.gz")}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := c.writeSnapshot(data); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
