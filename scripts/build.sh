@@ -384,6 +384,7 @@ build_go() {
     -tags netgo \
     -ldflags="-d -extldflags='-static' -s -X main.Version=$VERSION" \
     -o build/postfix-tlspol .; then
+    chmod 0755 build/postfix-tlspol
     log_info "Build succeeded!"
   else
     log_error "Build failed!"
