@@ -38,41 +38,12 @@ type mxCheckResult struct {
 }
 
 const DANE_MX_LOOKUP_CONCURRENCY = 4
+const DANE_CNAME_MAX_DEPTH = 8
 
 func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([]string, uint32, error, bool) {
-	m := newDNSQuery(domain, dns.TypeMX, true)
-	r, err := exchangeDNS(ctx, m, resolverAddress)
-	if err != nil {
-		return nil, 0, err, false
-	}
-	incompl := false
-	switch r.Rcode {
-	case dns.RcodeSuccess, dns.RcodeNameError:
-		if !r.MsgHdr.AuthenticatedData {
-			incompl = true
-		}
-	default:
-		return nil, 0, errors.New(dns.RcodeToString[r.Rcode]), false
-	}
-
-	records := make([]mxRecord, 0, len(r.Answer))
-	seen := make(map[string]int)
-	for _, answer := range r.Answer {
-		if mx, ok := answer.(*dns.MX); ok {
-			host := strings.ToLower(strings.TrimSpace(mx.Mx))
-			key := strings.TrimSuffix(host, ".")
-			if index, ok := seen[key]; ok {
-				if mx.Hdr.Ttl < records[index].ttl {
-					records[index].ttl = mx.Hdr.Ttl
-				}
-				continue
-			}
-			seen[key] = len(records)
-			records = append(records, mxRecord{host: dns.Fqdn(host), ttl: mx.Hdr.Ttl})
-		}
-	}
-	if len(records) == 0 {
-		return nil, 0, nil, incompl
+	records, incompl, err := lookupMxRecords(ctx, domain, resolverAddress, 0)
+	if err != nil || len(records) == 0 {
+		return nil, 0, err, incompl
 	}
 
 	cctx, cancel := context.WithCancel(ctx)
@@ -106,6 +77,135 @@ func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([
 	}
 
 	return mxRecords, minTTL, nil, incompl
+}
+
+func lookupMxRecords(ctx context.Context, domain string, resolverAddress string, depth int) ([]mxRecord, bool, error) {
+	if depth > DANE_CNAME_MAX_DEPTH {
+		return nil, false, errors.New("too many CNAME records during MX lookup")
+	}
+	m := newDNSQuery(domain, dns.TypeMX, true)
+	r, err := exchangeDNS(ctx, m, resolverAddress)
+	if err != nil {
+		return nil, false, err
+	}
+	incompl := false
+	switch r.Rcode {
+	case dns.RcodeSuccess:
+		if !r.MsgHdr.AuthenticatedData {
+			incompl = true
+		}
+	case dns.RcodeNameError:
+		return nil, !r.MsgHdr.AuthenticatedData, nil
+	default:
+		return nil, false, errors.New(dns.RcodeToString[r.Rcode])
+	}
+
+	type cnameHop struct {
+		target string
+		ttl    uint32
+	}
+	cnameHops := make(map[string]cnameHop)
+	for _, answer := range r.Answer {
+		rr, ok := answer.(*dns.CNAME)
+		if !ok {
+			continue
+		}
+		owner := strings.ToLower(dns.Fqdn(strings.TrimSpace(rr.Hdr.Name)))
+		target := strings.ToLower(dns.Fqdn(strings.TrimSpace(rr.Target)))
+		if previous, ok := cnameHops[owner]; ok && previous.target != target {
+			return nil, false, errors.New("multiple CNAME targets during MX lookup")
+		}
+		cnameHops[owner] = cnameHop{target: target, ttl: rr.Hdr.Ttl}
+	}
+
+	mxOwner := strings.ToLower(dns.Fqdn(domain))
+	var cnameTTL uint32
+	haveCnameTTL := false
+	seenCnames := make(map[string]struct{})
+	hops := 0
+	for {
+		hop, ok := cnameHops[mxOwner]
+		if !ok {
+			break
+		}
+		if _, ok := seenCnames[mxOwner]; ok {
+			return nil, false, errors.New("CNAME loop during MX lookup")
+		}
+		seenCnames[mxOwner] = struct{}{}
+		hops++
+		if depth+hops > DANE_CNAME_MAX_DEPTH {
+			return nil, false, errors.New("too many CNAME records during MX lookup")
+		}
+		if !valid.IsDNSName(hop.target) {
+			return nil, false, errors.New("invalid CNAME target during MX lookup")
+		}
+		if !haveCnameTTL || hop.ttl < cnameTTL {
+			cnameTTL = hop.ttl
+			haveCnameTTL = true
+		}
+		mxOwner = hop.target
+	}
+
+	records := make([]mxRecord, 0, len(r.Answer))
+	seen := make(map[string]int)
+	for _, answer := range r.Answer {
+		if mx, ok := answer.(*dns.MX); ok {
+			if !strings.EqualFold(mx.Hdr.Name, mxOwner) {
+				continue
+			}
+			host := strings.ToLower(strings.TrimSpace(mx.Mx))
+			key := strings.TrimSuffix(host, ".")
+			if index, ok := seen[key]; ok {
+				if mx.Hdr.Ttl < records[index].ttl {
+					records[index].ttl = mx.Hdr.Ttl
+				}
+				continue
+			}
+			seen[key] = len(records)
+			records = append(records, mxRecord{host: dns.Fqdn(host), ttl: mx.Hdr.Ttl})
+		}
+	}
+	if len(records) != 0 && haveCnameTTL {
+		for i := range records {
+			records[i].ttl = min(records[i].ttl, cnameTTL)
+		}
+	}
+	if len(records) == 0 && hops != 0 {
+		records, childIncompl, err := lookupMxRecords(ctx, mxOwner, resolverAddress, depth+hops)
+		if haveCnameTTL {
+			for i := range records {
+				records[i].ttl = min(records[i].ttl, cnameTTL)
+			}
+		}
+		return records, incompl || childIncompl, err
+	}
+	if len(records) == 0 {
+		if incompl {
+			return nil, true, nil
+		}
+		records = append(records, mxRecord{
+			host: dns.Fqdn(domain),
+			ttl:  negativeResponseTTL(r),
+		})
+	}
+	return records, incompl, nil
+}
+
+func negativeResponseTTL(r *dns.Msg) uint32 {
+	var ttl uint32
+	haveTTL := false
+	for _, authority := range r.Ns {
+		soa, ok := authority.(*dns.SOA)
+		if !ok {
+			continue
+		}
+		candidate := min(soa.Hdr.Ttl, soa.Minttl)
+		if !haveTTL || candidate < ttl {
+			ttl = candidate
+			haveTTL = true
+		}
+	}
+	return ttl
 }
 
 func checkMxRecords(ctx context.Context, records []mxRecord, resolverAddress string) <-chan mxCheckResult {

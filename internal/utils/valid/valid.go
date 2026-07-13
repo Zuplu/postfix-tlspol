@@ -38,14 +38,14 @@ func IsSHA512(s string) bool { return len(s) == 128 && IsHex(s) }
 
 //gocyclo:ignore
 func IsDNSName(s string) bool {
-	if s == "" || len(s) > 253 {
+	if s == "" {
 		return false
 	}
 	if s[len(s)-1] == '.' {
 		s = s[:len(s)-1]
-		if s == "" {
-			return false
-		}
+	}
+	if s == "" || len(s) > 253 {
+		return false
 	}
 	if net.ParseIP(s) != nil {
 		return false

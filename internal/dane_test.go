@@ -474,3 +474,191 @@ func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
 		t.Fatalf("expected TLSA lookup to be skipped, got %d queries", got)
 	}
 }
+
+func TestDaneAuthenticatedMxNodataUsesImplicitMx(t *testing.T) {
+	var addressQueries atomic.Int32
+	var tlsaQueries atomic.Int32
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.AuthenticatedData = true
+
+		q := r.Question[0]
+		switch {
+		case q.Name == "implicit.test." && q.Qtype == dns.TypeMX:
+			msg.Ns = append(msg.Ns, &dns.SOA{
+				Hdr:     dns.RR_Header{Name: "test.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 240},
+				Ns:      "ns.test.",
+				Mbox:    "hostmaster.test.",
+				Minttl:  120,
+				Refresh: 3600,
+				Retry:   600,
+				Expire:  86400,
+			})
+		case q.Name == "implicit.test." && q.Qtype == dns.TypeA:
+			addressQueries.Add(1)
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+				A:   net.ParseIP("192.0.2.20"),
+			})
+		case q.Name == "_25._tcp.implicit.test." && q.Qtype == dns.TypeTLSA:
+			tlsaQueries.Add(1)
+			msg.Answer = append(msg.Answer, &dns.TLSA{
+				Hdr:          dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTLSA, Class: dns.ClassINET, Ttl: 600},
+				Usage:        3,
+				Selector:     1,
+				MatchingType: 1,
+				Certificate:  strings.Repeat("a", 64),
+			})
+		default:
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = w.WriteMsg(msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+
+	policy, ttl, err := checkDaneOnce(context.Background(), "implicit.test", packetConn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("implicit MX lookup failed: %v", err)
+	}
+	if policy != "dane-only" || ttl != 120 {
+		t.Fatalf("expected implicit MX DANE policy with negative MX TTL, got policy=%q ttl=%d", policy, ttl)
+	}
+	if addressQueries.Load() != 1 || tlsaQueries.Load() != 1 {
+		t.Fatalf("expected address and TLSA lookup, got address=%d tlsa=%d", addressQueries.Load(), tlsaQueries.Load())
+	}
+}
+
+func TestDaneDoesNotUseImplicitMxForNxdomainOrNullMx(t *testing.T) {
+	tests := []struct {
+		name   string
+		rcode  int
+		nullMx bool
+	}{
+		{name: "nxdomain", rcode: dns.RcodeNameError},
+		{name: "null mx", rcode: dns.RcodeSuccess, nullMx: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var followupQueries atomic.Int32
+			mux := dns.NewServeMux()
+			mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+				msg := new(dns.Msg)
+				msg.SetReply(r)
+				msg.AuthenticatedData = true
+				q := r.Question[0]
+				if q.Name == "nomail.test." && q.Qtype == dns.TypeMX {
+					msg.Rcode = tt.rcode
+					if tt.nullMx {
+						msg.Answer = append(msg.Answer, &dns.MX{
+							Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
+							Mx:  ".",
+						})
+					}
+				} else {
+					followupQueries.Add(1)
+					msg.Rcode = dns.RcodeNameError
+				}
+				_ = w.WriteMsg(msg)
+			})
+
+			server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+			packetConn, err := net.ListenPacket("udp", server.Addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.PacketConn = packetConn
+			go func() { _ = server.ActivateAndServe() }()
+			t.Cleanup(func() { _ = server.Shutdown() })
+
+			policy, ttl, err := checkDaneOnce(context.Background(), "nomail.test", packetConn.LocalAddr().String())
+			if err != nil || policy != "" || ttl != 0 {
+				t.Fatalf("expected no DANE policy, got policy=%q ttl=%d err=%v", policy, ttl, err)
+			}
+			if followupQueries.Load() != 0 {
+				t.Fatalf("expected no address or TLSA lookup, got %d follow-up queries", followupQueries.Load())
+			}
+		})
+	}
+}
+
+func TestNegativeResponseTTLUsesSoaMinimum(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.Ns = append(msg.Ns,
+		&dns.SOA{Hdr: dns.RR_Header{Ttl: 600}, Minttl: 120},
+		&dns.SOA{Hdr: dns.RR_Header{Ttl: 90}, Minttl: 300},
+	)
+	if got := negativeResponseTTL(msg); got != 90 {
+		t.Fatalf("negative response TTL = %d, want 90", got)
+	}
+}
+
+func TestDaneFollowsSecureCnameDuringMxLookup(t *testing.T) {
+	var targetMxQueries atomic.Int32
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.AuthenticatedData = true
+		q := r.Question[0]
+		switch {
+		case q.Name == "alias.test." && q.Qtype == dns.TypeMX:
+			msg.Answer = append(msg.Answer, &dns.CNAME{
+				Hdr:    dns.RR_Header{Name: q.Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 100},
+				Target: "target.test.",
+			})
+		case q.Name == "target.test." && q.Qtype == dns.TypeMX:
+			targetMxQueries.Add(1)
+			msg.Answer = append(msg.Answer, &dns.MX{
+				Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
+				Preference: 10,
+				Mx:         "mx.target.test.",
+			})
+		case q.Name == "mx.target.test." && q.Qtype == dns.TypeA:
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+				A:   net.ParseIP("192.0.2.30"),
+			})
+		case q.Name == "_25._tcp.mx.target.test." && q.Qtype == dns.TypeTLSA:
+			msg.Answer = append(msg.Answer, &dns.TLSA{
+				Hdr:          dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTLSA, Class: dns.ClassINET, Ttl: 600},
+				Usage:        3,
+				Selector:     1,
+				MatchingType: 1,
+				Certificate:  strings.Repeat("b", 64),
+			})
+		default:
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = w.WriteMsg(msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+
+	policy, ttl, err := checkDaneOnce(context.Background(), "alias.test", packetConn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("CNAME MX lookup failed: %v", err)
+	}
+	if policy != "dane-only" || ttl != 100 {
+		t.Fatalf("expected CNAME-limited DANE policy, got policy=%q ttl=%d", policy, ttl)
+	}
+	if targetMxQueries.Load() != 1 {
+		t.Fatalf("expected one target MX query, got %d", targetMxQueries.Load())
+	}
+}

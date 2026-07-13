@@ -98,6 +98,7 @@ func TestIsDNSName(t *testing.T) {
 		{"single_label", "localhost", true},
 		{"max_label_length_63", max63 + ".com", true},
 		{"max_total_length_253", max253, true},
+		{"max_absolute_name_length_254", max253 + ".", true},
 
 		{"empty", "", false},
 		{"dot_only", ".", false},
@@ -106,6 +107,7 @@ func TestIsDNSName(t *testing.T) {
 		{"double_dot", "ba..d.com", false},
 		{"label_too_long_64", tooLong64 + ".com", false},
 		{"total_too_long_254", tooLong254, false},
+		{"absolute_name_too_long_255", tooLong254 + ".", false},
 		{"localhost_ipv4_literal_not_dns", "127.0.0.1", false},
 		{"short_ipv4_literal_not_dns", "1.2.3.4", false},
 		{"ipv4_literal_not_dns", "192.168.1.1", false},
