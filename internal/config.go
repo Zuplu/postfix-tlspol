@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -42,6 +41,7 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	c.MetricsAddress = defaultConfig.Server.MetricsAddress
 	c.SocketPermissions = defaultConfig.Server.SocketPermissions
 	c.NamedLogLevel = defaultConfig.Server.NamedLogLevel
+	c.LogFormat = defaultConfig.Server.LogFormat
 	c.TlsRpt = false
 	c.Prefetch = defaultConfig.Server.Prefetch
 	c.CacheFile = defaultConfig.Server.CacheFile
@@ -50,9 +50,8 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 		return err
 	}
 	var lvl slog.Level
-	err := lvl.UnmarshalText([]byte(strings.ToLower(c.NamedLogLevel)))
-	if err != nil {
-		lvl = slog.LevelInfo
+	if err := lvl.UnmarshalText([]byte(strings.ToLower(c.NamedLogLevel))); err != nil {
+		return fmt.Errorf("invalid server.log-level %q: %w", c.NamedLogLevel, err)
 	}
 	c.LogLevel = lvl
 	return nil
@@ -164,8 +163,8 @@ func (w *resolvConfWatcher) watch() {
 			if err == unix.EINTR {
 				continue
 			}
-			runtime.Gosched()
-			continue
+			slog.Error("Reading resolver configuration watch failed", "path", w.rc.path, "error", err)
+			return
 		}
 		w.handleEvents(buf[:n])
 	}
@@ -255,5 +254,61 @@ func loadConfig(filename string) (Config, error) {
 	}
 
 	var config Config
-	return config, yaml.Unmarshal(data, &config)
+	if err := yaml.Load(data, &config, yaml.WithKnownFields()); err != nil {
+		return config, err
+	}
+	if err := validateConfig(&config); err != nil {
+		return config, err
+	}
+	return config, nil
+}
+
+func validateConfig(config *Config) error {
+	config.Server.Address = strings.TrimSpace(config.Server.Address)
+	config.Server.MetricsAddress = strings.TrimSpace(config.Server.MetricsAddress)
+	config.Server.CacheFile = strings.TrimSpace(config.Server.CacheFile)
+	if err := validateListenAddress("server.address", config.Server.Address, false); err != nil {
+		return err
+	}
+	if err := validateListenAddress("server.metrics-address", config.Server.MetricsAddress, true); err != nil {
+		return err
+	}
+	if config.Server.CacheFile == "" {
+		return fmt.Errorf("server.cache-file must not be empty")
+	}
+	if config.Server.SocketPermissions&^os.ModePerm != 0 {
+		return fmt.Errorf("server.socket-permissions contains unsupported mode bits")
+	}
+	config.Server.LogFormat = strings.ToLower(strings.TrimSpace(config.Server.LogFormat))
+	if config.Server.LogFormat != "text" && config.Server.LogFormat != "json" {
+		return fmt.Errorf("invalid server.log-format %q", config.Server.LogFormat)
+	}
+	if config.Dns.Address != nil {
+		address := strings.TrimSpace(*config.Dns.Address)
+		if _, _, err := net.SplitHostPort(address); err != nil {
+			return fmt.Errorf("invalid dns.address %q: %w", address, err)
+		}
+		config.Dns.Address = &address
+	}
+	return nil
+}
+
+func validateListenAddress(name string, address string, allowEmpty bool) error {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		if allowEmpty {
+			return nil
+		}
+		return fmt.Errorf("%s must not be empty", name)
+	}
+	if strings.HasPrefix(address, "unix:") {
+		if strings.TrimSpace(address[5:]) == "" {
+			return fmt.Errorf("%s has an empty Unix socket path", name)
+		}
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(address); err != nil {
+		return fmt.Errorf("invalid %s %q: %w", name, address, err)
+	}
+	return nil
 }

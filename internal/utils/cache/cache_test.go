@@ -6,6 +6,8 @@
 package cache
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/gob"
 	"os"
 	"path/filepath"
@@ -159,13 +161,86 @@ func TestCacheSetGetRemoveItemsPurge(t *testing.T) {
 		t.Fatalf("expected key k1 to be removed")
 	}
 
-	c.Purge()
+	if err := c.Purge(); err != nil {
+		t.Fatalf("purge failed: %v", err)
+	}
 	if got := c.Len(); got != 0 {
 		t.Fatalf("expected cache length 0 after purge, got %d", got)
 	}
 	entries = c.Items(false)
 	if len(entries) != 0 {
 		t.Fatalf("expected cache to be empty after purge, got %d entries", len(entries))
+	}
+}
+
+func TestCachePurgeReportsPersistenceFailure(t *testing.T) {
+	c := &Cache[*testValue]{
+		data: map[string]*testValue{
+			"alpha": newTestValue(time.Now().Add(time.Minute), "A"),
+		},
+		filePath: t.TempDir(), // Renaming a snapshot over an existing directory must fail.
+	}
+	if err := c.Purge(); err == nil {
+		t.Fatal("expected purge persistence failure")
+	}
+	if len(c.data) != 0 || !c.dirty {
+		t.Fatalf("expected failed persistent purge to remain active and dirty, data=%v dirty=%v", c.data, c.dirty)
+	}
+}
+
+func TestCacheLoadRejectsCorruptGzipTrailer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.gz")
+	var compressed bytes.Buffer
+	g := gzip.NewWriter(&compressed)
+	stored := map[string]*testValue{
+		"alpha": newTestValue(time.Now().Add(time.Minute), "A"),
+	}
+	if err := gob.NewEncoder(g).Encode(stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := compressed.Bytes()
+	data[len(data)-1] ^= 0xff
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Cache[*testValue]{data: make(map[string]*testValue), filePath: path}
+	if err := c.load(); err == nil {
+		t.Fatal("expected corrupt gzip trailer to be rejected")
+	}
+	if len(c.data) != 0 {
+		t.Fatalf("corrupt snapshot modified live cache: %v", c.data)
+	}
+}
+
+func TestCacheLoadNormalizesNilMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.gz")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := gzip.NewWriter(f)
+	var stored map[string]*testValue
+	if err := gob.NewEncoder(g).Encode(stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Cache[*testValue]{data: make(map[string]*testValue), filePath: path}
+	if err := c.load(); err != nil {
+		t.Fatalf("load nil map: %v", err)
+	}
+	c.Set("alpha", newTestValue(time.Now().Add(time.Minute), "A"))
+	if _, ok := c.Get("alpha"); !ok {
+		t.Fatal("normalized map does not accept writes")
 	}
 }
 

@@ -8,6 +8,9 @@ package cache
 import (
 	"compress/gzip"
 	"encoding/gob"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -130,13 +133,13 @@ func (c *Cache[T]) Remove(haveLock bool, key string) {
 	c.generation++
 }
 
-func (c *Cache[T]) Purge() {
+func (c *Cache[T]) Purge() error {
 	c.Lock()
 	c.data = make(map[string]T)
 	c.dirty = true
 	c.generation++
 	c.Unlock()
-	_ = c.Save(false)
+	return c.Save(false)
 }
 
 func (c *Cache[T]) Items(haveLock bool) []Entry[T] {
@@ -330,6 +333,18 @@ func (c *Cache[T]) load() error {
 	var stored map[string]T
 	if err := dec.Decode(&stored); err != nil {
 		return err
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("cache: invalid trailing gob data: %w", err)
+	} else if err == nil {
+		return errors.New("cache: multiple gob values in snapshot")
+	}
+	if _, err := io.Copy(io.Discard, g); err != nil {
+		return fmt.Errorf("cache: invalid compressed snapshot: %w", err)
+	}
+	if stored == nil {
+		stored = make(map[string]T)
 	}
 	c.Lock()
 	c.data = stored

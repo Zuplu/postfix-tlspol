@@ -8,6 +8,8 @@ package main
 import (
 	_ "embed"
 
+	"log/slog"
+	"os"
 	"regexp"
 	"runtime/debug"
 	"strings"
@@ -50,5 +52,8 @@ func init() {
 
 func main() {
 	tlspol.SetDefaultConfig(defaultConfigYaml)
-	tlspol.StartDaemon(Version, LicenseText)
+	if err := tlspol.StartDaemon(Version, LicenseText); err != nil {
+		slog.Error("postfix-tlspol terminated", "error", err)
+		os.Exit(1)
+	}
 }

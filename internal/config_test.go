@@ -15,6 +15,7 @@ import (
 )
 
 func TestLoadConfig(t *testing.T) {
+	initializeTestDefaultConfig(t)
 	_, err := loadConfig("../configs/config.default.yaml")
 	if err != nil {
 		t.Errorf("File configs/config.example.yaml is not parseable: %v", err)
@@ -22,6 +23,7 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func TestMetricsAddressConfigDefaultAndOverride(t *testing.T) {
+	initializeTestDefaultConfig(t)
 	cfg, err := loadConfig("../configs/config.default.yaml")
 	if err != nil {
 		t.Fatalf("default config is not parseable: %v", err)
@@ -48,6 +50,55 @@ dns:
 	if cfg.Server.MetricsAddress != "unix:/tmp/postfix-tlspol-metrics.sock" {
 		t.Fatalf("unexpected metrics-address: %q", cfg.Server.MetricsAddress)
 	}
+}
+
+func TestLoadConfigRejectsUnknownAndInvalidValues(t *testing.T) {
+	initializeTestDefaultConfig(t)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "unknown field",
+			body: "server:\n  addres: 127.0.0.1:8642\n",
+		},
+		{
+			name: "invalid log level",
+			body: "server:\n  address: 127.0.0.1:8642\n  log-level: verbose\n",
+		},
+		{
+			name: "invalid log format",
+			body: "server:\n  address: 127.0.0.1:8642\n  log-format: xml\n",
+		},
+		{
+			name: "empty listener",
+			body: "server:\n  address: ''\n",
+		},
+		{
+			name: "invalid resolver",
+			body: "server:\n  address: 127.0.0.1:8642\ndns:\n  address: 127.0.0.1\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("expected invalid configuration to be rejected")
+			}
+		})
+	}
+}
+
+func initializeTestDefaultConfig(t *testing.T) {
+	t.Helper()
+	data, err := os.ReadFile("../configs/config.default.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	SetDefaultConfig(data)
 }
 
 func TestResolvConfRetriesAfterInitialReadFailure(t *testing.T) {

@@ -867,6 +867,34 @@ func TestPurgeCacheRemovesFlushedHitCounters(t *testing.T) {
 	}
 }
 
+func TestReadEnvRejectsInvalidBooleanValues(t *testing.T) {
+	original := config
+	defer func() { config = original }()
+
+	tests := []struct {
+		name     string
+		prefetch string
+		tlsrpt   string
+		wantErr  bool
+	}{
+		{name: "valid disabled", prefetch: "0", tlsrpt: "0"},
+		{name: "valid enabled", prefetch: "1", tlsrpt: "1"},
+		{name: "invalid prefetch", prefetch: "true", tlsrpt: "0", wantErr: true},
+		{name: "invalid tlsrpt", prefetch: "0", tlsrpt: "yes", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TLSPOL_PREFETCH", tt.prefetch)
+			t.Setenv("TLSPOL_TLSRPT", tt.tlsrpt)
+			config = Config{}
+			err := readEnv()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("readEnv() error = %v, wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestQueryDomainSingleflight(t *testing.T) {
 	origFn := queryDomainOnce
 	queryGroup.Forget("example.com")

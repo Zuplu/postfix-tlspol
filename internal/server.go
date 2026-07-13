@@ -248,7 +248,7 @@ func init() {
 	flag.Bool("purge", false, "Manually clear the cache")
 }
 
-func StartDaemon(v string, licenseText string) {
+func StartDaemon(v string, licenseText string) error {
 	Version = v
 	curYear, _, _ := time.Now().Date()
 
@@ -256,20 +256,19 @@ func StartDaemon(v string, licenseText string) {
 
 	if showVersion {
 		fmt.Printf("postfix-tlspol v%s\n", Version)
-		return
+		return nil
 	}
 
 	if showLicense {
 		fmt.Printf("%s\n", licenseText)
-		return
+		return nil
 	}
 
 	// Read config.yaml
 	var err error
 	config, err = loadConfig(configFile)
 	if err != nil {
-		slog.Error("Error loading config", "error", err)
-		return
+		return fmt.Errorf("load configuration: %w", err)
 	}
 	levelVar.Set(config.Server.LogLevel)
 	handlerOpts := &slog.HandlerOptions{
@@ -286,16 +285,19 @@ func StartDaemon(v string, licenseText string) {
 	flag.Visit(flagCliConnFunc)
 
 	if cliConnMode {
-		return
+		return nil
 	}
 
 	if len(os.Args) < 2 {
 		flag.PrintDefaults()
-		return
+		return nil
 	}
 
 	fmt.Fprintf(os.Stderr, "postfix-tlspol (c) 2024-%d Zuplu — v%s\nThis program is licensed under the MIT License.\n", curYear, Version)
 
+	if err := readEnv(); err != nil {
+		return err
+	}
 	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Duration(600*time.Second))
 	_ = tidyCache()
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
@@ -303,21 +305,20 @@ func StartDaemon(v string, licenseText string) {
 	defer cancelDaemon()
 	listenForSignals(cancelDaemon)
 
-	readEnv()
-
 	var prefetchWg sync.WaitGroup
 	prefetchWg.Add(1)
 	go func() {
 		defer prefetchWg.Done()
 		startPrefetching(daemonCtx)
 	}()
-	startServer()
+	serverErr := startServer()
 	cancelDaemon()
 	closeActiveConnections()
 	connectionWg.Wait()
 	prefetchWg.Wait()
 	_ = tidyCache()
 	polCache.Close()
+	return serverErr
 }
 
 func listenForSignals(cancel context.CancelFunc) {
@@ -344,15 +345,22 @@ func listenForSignals(cancel context.CancelFunc) {
 	}()
 }
 
-func readEnv() {
+func readEnv() error {
 	envPrefetch, envExists := os.LookupEnv("TLSPOL_PREFETCH")
 	if envExists {
+		if envPrefetch != "0" && envPrefetch != "1" {
+			return fmt.Errorf("TLSPOL_PREFETCH must be 0 or 1")
+		}
 		config.Server.Prefetch = envPrefetch == "1"
 	}
 	envTlsRpt, envExists := os.LookupEnv("TLSPOL_TLSRPT")
 	if envExists {
+		if envTlsRpt != "0" && envTlsRpt != "1" {
+			return fmt.Errorf("TLSPOL_TLSRPT must be 0 or 1")
+		}
 		config.Server.TlsRpt = envTlsRpt == "1"
 	}
+	return nil
 }
 
 func listenSystemdSocket() ([]net.Listener, bool, error) {
@@ -599,12 +607,11 @@ func closeActiveConnections() {
 	})
 }
 
-func startServer() {
+func startServer() error {
 	var err error
 	socketmapListeners, inherited, err := listenSystemdSocket()
 	if err != nil {
-		slog.Error("Error inheriting systemd-activated socket", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("inherit systemd-activated socket: %w", err)
 	}
 
 	if !inherited {
@@ -617,13 +624,11 @@ func startServer() {
 		slog.Info("Using systemd socket activation")
 	}
 	if err != nil {
-		slog.Error("Error starting socketmap server", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("start socketmap server: %w", err)
 	}
 
 	if len(socketmapListeners) == 0 {
-		slog.Error("Error starting socketmap server", "error", "no listeners available")
-		os.Exit(1)
+		return errors.New("start socketmap server: no listeners available")
 	}
 
 	if inherited {
@@ -653,8 +658,7 @@ func startServer() {
 		metricsListener, err = listenConfiguredAddress(metricsAddress, config.Server.SocketPermissions)
 		if err != nil {
 			closeListeners(activeListeners)
-			slog.Error("Error starting metrics HTTP server", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("start metrics HTTP server: %w", err)
 		}
 		activeListeners = append(activeListeners, metricsListener)
 		addr := metricsListener.Addr()
@@ -669,7 +673,7 @@ func startServer() {
 	defer clearActiveListeners()
 	if bgCtx.Err() != nil {
 		closeListeners(activeListeners)
-		return
+		return nil
 	}
 
 	serverWg.Add(len(socketmapListeners))
@@ -683,6 +687,7 @@ func startServer() {
 	serverWg.Wait()
 
 	slog.Info("Servers terminated")
+	return nil
 }
 
 func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruct, bool) {
@@ -1489,9 +1494,14 @@ func dumpCachedPolicies(conn net.Conn, export bool) {
 }
 
 func purgeCache(conn net.Conn) {
-	polCache.Purge()
+	err := polCache.Purge()
 	flushCacheHitCounters(false)
 	clearPrefetchSchedule()
+	if err != nil {
+		slog.Error("Could not persist purged cache", "error", err)
+		fmt.Fprintf(conn, "ERROR: cache purge is not durable: %v\n", err)
+		return
+	}
 	fmt.Fprintln(conn, "OK")
 }
 
