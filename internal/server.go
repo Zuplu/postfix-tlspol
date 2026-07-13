@@ -1402,8 +1402,12 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 	}
 	refreshedMtaSts := PolicyBranch{}
 	if queryMtaSts {
-		refreshedMtaSts = mtaStsBranchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
-		mtaStsForSelected = refreshedMtaSts
+		candidate := mtaStsBranchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
+		livePolicyUnavailable := mtaStsPol == "TEMP" || mtaStsPol == "" && mtaStsTTL == 0
+		if !livePolicyUnavailable || !mtaStsForSelected.HasData() {
+			refreshedMtaSts = candidate
+			mtaStsForSelected = candidate
+		}
 	}
 	policy, report, ttl := selectedPolicyFromBranches(daneForSelection, mtaStsForSelected, daneTemp)
 	return domainResult{

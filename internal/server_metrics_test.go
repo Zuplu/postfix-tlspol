@@ -1142,6 +1142,65 @@ func TestPrefetchDomainRenewsNearExpiryMtaStsBranch(t *testing.T) {
 	}
 }
 
+func TestPrefetchDomainRetainsUnexpiredMtaStsWhenLivePolicyUnavailable(t *testing.T) {
+	origDane := checkDanePolicy
+	origMtaSts := checkMtaStsPolicy
+	defer func() {
+		checkDanePolicy = origDane
+		checkMtaStsPolicy = origMtaSts
+	}()
+
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		return "", 86400
+	}
+	now := time.Now()
+	cached := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
+		Dane: PolicyBranch{
+			TTL:       policyBranchRecheckTTL(),
+			ExpiresAt: now.Add(POLICY_BRANCH_RECHECK),
+		},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.cached.example servername=hostname",
+			Report:    "policy_type=sts policy_domain=example.com",
+			TTL:       600,
+			ExpiresAt: now.Add(20 * time.Second),
+		},
+		DaneLastAttempt: now,
+	}
+
+	tests := []struct {
+		name   string
+		policy string
+		ttl    uint32
+	}{
+		{name: "missing live policy"},
+		{name: "temporary fetch failure", policy: "TEMP"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+				return tt.policy, "", tt.ttl
+			}
+			result := prefetchDomainOnceImpl("example.com", cached)
+			if result.Policy != cached.MtaSts.Policy || result.Report != cached.MtaSts.Report {
+				t.Fatalf("expected cached policy to remain selected, got %+v", result)
+			}
+			if result.MtaSts.HasData() {
+				t.Fatalf("expected unavailable live policy not to replace cached branch, got %+v", result.MtaSts)
+			}
+		})
+	}
+
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		return "", "", 600 // A valid mode=none/testing policy has a nonzero max_age.
+	}
+	result := prefetchDomainOnceImpl("example.com", cached)
+	if result.Policy != "" || !result.MtaSts.HasData() || result.MtaSts.TTL != 600 {
+		t.Fatalf("expected valid no-enforcement policy to replace cached branch, got %+v", result)
+	}
+}
+
 func TestQueryDomainThrottlesMtaStsWhenDanePolicyCached(t *testing.T) {
 	origDane := checkDanePolicy
 	origMtaSts := checkMtaStsPolicy
