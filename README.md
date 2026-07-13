@@ -10,7 +10,7 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
 
 [<img src="https://zuplu.com/dashboard.png" width="140em" align="right" alt="Grafana Dashboard" />](#)
 
-The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket, including Go runtime metrics and counters for `dane`, `dane-only`, and `secure` (MTA-STS) results. You can also set `server.metrics-address` for a separate HTTP-only metrics endpoint that does not expose the socketmap protocol.
+The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket. Metrics include Go runtime state, policy outcomes, cache hit/miss and occupancy data, and prefetch success/failure/discard counters. All metric labels use fixed value sets. You can also set `server.metrics-address` for a separate HTTP-only metrics endpoint that does not expose the socketmap protocol. The bundled dashboard is available at [`assets/grafana-postfix-tlspol-dashboard.json`](assets/grafana-postfix-tlspol-dashboard.json).
 
 Keep the socketmap listener bound to loopback or a protected Unix socket. Postfix policy queries are available on every configured listener, while the diagnostic and cache-management commands used by `-query`, `-dump`, `-export`, and `-purge` are accepted only from loopback or Unix-socket peers. For Docker deployments, run those administrative commands with `docker exec`.
 
@@ -21,6 +21,8 @@ Keep the socketmap listener bound to loopback or a protected Unix socket. Postfi
 - Simultaneously checks for MTA-STS and DANE for a queried domain.
 
 - **For DANE:**
+  - Apply the authenticated implicit-MX rule when a DNSSEC-authenticated MX query returns NOERROR without MX records, while keeping NXDOMAIN and Null MX responses distinct, as required by [RFC 7672, Section 2.2.2](https://www.rfc-editor.org/rfc/rfc7672.html#section-2.2.2).
+  - Bound negative DNS cache lifetimes by the smaller SOA TTL and SOA MINIMUM value, following [RFC 2308, Section 5](https://www.rfc-editor.org/rfc/rfc2308.html#section-5).
   - Resolve each MX host's A/AAAA records before querying TLSA. Hosts without address records are unreachable, and only DNSSEC-authenticated address paths proceed to TLSA discovery, as required by [RFC 7672, Section 2.2.2](https://www.rfc-editor.org/rfc/rfc7672.html#section-2.2.2). Independent MX lookups run with bounded concurrency.
   - Verify TLSA records for correctness and supported parameters, only then the `dane-only` policy (Mandatory DANE) will be returned.
   - In case of unsupported parameters or malformed TLSA records, `dane` (Opportunistic DANE) is returned.
@@ -32,6 +34,7 @@ Keep the socketmap listener bound to loopback or a protected Unix socket. Postfi
   - DANE is authoritative when fresh and usable. MTA-STS is only used when fresh DANE state explicitly proves that no DANE policy is available.
   - Temporary DANE failures do not downgrade to MTA-STS. TLSA records must be explicitly and verifiably not available for MTA-STS to overrule DANE.
   - MTA-STS and DANE state are cached independently, so a later refreshed DANE result immediately overrides a still-fresh MTA-STS policy.
+  - A temporary or unavailable policy refresh does not erase an unexpired cached MTA-STS policy. A successfully fetched `mode: none` policy still replaces the cached policy immediately.
   - When fresh DANE state confirms that no applicable DANE policy is available for the domain, MTA-STS can take effect and return a `secure` policy with explicit `match=` constraints from the policy's MX patterns.
 
 - DANE and MTA-STS branches are cached by `minimum TTL of all DNSSEC/DANE queries` and for no longer than the MTA-STS `max_age`, respectively. The served result is derived from the fresh branch state on every cache hit, with mandatory DANE (`dane-only`) taking precedence.
@@ -188,6 +191,18 @@ dns:
   #address: 127.0.0.53:53
 ```
 
+Configuration loading is strict and capped at 1 MiB: unknown YAML fields, invalid log levels or formats, malformed listener/resolver addresses, unsupported socket permission bits, and empty cache paths stop startup with an error. `TLSPOL_PREFETCH` and `TLSPOL_TLSRPT` accept only `0` or `1`; malformed values also stop startup.
+
+The persisted cache is written through a temporary file and atomically renamed. Corrupt or truncated snapshots are rejected and repaired with a valid empty snapshot, while purge and final-shutdown persistence failures are surfaced as errors.
+
 # Prefetching
 
-Prefetching is enabled by default, and postfix-tlspol tries to keep its cache fresh.
+Prefetching is enabled by default, and postfix-tlspol tries to keep its cache fresh. Refresh failures use bounded retries and preserve still-valid branch state. The in-memory cache is capped at 50,000 entries and pruned to 45,000 entries in one batch, favoring useful and frequently accessed policies.
+
+# Tests
+
+The default test suite uses deterministic local fixtures. Tests that query public DNS and HTTPS services are opt-in:
+
+```sh
+TLSPOL_LIVE_TESTS=1 go test ./internal
+```
