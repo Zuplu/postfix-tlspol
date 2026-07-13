@@ -216,6 +216,37 @@ func TestCacheLoadRejectsCorruptGzipTrailer(t *testing.T) {
 	}
 }
 
+func TestCacheRepairsCorruptSnapshotOnClose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.gz")
+	if err := os.WriteFile(path, []byte("not a gzip snapshot"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := New[*testValue](path, time.Hour)
+	if err := c.CloseWithError(); err != nil {
+		t.Fatalf("repair corrupt snapshot: %v", err)
+	}
+	reloaded := &Cache[*testValue]{data: make(map[string]*testValue), filePath: path}
+	if err := reloaded.load(); err != nil {
+		t.Fatalf("load repaired snapshot: %v", err)
+	}
+	if len(reloaded.data) != 0 {
+		t.Fatalf("repaired snapshot is not empty: %v", reloaded.data)
+	}
+}
+
+func TestCacheCloseWithErrorReportsPersistenceFailure(t *testing.T) {
+	c := New[*testValue](t.TempDir(), time.Hour)
+	c.Set("alpha", newTestValue(time.Now().Add(time.Minute), "A"))
+	firstErr := c.CloseWithError()
+	if firstErr == nil {
+		t.Fatal("expected final persistence failure")
+	}
+	if secondErr := c.CloseWithError(); secondErr == nil || secondErr.Error() != firstErr.Error() {
+		t.Fatalf("repeated close error = %v, want %v", secondErr, firstErr)
+	}
+}
+
 func TestCacheLoadNormalizesNilMap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cache.gz")
 	f, err := os.Create(path)
@@ -488,5 +519,38 @@ func BenchmarkWriteSnapshot(b *testing.B) {
 		if err := c.writeSnapshot(data); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestSaveSnapshotDoesNotBlockReaders(t *testing.T) {
+	cacheFile := filepath.Join(t.TempDir(), "cache.gz")
+	c := New[*testValue](cacheFile, time.Hour)
+	defer c.Close()
+	c.Set("example", newTestValue(time.Now().Add(time.Hour), "value"))
+
+	c.RLock()
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Save(false)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(cacheFile); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			c.RUnlock()
+			t.Fatalf("stat persisted cache: %v", err)
+		}
+		if time.Now().After(deadline) {
+			c.RUnlock()
+			t.Fatal("cache snapshot was blocked by an active reader")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	c.RUnlock()
+
+	if err := <-done; err != nil {
+		t.Fatalf("save cache: %v", err)
 	}
 }

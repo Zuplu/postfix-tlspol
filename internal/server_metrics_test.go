@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -125,6 +126,25 @@ type recordingConn struct {
 	writeDeadline time.Time
 }
 
+type partialWriteConn struct {
+	recordingConn
+	maxWrite int
+	writeErr error
+}
+
+func (c *partialWriteConn) Write(b []byte) (int, error) {
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+	if c.maxWrite == 0 {
+		return 0, nil
+	}
+	if len(b) > c.maxWrite {
+		b = b[:c.maxWrite]
+	}
+	return c.recordingConn.Write(b)
+}
+
 func (c *recordingConn) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
@@ -231,6 +251,11 @@ func TestBuildMetricsTextIncludesExpectedMetrics(t *testing.T) {
 	metricDaneOnlyTotal.Store(3)
 	metricSecureTotal.Store(4)
 	metricNoPolicyTotal.Store(9)
+	metricCacheHits.Store(10)
+	metricCacheMisses.Store(2)
+	metricPrefetchOK.Store(5)
+	metricPrefetchFail.Store(3)
+	metricPrefetchDrop.Store(1)
 
 	metrics := buildMetricsText()
 	for _, expected := range []string{
@@ -239,10 +264,86 @@ func TestBuildMetricsTextIncludesExpectedMetrics(t *testing.T) {
 		"postfix_tlspol_policy_total{policy=\"dane-only\"} 3",
 		"postfix_tlspol_policy_total{policy=\"secure\"} 4",
 		"postfix_tlspol_policy_total{policy=\"no-policy\"} 9",
+		"postfix_tlspol_cache_requests_total{result=\"hit\"} 10",
+		"postfix_tlspol_cache_requests_total{result=\"miss\"} 2",
+		"postfix_tlspol_cache_entries 0",
+		"postfix_tlspol_prefetch_total{result=\"success\"} 5",
+		"postfix_tlspol_prefetch_total{result=\"failure\"} 3",
+		"postfix_tlspol_prefetch_total{result=\"discard\"} 1",
 		"postfix_tlspol_go_goroutines ",
 	} {
 		if !strings.Contains(metrics, expected) {
 			t.Fatalf("expected metrics output to contain %q", expected)
+		}
+	}
+}
+
+func TestWriteConnectionResponseHandlesPartialAndFailedWrites(t *testing.T) {
+	partial := &partialWriteConn{maxWrite: 2}
+	if !writeConnectionResponse(partial, []byte("response")) {
+		t.Fatal("expected partial writes to be completed")
+	}
+	if got := partial.writes.String(); got != "response" {
+		t.Fatalf("written response = %q, want response", got)
+	}
+	if writeConnectionResponse(&partialWriteConn{}, []byte("response")) {
+		t.Fatal("expected a zero-byte write to fail")
+	}
+	if writeConnectionResponse(&partialWriteConn{maxWrite: 2, writeErr: io.ErrClosedPipe}, []byte("response")) {
+		t.Fatal("expected a write error to fail")
+	}
+}
+
+func TestCanonicalSocketmapCommand(t *testing.T) {
+	for _, command := range []string{"QUERY", "query", "Query", "QUERYWITHTLSRPT", "json", "Dump", "EXPORT", "purge"} {
+		canonical := canonicalSocketmapCommand(command)
+		if canonical != strings.ToUpper(command) {
+			t.Fatalf("canonicalSocketmapCommand(%q) = %q", command, canonical)
+		}
+	}
+	if got := canonicalSocketmapCommand("unknown"); got != "UNKNOWN" {
+		t.Fatalf("unknown command changed to %q", got)
+	}
+}
+
+func BenchmarkCanonicalSocketmapCommand(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if canonicalSocketmapCommand("QUERY") != "QUERY" {
+			b.Fatal("unexpected command")
+		}
+	}
+}
+
+func BenchmarkSingleBranchPolicyRefresh(b *testing.B) {
+	originalDane := checkDanePolicy
+	originalMtaSts := checkMtaStsPolicy
+	b.Cleanup(func() {
+		checkDanePolicy = originalDane
+		checkMtaStsPolicy = originalMtaSts
+	})
+	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+		return "", 300
+	}
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		b.Fatal("unexpected MTA-STS refresh")
+		return "", "", 0
+	}
+	now := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+	cached := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Hour)},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.example",
+			TTL:       3600,
+			ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result := queryDomainBranchesWithOptions("example.com", cached, now, queryBranchOptions{})
+		if !result.DaneAttempted || result.MtaStsAttempted {
+			b.Fatal("unexpected refresh branches")
 		}
 	}
 }
@@ -695,6 +796,113 @@ func TestPartitionCacheEntriesPrefersUsefulPolicies(t *testing.T) {
 	for _, want := range []string{"unused-policy.example", "popular-policy.example"} {
 		if !keptKeys[want] {
 			t.Fatalf("expected policy entry %q to be retained", want)
+		}
+	}
+}
+
+func TestSortCacheEntriesByCounter(t *testing.T) {
+	clearCacheHitCountersForTest()
+	t.Cleanup(clearCacheHitCountersForTest)
+	entries := []cache.Entry[*CacheStruct]{
+		{Key: "low.example", Value: &CacheStruct{Counter: 2}},
+		{Key: "z.example", Value: &CacheStruct{Counter: 10}},
+		{Key: "a.example", Value: &CacheStruct{Counter: 10}},
+	}
+	counters := sortCacheEntriesByCounter(entries)
+	wantKeys := []string{"a.example", "z.example", "low.example"}
+	wantCounters := []uint32{10, 10, 2}
+	for i := range entries {
+		if entries[i].Key != wantKeys[i] || counters[i] != wantCounters[i] {
+			t.Fatalf("entry %d = %s/%d, want %s/%d", i, entries[i].Key, counters[i], wantKeys[i], wantCounters[i])
+		}
+	}
+}
+
+func TestCacheMaintenancePreservesConcurrentReplacement(t *testing.T) {
+	oldPolCache := polCache
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+	}()
+
+	stale := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(-time.Hour)},
+		Policy:    "dane",
+	}
+	fresh := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Hour)},
+		Policy:    "dane-only",
+	}
+	polCache.Set("example.com", stale)
+	polCache.Set("example.com", fresh)
+
+	current, changed := discardCachedPolicyStateIfCurrent("example.com", stale)
+	if changed || current != fresh {
+		t.Fatal("stale maintenance snapshot replaced a refreshed cache entry")
+	}
+	current, changed = removeCacheEntryIfCurrent("example.com", stale)
+	if changed || current != fresh {
+		t.Fatal("stale eviction snapshot removed a refreshed cache entry")
+	}
+	stored, ok := polCache.Get("example.com")
+	if !ok || stored != fresh {
+		t.Fatal("refreshed cache entry was not preserved")
+	}
+}
+
+func BenchmarkPartitionCacheEntries50K(b *testing.B) {
+	const entryCount = 50_001
+	now := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+	base := make([]cache.Entry[*CacheStruct], entryCount)
+	for i := range base {
+		policy := ""
+		if i%2 == 0 {
+			policy = "dane"
+		}
+		base[i] = cache.Entry[*CacheStruct]{
+			Key: "domain-" + strconv.Itoa(i) + ".example",
+			Value: &CacheStruct{
+				Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Duration(i%3600+1) * time.Second)},
+				Policy:    policy,
+				Counter:   uint32(i % 100),
+			},
+		}
+	}
+	work := make([]cache.Entry[*CacheStruct], entryCount)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		copy(work, base)
+		b.StartTimer()
+		kept, evicted := partitionCacheEntriesForLimit(work, now, 50_000, 45_000)
+		if len(kept) != 45_000 || len(evicted) != 5_001 {
+			b.Fatalf("unexpected partition sizes: kept=%d evicted=%d", len(kept), len(evicted))
+		}
+	}
+}
+
+func BenchmarkSortCacheEntriesByCounter50K(b *testing.B) {
+	const entryCount = 50_000
+	base := make([]cache.Entry[*CacheStruct], entryCount)
+	for i := range base {
+		base[i] = cache.Entry[*CacheStruct]{
+			Key: "domain-" + strconv.Itoa(i) + ".example",
+			Value: &CacheStruct{
+				Expirable: &cache.Expirable{ExpiresAt: time.Now().Add(time.Hour)},
+				Policy:    "dane",
+				Counter:   uint32(i % 100),
+			},
+		}
+	}
+	work := make([]cache.Entry[*CacheStruct], entryCount)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		copy(work, base)
+		b.StartTimer()
+		if counters := sortCacheEntriesByCounter(work); len(counters) != entryCount {
+			b.Fatal("unexpected counter count")
 		}
 	}
 }

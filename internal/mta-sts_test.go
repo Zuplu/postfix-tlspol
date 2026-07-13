@@ -316,7 +316,27 @@ func TestMtaStsPolicyMediaType(t *testing.T) {
 	}
 }
 
+func FuzzParseMtaStsPolicy(f *testing.F) {
+	for _, seed := range []string{
+		"version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 86400\n",
+		"version: STSv1\nmode: none\nmax_age: 0\n",
+		"version: STSv1\ncomment: caf\xc3\xa9\nmode: testing\nmx: *.example.com\nmax_age: 31557600\n",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, policyText string) {
+		policy, _, ttl := parseMtaStsPolicy("example.com", strings.NewReader(policyText))
+		if uint64(ttl) > MTASTS_MAX_AGE {
+			t.Fatalf("parser returned out-of-range max_age %d", ttl)
+		}
+		if policy != "" && !strings.HasPrefix(policy, "secure match=") {
+			t.Fatalf("parser returned unexpected policy %q", policy)
+		}
+	})
+}
+
 func TestMtaSts(t *testing.T) {
+	requireLiveNetworkTests(t)
 	t.Parallel()
 	domains := []string{"gmail.com", "outlook.com", "zuplu.com", "mailbox.org", "protonmail.com"}
 

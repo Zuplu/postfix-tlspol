@@ -7,6 +7,7 @@ package tlspol
 
 import (
 	"fmt"
+	"os"
 	"testing"
 )
 
@@ -21,6 +22,7 @@ func init() {
 }
 
 func TestDaneOverMtaSts(t *testing.T) {
+	requireLiveNetworkTests(t)
 	t.Parallel()
 	domains := []string{"zuplu.com", "mailbox.org", "protonmail.com"}
 	passedOnce := false
@@ -42,5 +44,12 @@ func TestDaneOverMtaSts(t *testing.T) {
 	}
 	if !passedOnce {
 		t.Error("All tests failed.")
+	}
+}
+
+func requireLiveNetworkTests(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TLSPOL_LIVE_TESTS") != "1" {
+		t.Skip("set TLSPOL_LIVE_TESTS=1 to run tests against public DNS and HTTPS services")
 	}
 }

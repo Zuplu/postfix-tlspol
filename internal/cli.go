@@ -27,6 +27,14 @@ type dialTarget struct {
 	address string
 }
 
+var cliErr error
+
+func recordCliError(err error) {
+	if cliErr == nil && err != nil {
+		cliErr = err
+	}
+}
+
 func appendDialTarget(targets []dialTarget, seen map[string]struct{}, network string, address string) []dialTarget {
 	address = strings.TrimSpace(address)
 	if address == "" {
@@ -82,7 +90,7 @@ func flagCliConnFunc(f *flag.Flag) {
 		cliConnMode = true
 		value = (*f).Value.String()
 		if len(value) == 0 || !valid.IsDNSName(value) {
-			slog.Error("Invalid domain", "domain", value)
+			recordCliError(fmt.Errorf("invalid domain %q", value))
 			return
 		}
 	case "dump", "export", "purge":
@@ -92,37 +100,34 @@ func flagCliConnFunc(f *flag.Flag) {
 	}
 	conn, dialedEndpoint, err := dialConfiguredOrDetectedSocketmap()
 	if err != nil {
-		slog.Error("Could not connect to socketmap instance. Is postfix-tlspol running?", "error", err, "attempted_endpoints", dialedEndpoint)
+		recordCliError(fmt.Errorf("connect to socketmap instance using %s: %w", dialedEndpoint, err))
 		return
 	}
 	defer conn.Close()
 	slog.Debug("Connected to socketmap instance", "endpoint", dialedEndpoint)
 	switch (*f).Name {
 	case "query":
-		cliQuery(conn, value)
+		recordCliError(cliQuery(conn, value))
 	case "dump":
-		cliDump(conn, false)
+		recordCliError(cliDump(conn, false))
 	case "export":
-		cliDump(conn, true)
+		recordCliError(cliDump(conn, true))
 	case "purge":
-		cliPurge(conn)
+		recordCliError(cliPurge(conn))
 	}
 }
 
-func cliQuery(conn net.Conn, value string) {
-	if _, err := conn.Write(netstring.Marshal("JSON " + value)); err != nil {
-		slog.Error("Could not query domain", "domain", value, "error", err)
-		return
+func cliQuery(conn net.Conn, value string) error {
+	if err := writeConnection(conn, netstring.Marshal("JSON "+value)); err != nil {
+		return fmt.Errorf("query domain %q: %w", value, err)
 	}
 	raw, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
-		slog.Error("Could not query domain", "domain", value, "error", err)
-		return
+		return fmt.Errorf("read query response for %q: %w", value, err)
 	}
 	var result Result
 	if err := json.Unmarshal(raw, &result); err != nil {
-		slog.Error("Could not query domain", "domain", value, "error", err)
-		return
+		return fmt.Errorf("decode query response for %q: %w", value, err)
 	}
 	o, err := os.Stdout.Stat()
 	if err == nil && o.Mode()&os.ModeCharDevice != 0 {
@@ -162,8 +167,9 @@ func cliQuery(conn net.Conn, value string) {
 		err = enc.Encode(result)
 	}
 	if err != nil {
-		slog.Error("Could not query domain", "domain", value, "error", err)
+		return fmt.Errorf("write query result for %q: %w", value, err)
 	}
+	return nil
 }
 
 type nopWriteCloser struct {
@@ -172,11 +178,16 @@ type nopWriteCloser struct {
 
 func (w nopWriteCloser) Close() error { return nil }
 
-func cliDump(conn net.Conn, export bool) {
+func cliDump(conn net.Conn, export bool) error {
+	command := "DUMP"
 	if export {
-		conn.Write(netstring.Marshal("EXPORT"))
+		command = "EXPORT"
 	} else {
-		conn.Write(netstring.Marshal("DUMP"))
+	}
+	if err := writeConnection(conn, netstring.Marshal(command)); err != nil {
+		return fmt.Errorf("request cached policies with %s: %w", command, err)
+	}
+	if !export {
 		o, err := os.Stdout.Stat()
 		if err == nil && o.Mode()&os.ModeCharDevice != 0 {
 			if _, err := exec.LookPath("less"); err == nil {
@@ -185,15 +196,25 @@ func cliDump(conn net.Conn, export bool) {
 				less.Stdin = conn
 				less.Stdout = os.Stdout
 				less.Stderr = os.Stderr
-				less.Run()
-				return
+				if err := less.Run(); err != nil {
+					return fmt.Errorf("display cached policies: %w", err)
+				}
+				return nil
 			}
 		}
 	}
-	io.Copy(os.Stdout, conn)
+	if _, err := io.Copy(os.Stdout, conn); err != nil {
+		return fmt.Errorf("read cached policies: %w", err)
+	}
+	return nil
 }
 
-func cliPurge(conn net.Conn) {
-	conn.Write(netstring.Marshal("PURGE"))
-	io.Copy(os.Stdout, conn)
+func cliPurge(conn net.Conn) error {
+	if err := writeConnection(conn, netstring.Marshal("PURGE")); err != nil {
+		return fmt.Errorf("request cache purge: %w", err)
+	}
+	if _, err := io.Copy(os.Stdout, conn); err != nil {
+		return fmt.Errorf("read cache purge result: %w", err)
+	}
+	return nil
 }

@@ -157,9 +157,7 @@ func discardCachedPolicyState(haveLock bool, key string, c *CacheStruct) {
 	if c != nil {
 		counter = c.Counter
 	}
-	if !haveLock {
-		counter += drainCacheHitCounter(key)
-	}
+	counter += drainCacheHitCounter(key)
 	if counter == 0 {
 		polCache.Remove(haveLock, key)
 		cleanupCacheHitCounterIfUnused(haveLock, key)
@@ -169,6 +167,38 @@ func discardCachedPolicyState(haveLock bool, key string, c *CacheStruct) {
 		return statsOnlyCacheEntry(counter), true
 	})
 	cleanupCacheHitCounterIfUnused(haveLock, key)
+}
+
+func cachedEntryLocked(key string) (*CacheStruct, bool) {
+	var current *CacheStruct
+	var found bool
+	polCache.Update(true, key, func(c *CacheStruct, ok bool) (*CacheStruct, bool) {
+		current, found = c, ok
+		return nil, false
+	})
+	return current, found
+}
+
+func discardCachedPolicyStateIfCurrent(key string, expected *CacheStruct) (*CacheStruct, bool) {
+	polCache.Lock()
+	defer polCache.Unlock()
+	current, found := cachedEntryLocked(key)
+	if !found || current != expected {
+		return current, false
+	}
+	discardCachedPolicyState(true, key, current)
+	return nil, true
+}
+
+func removeCacheEntryIfCurrent(key string, expected *CacheStruct) (*CacheStruct, bool) {
+	polCache.Lock()
+	defer polCache.Unlock()
+	current, found := cachedEntryLocked(key)
+	if !found || current != expected {
+		return current, false
+	}
+	polCache.Remove(true, key)
+	return nil, true
 }
 
 func cloneCacheStruct(c *CacheStruct) *CacheStruct {
@@ -285,7 +315,7 @@ func StartDaemon(v string, licenseText string) error {
 	flag.Visit(flagCliConnFunc)
 
 	if cliConnMode {
-		return nil
+		return cliErr
 	}
 
 	if len(os.Args) < 2 {
@@ -303,7 +333,7 @@ func StartDaemon(v string, licenseText string) error {
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
 	bgCtx = daemonCtx
 	defer cancelDaemon()
-	listenForSignals(cancelDaemon)
+	listenForSignals(daemonCtx, cancelDaemon)
 
 	var prefetchWg sync.WaitGroup
 	prefetchWg.Add(1)
@@ -317,17 +347,22 @@ func StartDaemon(v string, licenseText string) error {
 	connectionWg.Wait()
 	prefetchWg.Wait()
 	_ = tidyCache()
-	polCache.Close()
-	return serverErr
+	cacheErr := polCache.CloseWithError()
+	return errors.Join(serverErr, cacheErr)
 }
 
-func listenForSignals(cancel context.CancelFunc) {
+func listenForSignals(ctx context.Context, cancel context.CancelFunc) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	go func() {
 		defer signal.Stop(signals)
 		for {
-			sig := <-signals
+			var sig os.Signal
+			select {
+			case sig = <-signals:
+			case <-ctx.Done():
+				return
+			}
 			if sig == syscall.SIGHUP {
 				slog.Info("Received signal, saving cache", "signal", sig)
 				_ = tidyCache()
@@ -695,21 +730,25 @@ func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruc
 	if found {
 		policy, report, ttl, ok := selectCachedPolicy(c, time.Now())
 		if ok {
+			var delivered bool
 			switch policy {
 			case "":
-				slog.Info("No policy found", "origin", "cache", "domain", domain, "ttl", ttl)
-				conn.Write(NS_NOTFOUND)
+				slog.Debug("No policy found", "origin", "cache", "domain", domain, "ttl", ttl)
+				delivered = writeConnectionResponse(conn, NS_NOTFOUND)
 			default:
-				slog.Info("Evaluated policy", "origin", "cache", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
+				slog.Debug("Evaluated policy", "origin", "cache", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
 				var res string
 				if withTlsRpt {
 					res = policy + " " + report
 				} else {
 					res = policy
 				}
-				conn.Write(netstring.Marshal("OK " + res))
+				delivered = writeConnectionResponse(conn, netstring.Marshal("OK "+res))
 			}
-			observePolicy(policy)
+			if delivered {
+				observePolicy(policy)
+			}
+			observeCacheRequest(true)
 			addCacheHitCounter(domain)
 			return c, true
 		}
@@ -1031,26 +1070,51 @@ func replyJson(ctx context.Context, conn net.Conn, domain string) {
 		return
 	}
 
-	conn.Write(append(b, '\n'))
+	writeConnectionResponse(conn, append(b, '\n'))
 }
 
 func replySocketmap(conn net.Conn, domain string, policy string, report string, ttl uint32, withTlsRpt bool) {
+	var delivered bool
 	switch policy {
 	case "":
-		slog.Info("No policy found", "origin", "network", "domain", domain, "ttl", ttl)
-		conn.Write(NS_NOTFOUND)
+		slog.Debug("No policy found", "origin", "network", "domain", domain, "ttl", ttl)
+		delivered = writeConnectionResponse(conn, NS_NOTFOUND)
 	case "TEMP":
 		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", domain, "ttl", ttl)
-		conn.Write(NS_TEMP)
+		delivered = writeConnectionResponse(conn, NS_TEMP)
 	default:
-		slog.Info("Evaluated policy", "origin", "network", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
+		slog.Debug("Evaluated policy", "origin", "network", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
 		res := policy
 		if withTlsRpt {
 			res = res + " " + report
 		}
-		conn.Write(netstring.Marshal("OK " + res))
+		delivered = writeConnectionResponse(conn, netstring.Marshal("OK "+res))
 	}
-	observePolicy(policy)
+	if delivered {
+		observePolicy(policy)
+	}
+}
+
+func writeConnectionResponse(conn net.Conn, response []byte) bool {
+	if err := writeConnection(conn, response); err != nil {
+		slog.Debug("Could not write connection response", "error", err)
+		return false
+	}
+	return true
+}
+
+func writeConnection(conn net.Conn, response []byte) error {
+	for len(response) != 0 {
+		n, err := conn.Write(response)
+		if err != nil {
+			return err
+		}
+		if n <= 0 || n > len(response) {
+			return io.ErrShortWrite
+		}
+		response = response[n:]
+	}
+	return nil
 }
 
 func isLikelyHTTP(reader *bufio.Reader) bool {
@@ -1173,11 +1237,11 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			return
 		}
 		query := ns.Text()
-		parts := strings.SplitN(query, " ", 2)
-		cmd := strings.ToUpper(parts[0])
+		rawCommand, argument, hasArgument := strings.Cut(query, " ")
+		cmd := canonicalSocketmapCommand(rawCommand)
 		if isControlCommand(cmd) && !isLocalControlConnection(conn) {
 			slog.Warn("Rejected non-local control command", "command", cmd, "remote", conn.RemoteAddr())
-			_, _ = conn.Write(NS_PERM)
+			writeConnectionResponse(conn, NS_PERM)
 			return
 		}
 		withTlsRpt := config.Server.TlsRpt
@@ -1199,17 +1263,17 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			return
 		default:
 			slog.Warn("Unknown command", "query", query)
-			conn.Write(NS_PERM)
+			writeConnectionResponse(conn, NS_PERM)
 			return
 		}
-		if len(parts) != 2 { // empty query
-			conn.Write(NS_NOTFOUND)
+		if !hasArgument { // empty query
+			writeConnectionResponse(conn, NS_NOTFOUND)
 			continue
 		}
 
-		domain := normalizeDomain(parts[1])
+		domain := normalizeDomain(argument)
 		if !valid.IsDNSName(domain) || strings.HasPrefix(domain, ".") {
-			_, _ = conn.Write(NS_NOTFOUND)
+			writeConnectionResponse(conn, NS_NOTFOUND)
 			continue
 		}
 
@@ -1224,6 +1288,7 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 		if found {
 			continue
 		}
+		observeCacheRequest(false)
 
 		result := refreshDomain(domain, c)
 
@@ -1242,6 +1307,14 @@ func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
 			scheduleCachedPolicyPrefetch(domain, cs, now)
 		}
 	}
+}
+
+func canonicalSocketmapCommand(command string) string {
+	switch command {
+	case "QUERYWITHTLSRPT", "QUERY", "JSON", "DUMP", "EXPORT", "PURGE":
+		return command
+	}
+	return strings.ToUpper(command)
 }
 
 func isControlCommand(cmd string) bool {
@@ -1382,22 +1455,23 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 	queryDane := shouldQueryDane(c, daneForQuery, mtaStsForQuery, now, opts.renewBefore)
 	queryMtaSts := shouldQueryMtaSts(c, daneForQuery, mtaStsForQuery, now, opts.renewBefore)
 
-	if queryDane {
-		wg.Add(1)
+	switch {
+	case queryDane && queryMtaSts:
+		wg.Add(2)
 		go func() {
 			defer wg.Done()
 			danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
 		}()
-	}
-
-	if queryMtaSts {
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
 		}()
+		wg.Wait()
+	case queryDane:
+		danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
+	case queryMtaSts:
+		mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
 	}
-	wg.Wait()
 
 	daneTemp := danePolicy == "TEMP"
 	refreshedDane := PolicyBranch{}
@@ -1471,24 +1545,28 @@ func shouldQueryMtaSts(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForS
 
 func dumpCachedPolicies(conn net.Conn, export bool) {
 	items := tidyCache()
-	sort.Slice(items, func(i, j int) bool {
-		iCounter := cacheEntryCounter(items[i].Key, items[i].Value)
-		jCounter := cacheEntryCounter(items[j].Key, items[j].Value)
-		if iCounter != jCounter {
-			return iCounter > jCounter
+	counters := sortCacheEntriesByCounter(items)
+	writer := bufio.NewWriterSize(conn, 64<<10)
+	defer func() {
+		if err := writer.Flush(); err != nil {
+			slog.Debug("Could not flush cached policy dump", "error", err)
 		}
-		return items[i].Key < items[j].Key
-	})
+	}()
 	now := time.Now()
-	for _, entry := range items {
+	for i, entry := range items {
 		policy, _, remainingTTL, ok := selectCachedPolicy(entry.Value, now)
 		if !ok || policy == "" || remainingTTL < PREFETCH_INTERVAL+1 {
 			continue
 		}
+		var err error
 		if export {
-			fmt.Fprintf(conn, "%-28s %s\n", entry.Key, policy)
+			_, err = fmt.Fprintf(writer, "%-28s %s\n", entry.Key, policy)
 		} else {
-			fmt.Fprintf(conn, "%-28s  %6d  %s\n", entry.Key, cacheEntryCounter(entry.Key, entry.Value), policy)
+			_, err = fmt.Fprintf(writer, "%-28s  %6d  %s\n", entry.Key, counters[i], policy)
+		}
+		if err != nil {
+			slog.Debug("Could not write cached policy dump", "error", err)
+			return
 		}
 	}
 }
@@ -1506,11 +1584,10 @@ func purgeCache(conn net.Conn) {
 }
 
 func tidyCache() []cache.Entry[*CacheStruct] {
-	polCache.Lock()
-	flushCacheHitCounters(true)
-	items := polCache.Items(true)
+	flushCacheHitCounters(false)
+	items := polCache.Items(false)
 	now := time.Now()
-	var entries []cache.Entry[*CacheStruct]
+	entries := make([]cache.Entry[*CacheStruct], 0, len(items))
 	for _, entry := range items {
 		removeEmptyStats := entry.Value.policyStateEmpty() && entry.Value.Counter == 0
 		removeExpiredNoPolicy := !entry.Value.policyStateEmpty() && entry.Value.noPolicyOnly() && entry.Value.RemainingTTL(now) == 0
@@ -1520,22 +1597,33 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 			strings.Contains(entry.Value.MtaSts.Report, "mx_host_pattern=.") ||
 			strings.Contains(entry.Value.MtaSts.Policy, "match= ")
 		if removeEmptyStats || removeExpiredNoPolicy || removeStalePolicy || removeLegacyBadPolicy {
-			discardCachedPolicyState(true, entry.Key, entry.Value)
-			unscheduleCachedPolicyPrefetch(entry.Key)
+			current, removed := discardCachedPolicyStateIfCurrent(entry.Key, entry.Value)
+			if removed {
+				unscheduleCachedPolicyPrefetch(entry.Key)
+			} else if current != nil {
+				entries = append(entries, cache.Entry[*CacheStruct]{Key: entry.Key, Value: current})
+			}
 		} else {
 			entries = append(entries, entry)
-			scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
 		}
 	}
 	entries, evicted := partitionCacheEntriesForLimit(entries, now, CACHE_MAX_ENTRIES, CACHE_PRUNE_TARGET)
+	pruned := 0
 	for _, entry := range evicted {
-		polCache.Remove(true, entry.Key)
-		cacheHitCounters.Delete(entry.Key)
-		unscheduleCachedPolicyPrefetch(entry.Key)
+		current, removed := removeCacheEntryIfCurrent(entry.Key, entry.Value)
+		if removed {
+			pruned++
+			cacheHitCounters.Delete(entry.Key)
+			unscheduleCachedPolicyPrefetch(entry.Key)
+		} else if current != nil {
+			entries = append(entries, cache.Entry[*CacheStruct]{Key: entry.Key, Value: current})
+		}
 	}
-	polCache.Unlock()
-	if len(evicted) != 0 {
-		slog.Warn("Pruned policy cache to entry limit", "removed", len(evicted), "remaining", len(entries))
+	for _, entry := range entries {
+		scheduleCachedPolicyPrefetch(entry.Key, entry.Value, now)
+	}
+	if pruned != 0 {
+		slog.Warn("Pruned policy cache to entry limit", "removed", pruned, "remaining", len(entries))
 	}
 	if err := polCache.Save(false); err != nil {
 		slog.Error("Could not save cache", "error", err)
@@ -1553,28 +1641,82 @@ func enforceCacheLimit() {
 	}
 }
 
+type cacheEvictionScore struct {
+	counter   uint32
+	ttl       uint32
+	hasPolicy bool
+}
+
+type cacheCounterSorter struct {
+	entries  []cache.Entry[*CacheStruct]
+	counters []uint32
+}
+
+func (s cacheCounterSorter) Len() int {
+	return len(s.entries)
+}
+
+func (s cacheCounterSorter) Less(i int, j int) bool {
+	if s.counters[i] != s.counters[j] {
+		return s.counters[i] > s.counters[j]
+	}
+	return s.entries[i].Key < s.entries[j].Key
+}
+
+func (s cacheCounterSorter) Swap(i int, j int) {
+	s.entries[i], s.entries[j] = s.entries[j], s.entries[i]
+	s.counters[i], s.counters[j] = s.counters[j], s.counters[i]
+}
+
+func sortCacheEntriesByCounter(entries []cache.Entry[*CacheStruct]) []uint32 {
+	counters := make([]uint32, len(entries))
+	for i, entry := range entries {
+		counters[i] = cacheEntryCounter(entry.Key, entry.Value)
+	}
+	sort.Sort(cacheCounterSorter{entries: entries, counters: counters})
+	return counters
+}
+
+type cacheEntrySorter struct {
+	entries []cache.Entry[*CacheStruct]
+	scores  []cacheEvictionScore
+}
+
+func (s cacheEntrySorter) Len() int {
+	return len(s.entries)
+}
+
+func (s cacheEntrySorter) Less(i int, j int) bool {
+	if s.scores[i].hasPolicy != s.scores[j].hasPolicy {
+		return !s.scores[i].hasPolicy
+	}
+	if s.scores[i].counter != s.scores[j].counter {
+		return s.scores[i].counter < s.scores[j].counter
+	}
+	if s.scores[i].ttl != s.scores[j].ttl {
+		return s.scores[i].ttl < s.scores[j].ttl
+	}
+	return s.entries[i].Key < s.entries[j].Key
+}
+
+func (s cacheEntrySorter) Swap(i int, j int) {
+	s.entries[i], s.entries[j] = s.entries[j], s.entries[i]
+	s.scores[i], s.scores[j] = s.scores[j], s.scores[i]
+}
+
 func partitionCacheEntriesForLimit(entries []cache.Entry[*CacheStruct], now time.Time, maxEntries int, targetEntries int) ([]cache.Entry[*CacheStruct], []cache.Entry[*CacheStruct]) {
 	if len(entries) <= maxEntries {
 		return entries, nil
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		iHasPolicy := cacheStructHasPolicy(entries[i].Value)
-		jHasPolicy := cacheStructHasPolicy(entries[j].Value)
-		if iHasPolicy != jHasPolicy {
-			return !iHasPolicy
+	scores := make([]cacheEvictionScore, len(entries))
+	for i, entry := range entries {
+		scores[i] = cacheEvictionScore{
+			counter:   cacheEntryCounter(entry.Key, entry.Value),
+			ttl:       entry.Value.RemainingTTL(now),
+			hasPolicy: cacheStructHasPolicy(entry.Value),
 		}
-		iCounter := cacheEntryCounter(entries[i].Key, entries[i].Value)
-		jCounter := cacheEntryCounter(entries[j].Key, entries[j].Value)
-		if iCounter != jCounter {
-			return iCounter < jCounter
-		}
-		iTTL := entries[i].Value.RemainingTTL(now)
-		jTTL := entries[j].Value.RemainingTTL(now)
-		if iTTL != jTTL {
-			return iTTL < jTTL
-		}
-		return entries[i].Key < entries[j].Key
-	})
+	}
+	sort.Sort(cacheEntrySorter{entries: entries, scores: scores})
 	evictCount := len(entries) - targetEntries
 	return entries[evictCount:], entries[:evictCount]
 }

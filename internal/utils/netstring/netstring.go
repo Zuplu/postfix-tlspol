@@ -36,24 +36,24 @@ func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err err
 		}
 		return 0, nil, nil
 	}
-	lengthStr := data[:colonPos]
-	if len(lengthStr) == 0 {
+	lengthBytes := data[:colonPos]
+	if len(lengthBytes) == 0 {
 		return 0, nil, errors.New("netstring: empty length")
 	}
-	if len(lengthStr) > 1 && lengthStr[0] == '0' {
+	if len(lengthBytes) > 1 && lengthBytes[0] == '0' {
 		return 0, nil, errors.New("netstring: leading zero in length")
 	}
-	for _, c := range lengthStr {
+	length := 0
+	maxInt := int(^uint(0) >> 1)
+	for _, c := range lengthBytes {
 		if c < '0' || c > '9' {
 			return 0, nil, errors.New("netstring: invalid length character")
 		}
-	}
-	length, err := strconv.Atoi(string(lengthStr))
-	if err != nil {
-		return 0, nil, errors.New("netstring: invalid length")
-	}
-	if length < 0 {
-		return 0, nil, errors.New("netstring: negative length")
+		digit := int(c - '0')
+		if length > (maxInt-digit)/10 {
+			return 0, nil, errors.New("netstring: invalid length")
+		}
+		length = length*10 + digit
 	}
 	payloadStart := colonPos + 1
 	if length >= len(data)-payloadStart {

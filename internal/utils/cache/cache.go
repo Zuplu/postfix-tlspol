@@ -67,6 +67,7 @@ type Cache[T Cacheable] struct {
 	generation             uint64
 	persistedGeneration    uint64
 	hasPersistedGeneration bool
+	closeErr               error
 	sync.RWMutex
 }
 
@@ -84,6 +85,8 @@ func New[T Cacheable](filePath string, savePeriod time.Duration) *Cache[T] {
 	}
 	if err := c.load(); err != nil {
 		slog.Error("cache: error loading persisted data", "error", err)
+		c.dirty = true
+		c.generation++
 	}
 	c.wg.Add(1)
 	go c.periodicSave()
@@ -161,13 +164,19 @@ func (c *Cache[T]) Len() int {
 }
 
 func (c *Cache[T]) Close() {
+	if err := c.CloseWithError(); err != nil {
+		slog.Error("cache: error during final save", "error", err)
+	}
+}
+
+// CloseWithError stops periodic persistence and reports the final save result.
+func (c *Cache[T]) CloseWithError() error {
 	c.closeOnce.Do(func() {
 		close(c.quit)
 		c.wg.Wait()
-		if err := c.Save(false); err != nil {
-			slog.Error("cache: error during final save", "error", err)
-		}
+		c.closeErr = c.Save(false)
 	})
+	return c.closeErr
 }
 
 func (c *Cache[T]) periodicSave() {
@@ -205,13 +214,13 @@ func (c *Cache[T]) save(haveLock bool, force bool) error {
 		}
 		snapshot, generation = c.snapshotLocked()
 	} else {
-		c.Lock()
+		c.RLock()
 		if !force && !c.dirty {
-			c.Unlock()
+			c.RUnlock()
 			return nil
 		}
 		snapshot, generation = c.snapshotLocked()
-		c.Unlock()
+		c.RUnlock()
 	}
 
 	if err := c.persistSnapshot(snapshot, generation, force); err != nil {

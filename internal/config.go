@@ -8,6 +8,7 @@ package tlspol
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -22,6 +23,8 @@ import (
 )
 
 var defaultConfig = Config{}
+
+const CONFIG_MAX_SIZE = 1 << 20
 
 type ServerConfig struct {
 	Address           string `yaml:"address"`
@@ -247,10 +250,18 @@ func SetDefaultConfig(data []byte) {
 }
 
 func loadConfig(filename string) (Config, error) {
-	data, err := os.ReadFile(filename)
+	f, err := os.Open(filename)
 	if err != nil {
 		config := defaultConfig
 		return config, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, CONFIG_MAX_SIZE+1))
+	if err != nil {
+		return Config{}, err
+	}
+	if len(data) > CONFIG_MAX_SIZE {
+		return Config{}, fmt.Errorf("configuration exceeds %d bytes", CONFIG_MAX_SIZE)
 	}
 
 	var config Config

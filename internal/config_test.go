@@ -8,6 +8,7 @@ package tlspol
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,10 @@ func TestLoadConfigRejectsUnknownAndInvalidValues(t *testing.T) {
 			body: "server:\n  addres: 127.0.0.1:8642\n",
 		},
 		{
+			name: "duplicate field",
+			body: "server:\n  address: 127.0.0.1:8642\n  address: 127.0.0.1:9000\n",
+		},
+		{
 			name: "invalid log level",
 			body: "server:\n  address: 127.0.0.1:8642\n  log-level: verbose\n",
 		},
@@ -78,6 +83,14 @@ func TestLoadConfigRejectsUnknownAndInvalidValues(t *testing.T) {
 			name: "invalid resolver",
 			body: "server:\n  address: 127.0.0.1:8642\ndns:\n  address: 127.0.0.1\n",
 		},
+		{
+			name: "empty cache path",
+			body: "server:\n  address: 127.0.0.1:8642\n  cache-file: '  '\n",
+		},
+		{
+			name: "unsupported permission bits",
+			body: "server:\n  address: 127.0.0.1:8642\n  socket-permissions: 01777\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -89,6 +102,35 @@ func TestLoadConfigRejectsUnknownAndInvalidValues(t *testing.T) {
 				t.Fatal("expected invalid configuration to be rejected")
 			}
 		})
+	}
+}
+
+func TestLoadConfigNormalizesWhitespace(t *testing.T) {
+	initializeTestDefaultConfig(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  address: ' 127.0.0.1:8642 '\n  cache-file: ' /tmp/cache.db '\n  log-format: ' JSON '\ndns:\n  address: ' 127.0.0.1:53 '\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("load normalized config: %v", err)
+	}
+	if cfg.Server.Address != "127.0.0.1:8642" || cfg.Server.CacheFile != "/tmp/cache.db" || cfg.Server.LogFormat != "json" {
+		t.Fatalf("server values were not normalized: %+v", cfg.Server)
+	}
+	if cfg.Dns.Address == nil || *cfg.Dns.Address != "127.0.0.1:53" {
+		t.Fatalf("resolver address was not normalized: %v", cfg.Dns.Address)
+	}
+}
+
+func TestLoadConfigRejectsOversizedInput(t *testing.T) {
+	initializeTestDefaultConfig(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(strings.Repeat("#", CONFIG_MAX_SIZE+1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(path); err == nil {
+		t.Fatal("expected oversized configuration to be rejected")
 	}
 }
 

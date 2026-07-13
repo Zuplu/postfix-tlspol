@@ -192,6 +192,7 @@ func lookupMxRecords(ctx context.Context, domain string, resolverAddress string,
 }
 
 func negativeResponseTTL(r *dns.Msg) uint32 {
+	// RFC 2308 Section 5 defines the negative TTL as the smaller SOA value.
 	var ttl uint32
 	haveTTL := false
 	for _, authority := range r.Ns {
@@ -211,6 +212,18 @@ func negativeResponseTTL(r *dns.Msg) uint32 {
 func checkMxRecords(ctx context.Context, records []mxRecord, resolverAddress string) <-chan mxCheckResult {
 	results := make(chan mxCheckResult, len(records))
 	if len(records) == 0 {
+		close(results)
+		return results
+	}
+	if len(records) == 1 {
+		if ctx.Err() == nil {
+			record := records[0]
+			results <- mxCheckResult{
+				host:   record.host,
+				ttl:    record.ttl,
+				status: checkMx(ctx, record.host, resolverAddress),
+			}
+		}
 		close(results)
 		return results
 	}
@@ -451,6 +464,13 @@ func checkDaneOnce(ctx context.Context, domain string, resolverAddress string) (
 func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress string) <-chan ResultWithTTL {
 	results := make(chan ResultWithTTL, len(mxRecords))
 	if len(mxRecords) == 0 {
+		close(results)
+		return results
+	}
+	if len(mxRecords) == 1 {
+		if ctx.Err() == nil {
+			results <- checkTlsa(ctx, mxRecords[0], resolverAddress)
+		}
 		close(results)
 		return results
 	}

@@ -57,6 +57,40 @@ func TestMarshal(t *testing.T) {
 	}
 }
 
+func BenchmarkSplitNetstring(b *testing.B) {
+	data := []byte("17:QUERY example.com,")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		advance, token, err := splitNetstring(data, false)
+		if err != nil || advance != len(data) || len(token) != 17 {
+			b.Fatalf("unexpected split result: advance=%d token=%q err=%v", advance, token, err)
+		}
+	}
+}
+
+func FuzzSplitNetstring(f *testing.F) {
+	for _, seed := range [][]byte{
+		[]byte("0:,"),
+		[]byte("17:QUERY example.com,"),
+		[]byte("01:a,"),
+		[]byte("184467440737095516160:x,"),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		advance, token, err := splitNetstring(data, true)
+		if err != nil {
+			return
+		}
+		if advance < 0 || advance > len(data) {
+			t.Fatalf("invalid advance %d for %d bytes", advance, len(data))
+		}
+		if advance == 0 && token != nil {
+			t.Fatalf("token returned without advancing: %q", token)
+		}
+	})
+}
+
 func TestNewScannerAndSplit_ValidSingleToken(t *testing.T) {
 	t.Parallel()
 
@@ -287,6 +321,11 @@ func TestSplitNetstring_ErrorCasesAtEOF(t *testing.T) {
 			name:    "max int length without payload",
 			data:    maxIntLength + ":",
 			wantErr: "netstring: unexpected EOF",
+		},
+		{
+			name:    "length overflows int",
+			data:    maxIntLength + "0:",
+			wantErr: "netstring: invalid length",
 		},
 	}
 

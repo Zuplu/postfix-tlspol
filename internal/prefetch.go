@@ -398,11 +398,13 @@ func nextPrefetchTimeAfterMiss(c *CacheStruct, now time.Time) (time.Time, bool) 
 }
 
 func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *CacheStruct, result domainResult, now time.Time) {
+	observePrefetch("failure")
 	if due, attempts, delay, ok := scheduler.scheduleRetryUntil(key, now, failedPolicyGraceDeadline(c, result)); ok {
 		slog.Debug("Scheduled policy prefetch retry", "domain", key, "attempts", attempts, "delay", delay, "due", due)
 		return
 	}
 	if updated, ok := cacheAfterFailedBranchDiscard(c, result, now); ok {
+		observePrefetch("discard")
 		polCache.Set(key, updated)
 		if due, ok := nextPrefetchTime(updated, now); ok {
 			scheduler.schedule(key, due)
@@ -414,6 +416,7 @@ func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *C
 		return
 	}
 	discardCachedPolicyState(false, key, c)
+	observePrefetch("discard")
 	if err := polCache.Save(false); err != nil {
 		slog.Error("Could not save cache after failed prefetch discard", "domain", key, "error", err)
 	}
@@ -540,6 +543,9 @@ func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchSchedule
 					if hasFailedAttempt {
 						scheduleFailedPolicyPrefetch(scheduler, c.Key, merged, refreshed, refreshedAt)
 						return
+					}
+					if hasRefreshedData {
+						observePrefetch("success")
 					}
 					scheduler.resetFailures(c.Key)
 					scheduleCachedPolicyPrefetch(c.Key, merged, refreshedAt)
