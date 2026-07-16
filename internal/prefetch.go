@@ -23,6 +23,7 @@ const (
 	PREFETCH_RETRY_MAX_AGE             = 30 * time.Minute
 	PREFETCH_RETRY_MAX_INTERVAL        = 5 * time.Minute
 	PREFETCH_SLOT_INTERVAL             = 10 * time.Second
+	PREFETCH_BATCH_JITTER_MAX          = 250 * time.Millisecond
 )
 
 var semaphore chan struct{}
@@ -133,21 +134,76 @@ func (q *prefetchQueue) Pop() any {
 }
 
 type prefetchScheduler struct {
-	items    map[string]*prefetchItem
-	failures map[string]prefetchFailure
-	wake     chan struct{}
-	queue    prefetchQueue
-	mu       sync.Mutex
+	batchOrigin time.Time
+	items       map[string]*prefetchItem
+	failures    map[string]prefetchFailure
+	wake        chan struct{}
+	queue       prefetchQueue
+	jitterSeed  uint64
+	mu          sync.Mutex
 }
 
 func newPrefetchScheduler() *prefetchScheduler {
+	return newPrefetchSchedulerAt(time.Now(), rand.Uint64())
+}
+
+func newPrefetchSchedulerAt(startedAt time.Time, jitterSeed uint64) *prefetchScheduler {
 	s := &prefetchScheduler{
-		items:    make(map[string]*prefetchItem),
-		failures: make(map[string]prefetchFailure),
-		wake:     make(chan struct{}, 1),
+		batchOrigin: startedAt.Add(PREFETCH_SLOT_INTERVAL),
+		items:       make(map[string]*prefetchItem),
+		failures:    make(map[string]prefetchFailure),
+		wake:        make(chan struct{}, 1),
+		jitterSeed:  jitterSeed,
 	}
 	heap.Init(&s.queue)
 	return s
+}
+
+func (s *prefetchScheduler) batchTime(index int64) time.Time {
+	return s.batchOrigin.Add(time.Duration(index) * PREFETCH_SLOT_INTERVAL).Add(prefetchBatchJitter(s.jitterSeed, uint64(index)))
+}
+
+func (s *prefetchScheduler) batchAtOrAfter(t time.Time) time.Time {
+	first := s.batchTime(0)
+	if !t.After(first) {
+		return first
+	}
+	index := int64(t.Sub(s.batchOrigin) / PREFETCH_SLOT_INTERVAL)
+	if index < 0 {
+		index = 0
+	}
+	due := s.batchTime(index)
+	if due.Before(t) {
+		due = s.batchTime(index + 1)
+	}
+	return due
+}
+
+func (s *prefetchScheduler) batchAtOrBefore(t time.Time) (time.Time, bool) {
+	first := s.batchTime(0)
+	if t.Before(first) {
+		return time.Time{}, false
+	}
+	index := int64(t.Sub(s.batchOrigin) / PREFETCH_SLOT_INTERVAL)
+	due := s.batchTime(index)
+	if due.After(t) {
+		index--
+		if index < 0 {
+			return time.Time{}, false
+		}
+		due = s.batchTime(index)
+	}
+	return due, true
+}
+
+func prefetchBatchJitter(seed uint64, index uint64) time.Duration {
+	// SplitMix64 gives each batch stable jitter without mutable RNG state.
+	value := seed + index*0x9e3779b97f4a7c15
+	value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9
+	value = (value ^ (value >> 27)) * 0x94d049bb133111eb
+	value ^= value >> 31
+	jitterSteps := uint64(PREFETCH_BATCH_JITTER_MAX/time.Millisecond) + 1
+	return time.Duration(value%jitterSteps) * time.Millisecond
 }
 
 func (s *prefetchScheduler) schedule(key string, due time.Time) {
@@ -224,7 +280,7 @@ func (s *prefetchScheduler) scheduleRetryUntil(key string, now time.Time, graceD
 	if due := now.Add(delay); due.After(retryDeadline) {
 		delay = retryDeadline.Sub(now)
 	}
-	due := slotFuturePrefetchTime(now.Add(delay))
+	due := s.batchAtOrAfter(now.Add(delay))
 	if due.After(retryDeadline) {
 		due = retryDeadline
 	}
@@ -324,10 +380,10 @@ func scheduleCachedPolicyPrefetch(key string, c *CacheStruct, now time.Time) {
 	if scheduler == nil {
 		return
 	}
-	due, ok := nextPrefetchTime(c, now)
+	due, ok := scheduler.nextPrefetchTime(c, now)
 	if !ok {
 		if shouldRetryCachedPolicyPrefetch(c, now) {
-			scheduler.schedule(key, nextImmediatePrefetchTime(now))
+			scheduler.schedule(key, scheduler.batchAtOrAfter(now))
 			return
 		}
 		scheduler.remove(key)
@@ -357,7 +413,7 @@ func resetCachedPolicyPrefetchFailures(key string) {
 	}
 }
 
-func nextPrefetchTime(c *CacheStruct, now time.Time) (time.Time, bool) {
+func (s *prefetchScheduler) nextPrefetchTime(c *CacheStruct, now time.Time) (time.Time, bool) {
 	if c == nil || c.Age(now) >= CACHE_MAX_AGE {
 		return time.Time{}, false
 	}
@@ -369,12 +425,12 @@ func nextPrefetchTime(c *CacheStruct, now time.Time) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	if policy == "" {
-		return slotFuturePrefetchTime(now.Add(time.Duration(remainingTTL) * time.Second)), true
+		return s.batchAtOrAfter(now.Add(time.Duration(remainingTTL) * time.Second)), true
 	}
-	return nextPolicyPrefetchTime(now, remainingTTL), true
+	return s.nextPolicyPrefetchTime(now, remainingTTL), true
 }
 
-func nextPolicyPrefetchTime(now time.Time, remainingTTL uint32) time.Time {
+func (s *prefetchScheduler) nextPolicyPrefetchTime(now time.Time, remainingTTL uint32) time.Time {
 	expiry := now.Add(time.Duration(remainingTTL) * time.Second)
 	window := time.Duration(remainingTTL) * time.Second
 	if maxWindow := time.Duration(PREFETCH_INTERVAL) * time.Second; window > maxWindow {
@@ -382,44 +438,26 @@ func nextPolicyPrefetchTime(now time.Time, remainingTTL uint32) time.Time {
 	}
 	slots := int(window / PREFETCH_SLOT_INTERVAL)
 	if slots < 1 {
-		return now
+		return s.batchAtOrAfter(now)
 	}
 	lead := time.Duration(rand.IntN(slots)+1) * PREFETCH_SLOT_INTERVAL
-	due := ceilToPrefetchSlot(expiry.Add(-lead))
+	due := s.batchAtOrAfter(expiry.Add(-lead))
 	earliest := now
 	if remainingTTL > PREFETCH_INTERVAL {
 		earliest = now.Add(time.Duration(remainingTTL-PREFETCH_INTERVAL) * time.Second)
 	}
 	if due.Before(earliest) {
-		due = ceilToPrefetchSlot(earliest)
+		due = s.batchAtOrAfter(earliest)
 	}
 	if due.After(expiry) {
-		due = floorToPrefetchSlot(expiry)
+		if previousBatch, ok := s.batchAtOrBefore(expiry); ok {
+			due = previousBatch
+		}
 	}
 	if due.Before(now) {
-		return now
+		return s.batchAtOrAfter(now)
 	}
 	return due
-}
-
-func ceilToPrefetchSlot(t time.Time) time.Time {
-	truncated := t.Truncate(PREFETCH_SLOT_INTERVAL)
-	if truncated.Equal(t) {
-		return t
-	}
-	return truncated.Add(PREFETCH_SLOT_INTERVAL)
-}
-
-func floorToPrefetchSlot(t time.Time) time.Time {
-	return t.Truncate(PREFETCH_SLOT_INTERVAL)
-}
-
-func slotFuturePrefetchTime(t time.Time) time.Time {
-	return ceilToPrefetchSlot(t)
-}
-
-func nextImmediatePrefetchTime(now time.Time) time.Time {
-	return ceilToPrefetchSlot(now)
 }
 
 func hadPolicyWithin(c *CacheStruct, now time.Time, window time.Duration) bool {
@@ -447,7 +485,7 @@ func shouldRetryCachedPolicyPrefetch(c *CacheStruct, now time.Time) bool {
 	return !usable || policy != "" || hadPolicyWithin(c, now, POLICY_BRANCH_RECHECK)
 }
 
-func nextPrefetchTimeAfterMiss(c *CacheStruct, now time.Time) (time.Time, bool) {
+func (s *prefetchScheduler) nextPrefetchTimeAfterMiss(c *CacheStruct, now time.Time) (time.Time, bool) {
 	policy, _, remainingTTL, usable := selectCachedPolicy(c, now)
 	if !usable || remainingTTL == 0 {
 		return time.Time{}, false
@@ -455,7 +493,7 @@ func nextPrefetchTimeAfterMiss(c *CacheStruct, now time.Time) (time.Time, bool) 
 	if policy == "" && !hadPolicyWithin(c, now, POLICY_BRANCH_RECHECK) {
 		return time.Time{}, false
 	}
-	return slotFuturePrefetchTime(now.Add(time.Duration(remainingTTL) * time.Second)), true
+	return s.batchAtOrAfter(now.Add(time.Duration(remainingTTL) * time.Second)), true
 }
 
 func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *CacheStruct, result domainResult, now time.Time) {
@@ -468,7 +506,7 @@ func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *C
 		observePrefetch("discard")
 		logPrefetchedPolicyDowngrade(key, c, updated, now)
 		polCache.Set(key, updated)
-		if due, ok := nextPrefetchTime(updated, now); ok {
+		if due, ok := scheduler.nextPrefetchTime(updated, now); ok {
 			scheduler.schedule(key, due)
 		}
 		if err := polCache.Save(false); err != nil {
@@ -623,7 +661,7 @@ func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchSchedule
 				}
 			} else if _, _, _, ok := selectCachedPolicy(c.Value, refreshedAt); ok {
 				scheduler.resetFailures(c.Key)
-				if due, ok := nextPrefetchTimeAfterMiss(c.Value, refreshedAt); ok {
+				if due, ok := scheduler.nextPrefetchTimeAfterMiss(c.Value, refreshedAt); ok {
 					scheduler.schedule(c.Key, due)
 				} else {
 					scheduleCachedPolicyPrefetch(c.Key, c.Value, refreshedAt)

@@ -1772,8 +1772,54 @@ func TestMergeCacheResultUsesDailyRecheckForMissingSecondaryBranches(t *testing.
 	}
 }
 
+func TestPrefetchBatchesUseStartupPhaseAndJitter(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 16, 6, 30, 3, 123456789, time.UTC)
+	scheduler := newPrefetchSchedulerAt(startedAt, 0x5eed)
+	first := scheduler.batchAtOrAfter(startedAt)
+	firstNominal := startedAt.Add(PREFETCH_SLOT_INTERVAL)
+	if first.Before(firstNominal) || first.After(firstNominal.Add(PREFETCH_BATCH_JITTER_MAX)) {
+		t.Fatalf("first batch = %s, want between %s and %s", first, firstNominal, firstNominal.Add(PREFETCH_BATCH_JITTER_MAX))
+	}
+	if first.Equal(first.Truncate(PREFETCH_SLOT_INTERVAL)) {
+		t.Fatalf("first batch unexpectedly aligned to a wall-clock slot: %s", first)
+	}
+	if _, ok := scheduler.batchAtOrBefore(first.Add(-time.Nanosecond)); ok {
+		t.Fatal("expected no batch before the startup-delayed first batch")
+	}
+
+	jitters := make(map[time.Duration]struct{})
+	previous := first
+	for index := int64(0); index < 32; index++ {
+		batch := scheduler.batchTime(index)
+		nominal := scheduler.batchOrigin.Add(time.Duration(index) * PREFETCH_SLOT_INTERVAL)
+		jitter := batch.Sub(nominal)
+		if jitter < 0 || jitter > PREFETCH_BATCH_JITTER_MAX {
+			t.Fatalf("batch %d jitter = %s, want 0..%s", index, jitter, PREFETCH_BATCH_JITTER_MAX)
+		}
+		if jitter%time.Millisecond != 0 {
+			t.Fatalf("batch %d jitter = %s, want whole milliseconds", index, jitter)
+		}
+		jitters[jitter] = struct{}{}
+		if index != 0 {
+			interval := batch.Sub(previous)
+			if interval < PREFETCH_SLOT_INTERVAL-PREFETCH_BATCH_JITTER_MAX || interval > PREFETCH_SLOT_INTERVAL+PREFETCH_BATCH_JITTER_MAX {
+				t.Fatalf("batch %d interval = %s, outside jitter bounds", index, interval)
+			}
+		}
+		previous = batch
+	}
+	if len(jitters) < 2 {
+		t.Fatal("expected per-batch jitter to vary")
+	}
+	target := startedAt.Add(45 * time.Second)
+	if firstDue, secondDue := scheduler.batchAtOrAfter(target), scheduler.batchAtOrAfter(target); !firstDue.Equal(secondDue) {
+		t.Fatalf("expected stable jitter for repeated scheduling, got %s and %s", firstDue, secondDue)
+	}
+}
+
 func TestNextPrefetchTime(t *testing.T) {
 	now := time.Now()
+	scheduler := newPrefetchSchedulerAt(now, 1)
 	c := &CacheStruct{
 		Expirable: &cache.Expirable{ExpiresAt: now.Add(5 * time.Minute)},
 		Dane: PolicyBranch{
@@ -1783,14 +1829,14 @@ func TestNextPrefetchTime(t *testing.T) {
 		},
 	}
 
-	due, ok := nextPrefetchTime(c, now)
+	due, ok := scheduler.nextPrefetchTime(c, now)
 	if !ok {
 		t.Fatal("expected policy to be scheduled for prefetch")
 	}
-	assertPolicyPrefetchDueInWindow(t, due, now, 300)
+	assertPolicyPrefetchDueInWindow(t, scheduler, due, now, 300)
 
 	c.Dane.ExpiresAt = now.Add(-time.Second)
-	due, ok = nextPrefetchTime(c, now)
+	due, ok = scheduler.nextPrefetchTime(c, now)
 	if ok {
 		t.Fatalf("expected expired policy not to be scheduled for background prefetch, got %s", due)
 	}
@@ -1805,7 +1851,7 @@ func TestNextPrefetchTime(t *testing.T) {
 		TTL:       600,
 		ExpiresAt: now.Add(-time.Second),
 	}
-	due, ok = nextPrefetchTime(c, now)
+	due, ok = scheduler.nextPrefetchTime(c, now)
 	if ok {
 		t.Fatalf("expected unservable split cache entry not to be scheduled, got %s", due)
 	}
@@ -1830,13 +1876,13 @@ func TestFreshNoPolicyDoesNotEnterPrefetchLoop(t *testing.T) {
 		},
 	}
 
-	if due, ok := nextPrefetchTime(c, now); ok {
+	if due, ok := scheduler.nextPrefetchTime(c, now); ok {
 		t.Fatalf("expected fresh no-policy entry not to schedule prefetch, got %s", due)
 	}
 	if shouldRetryCachedPolicyPrefetch(c, now) {
 		t.Fatal("expected fresh no-policy entry not to enter retry prefetch")
 	}
-	if due, ok := nextPrefetchTimeAfterMiss(c, now); ok {
+	if due, ok := scheduler.nextPrefetchTimeAfterMiss(c, now); ok {
 		t.Fatalf("expected fresh no-policy miss not to schedule another prefetch, got %s", due)
 	}
 
@@ -1846,20 +1892,21 @@ func TestFreshNoPolicyDoesNotEnterPrefetchLoop(t *testing.T) {
 	}
 }
 
-func assertPolicyPrefetchDueInWindow(t *testing.T, due time.Time, now time.Time, ttl uint32) {
+func assertPolicyPrefetchDueInWindow(t *testing.T, scheduler *prefetchScheduler, due time.Time, now time.Time, ttl uint32) {
 	t.Helper()
 	earliest := now.Add(time.Duration(ttl-PREFETCH_INTERVAL) * time.Second)
 	expiry := now.Add(time.Duration(ttl) * time.Second)
 	if due.Before(earliest) || due.After(expiry) {
 		t.Fatalf("expected prefetch due between %s and %s, got %s", earliest, expiry, due)
 	}
-	if !due.Equal(due.Truncate(PREFETCH_SLOT_INTERVAL)) {
-		t.Fatalf("expected prefetch due time to align to %s slot, got %s", PREFETCH_SLOT_INTERVAL, due)
+	if !scheduler.batchAtOrAfter(due).Equal(due) {
+		t.Fatalf("expected prefetch due time to align to an instance batch, got %s", due)
 	}
 }
 
 func TestNextPrefetchTimeAfterMissWaitsForUsablePolicyExpiry(t *testing.T) {
 	now := time.Now()
+	scheduler := newPrefetchSchedulerAt(now, 2)
 	c := &CacheStruct{
 		Expirable: &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
 		Dane: PolicyBranch{
@@ -1869,20 +1916,20 @@ func TestNextPrefetchTimeAfterMissWaitsForUsablePolicyExpiry(t *testing.T) {
 		},
 	}
 
-	due, ok := nextPrefetchTimeAfterMiss(c, now)
+	due, ok := scheduler.nextPrefetchTimeAfterMiss(c, now)
 	if !ok {
 		t.Fatal("expected still-usable policy to be retried at expiry")
 	}
 	expectedEarliest := now.Add(20 * time.Second)
-	if due.Before(expectedEarliest) || due.After(expectedEarliest.Add(PREFETCH_SLOT_INTERVAL)) {
+	if due.Before(expectedEarliest) || due.After(expectedEarliest.Add(PREFETCH_SLOT_INTERVAL+PREFETCH_BATCH_JITTER_MAX)) {
 		t.Fatalf("unexpected retry time: got %s want about %s", due, expectedEarliest)
 	}
-	if !due.Equal(due.Truncate(PREFETCH_SLOT_INTERVAL)) {
-		t.Fatalf("expected retry time to align to %s slot, got %s", PREFETCH_SLOT_INTERVAL, due)
+	if !scheduler.batchAtOrAfter(due).Equal(due) {
+		t.Fatalf("expected retry time to align to an instance batch, got %s", due)
 	}
 
 	c.Dane.ExpiresAt = now.Add(-time.Second)
-	due, ok = nextPrefetchTimeAfterMiss(c, now)
+	due, ok = scheduler.nextPrefetchTimeAfterMiss(c, now)
 	if ok {
 		t.Fatalf("expected expired policy miss not to be retried, got %s", due)
 	}
@@ -1890,11 +1937,11 @@ func TestNextPrefetchTimeAfterMissWaitsForUsablePolicyExpiry(t *testing.T) {
 
 func TestScheduleCachedPolicyPrefetchRetriesUnusableSplitEntry(t *testing.T) {
 	oldScheduler := activePrefetchScheduler.Load()
-	scheduler := newPrefetchScheduler()
+	now := time.Now()
+	scheduler := newPrefetchSchedulerAt(now, 3)
 	activePrefetchScheduler.Store(scheduler)
 	defer activePrefetchScheduler.Store(oldScheduler)
 
-	now := time.Now()
 	c := &CacheStruct{
 		Expirable: &cache.Expirable{ExpiresAt: now.Add(5 * time.Minute)},
 		Dane: PolicyBranch{
@@ -1915,11 +1962,11 @@ func TestScheduleCachedPolicyPrefetchRetriesUnusableSplitEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("expected unservable split entry to enter prefetch retry")
 	}
-	if due.Before(now) || due.After(now.Add(PREFETCH_SLOT_INTERVAL)) {
-		t.Fatalf("expected split entry retry in the next slot, got %s from %s", due, now)
+	if due.Before(now.Add(PREFETCH_SLOT_INTERVAL)) || due.After(now.Add(PREFETCH_SLOT_INTERVAL+PREFETCH_BATCH_JITTER_MAX)) {
+		t.Fatalf("expected split entry retry in the first instance batch, got %s from %s", due, now)
 	}
-	if !due.Equal(due.Truncate(PREFETCH_SLOT_INTERVAL)) {
-		t.Fatalf("expected split entry retry to align to %s slot, got %s", PREFETCH_SLOT_INTERVAL, due)
+	if !scheduler.batchAtOrAfter(due).Equal(due) {
+		t.Fatalf("expected split entry retry to align to an instance batch, got %s", due)
 	}
 }
 
@@ -2052,28 +2099,30 @@ func TestPrefetchDuePoliciesBacksOffNearExpiryMtaStsFailure(t *testing.T) {
 	}
 	delay := due.Sub(now)
 	expectedDelay := time.Duration(PREFETCH_INTERVAL) * time.Second
-	if delay < expectedDelay || delay > expectedDelay+PREFETCH_SLOT_INTERVAL {
+	if delay < expectedDelay || delay > expectedDelay+PREFETCH_SLOT_INTERVAL+PREFETCH_BATCH_JITTER_MAX {
 		t.Fatalf("expected first retry after about %d seconds, got %s", PREFETCH_INTERVAL, delay)
 	}
 }
 
 func TestPrefetchRetryBackoffAndDiscardDeadline(t *testing.T) {
 	now := time.Unix(1000, 0)
-	scheduler := newPrefetchScheduler()
+	scheduler := newPrefetchSchedulerAt(now, 4)
 	key := "failed.example"
 
 	due, attempts, delay, ok := scheduler.scheduleRetry(key, now)
-	if !ok || attempts != 1 || delay != 30*time.Second || !due.Equal(now.Add(30*time.Second)) {
+	if !ok || attempts != 1 || delay < 30*time.Second || delay > 30*time.Second+PREFETCH_BATCH_JITTER_MAX {
 		t.Fatalf("unexpected first retry: due=%s attempts=%d delay=%s ok=%v", due, attempts, delay, ok)
 	}
 
-	due, attempts, delay, ok = scheduler.scheduleRetry(key, now.Add(30*time.Second))
-	if !ok || attempts != 2 || delay != time.Minute || !due.Equal(now.Add(90*time.Second)) {
+	secondAttempt := due
+	due, attempts, delay, ok = scheduler.scheduleRetry(key, secondAttempt)
+	if !ok || attempts != 2 || delay < time.Minute || delay > time.Minute+PREFETCH_SLOT_INTERVAL+PREFETCH_BATCH_JITTER_MAX {
 		t.Fatalf("unexpected second retry: due=%s attempts=%d delay=%s ok=%v", due, attempts, delay, ok)
 	}
 
-	due, attempts, delay, ok = scheduler.scheduleRetry(key, now.Add(90*time.Second))
-	if !ok || attempts != 3 || delay != 2*time.Minute || !due.Equal(now.Add(210*time.Second)) {
+	thirdAttempt := due
+	due, attempts, delay, ok = scheduler.scheduleRetry(key, thirdAttempt)
+	if !ok || attempts != 3 || delay < 2*time.Minute || delay > 2*time.Minute+PREFETCH_SLOT_INTERVAL+PREFETCH_BATCH_JITTER_MAX {
 		t.Fatalf("unexpected third retry: due=%s attempts=%d delay=%s ok=%v", due, attempts, delay, ok)
 	}
 
