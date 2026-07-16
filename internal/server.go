@@ -790,10 +790,10 @@ func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruc
 			var delivered bool
 			switch policy {
 			case "":
-				slog.Debug("No policy found", "origin", "cache", "domain", domain, "ttl", ttl)
+				slog.Info("No policy found", "origin", "cache", "domain", domain, "ttl", ttl)
 				delivered = writeConnectionResponse(conn, NS_NOTFOUND)
 			default:
-				slog.Debug("Evaluated policy", "origin", "cache", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
+				slog.Info("Evaluated policy", "origin", "cache", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
 				var res string
 				if withTlsRpt {
 					res = policy + " " + report
@@ -1134,13 +1134,13 @@ func replySocketmap(conn net.Conn, domain string, policy string, report string, 
 	var delivered bool
 	switch policy {
 	case "":
-		slog.Debug("No policy found", "origin", "network", "domain", domain, "ttl", ttl)
+		slog.Info("No policy found", "origin", "network", "domain", domain, "ttl", ttl)
 		delivered = writeConnectionResponse(conn, NS_NOTFOUND)
 	case "TEMP":
 		slog.Warn("Evaluating policy failed temporarily", "origin", "network", "domain", domain, "ttl", ttl)
 		delivered = writeConnectionResponse(conn, NS_TEMP)
 	default:
-		slog.Debug("Evaluated policy", "origin", "network", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
+		slog.Info("Evaluated policy", "origin", "network", "domain", domain, "policy", firstWord(policy), "ttl", ttl)
 		res := policy
 		if withTlsRpt {
 			res = res + " " + report
