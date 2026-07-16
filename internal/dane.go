@@ -328,10 +328,8 @@ func checkMxAddress(ctx context.Context, mx string, resolverAddress string, reco
 		}
 		return MxNotSec
 	case dns.RcodeNameError:
-		if r.MsgHdr.AuthenticatedData {
-			return MxNotSec
-		}
-		return MxFail
+		// NXDOMAIN is a completed negative response, not a temporary DNS error.
+		return MxNotSec
 	default:
 		return MxFail
 	}

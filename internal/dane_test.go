@@ -422,6 +422,218 @@ func TestDaneUnauthenticatedSuccessfulMxAddressLookupIsNotTemporary(t *testing.T
 	}
 }
 
+func TestDaneUnauthenticatedNxdomainForOneMxDoesNotBlockOthers(t *testing.T) {
+	var validTlsaQueries atomic.Int32
+	var unreachableTlsaQueries atomic.Int32
+
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+
+		q := r.Question[0]
+		switch {
+		case q.Name == "mixed.test." && q.Qtype == dns.TypeMX:
+			msg.AuthenticatedData = false
+			msg.Answer = append(msg.Answer,
+				&dns.MX{
+					Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
+					Preference: 10,
+					Mx:         "missing.mixed.test.",
+				},
+				&dns.MX{
+					Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
+					Preference: 20,
+					Mx:         "mx.reachable.test.",
+				},
+			)
+		case q.Name == "missing.mixed.test." && (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA):
+			msg.AuthenticatedData = false
+			msg.Rcode = dns.RcodeNameError
+		case q.Name == "mx.reachable.test." && q.Qtype == dns.TypeA:
+			msg.AuthenticatedData = true
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+				A:   net.ParseIP("192.0.2.10"),
+			})
+		case q.Name == "_25._tcp.mx.reachable.test." && q.Qtype == dns.TypeTLSA:
+			validTlsaQueries.Add(1)
+			msg.AuthenticatedData = true
+			msg.Rcode = dns.RcodeNameError
+		case q.Name == "_25._tcp.missing.mixed.test." && q.Qtype == dns.TypeTLSA:
+			unreachableTlsaQueries.Add(1)
+			msg.AuthenticatedData = true
+			msg.Rcode = dns.RcodeNameError
+		default:
+			msg.AuthenticatedData = true
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = w.WriteMsg(msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+
+	policy, ttl, err := checkDaneOnce(context.Background(), "mixed.test", packetConn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("expected an unsigned NXDOMAIN MX target not to block reachable MX hosts, got %v", err)
+	}
+	if policy != "" || ttl != 0 {
+		t.Fatalf("expected no DANE policy for the unsigned mixed MX set, got policy=%q ttl=%d", policy, ttl)
+	}
+	if got := validTlsaQueries.Load(); got != 1 {
+		t.Fatalf("expected one TLSA lookup for the reachable MX, got %d", got)
+	}
+	if got := unreachableTlsaQueries.Load(); got != 0 {
+		t.Fatalf("expected no TLSA lookup for the unreachable MX, got %d", got)
+	}
+}
+
+func TestDaneUnauthenticatedNxdomainPreventsMandatoryDane(t *testing.T) {
+	var validTlsaQueries atomic.Int32
+	var unreachableTlsaQueries atomic.Int32
+
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.AuthenticatedData = true
+
+		q := r.Question[0]
+		switch {
+		case q.Name == "mixed-secure.test." && q.Qtype == dns.TypeMX:
+			msg.Answer = append(msg.Answer,
+				&dns.MX{
+					Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
+					Preference: 10,
+					Mx:         "missing.unsigned.test.",
+				},
+				&dns.MX{
+					Hdr:        dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
+					Preference: 20,
+					Mx:         "mx.secure.test.",
+				},
+			)
+		case q.Name == "missing.unsigned.test." && (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA):
+			msg.AuthenticatedData = false
+			msg.Rcode = dns.RcodeNameError
+		case q.Name == "mx.secure.test." && q.Qtype == dns.TypeA:
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+				A:   net.ParseIP("192.0.2.20"),
+			})
+		case q.Name == "_25._tcp.mx.secure.test." && q.Qtype == dns.TypeTLSA:
+			validTlsaQueries.Add(1)
+			msg.Answer = append(msg.Answer, &dns.TLSA{
+				Hdr:          dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTLSA, Class: dns.ClassINET, Ttl: 300},
+				Usage:        3,
+				Selector:     1,
+				MatchingType: 1,
+				Certificate:  strings.Repeat("a", 64),
+			})
+		case q.Name == "_25._tcp.missing.unsigned.test." && q.Qtype == dns.TypeTLSA:
+			unreachableTlsaQueries.Add(1)
+			msg.Rcode = dns.RcodeNameError
+		default:
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = w.WriteMsg(msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+
+	policy, ttl, err := checkDaneOnce(context.Background(), "mixed-secure.test", packetConn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("expected an unsigned NXDOMAIN MX target not to fail DANE discovery, got %v", err)
+	}
+	if policy != "dane" || ttl != 300 {
+		t.Fatalf("expected opportunistic DANE with TTL 300, got policy=%q ttl=%d", policy, ttl)
+	}
+	if got := validTlsaQueries.Load(); got != 1 {
+		t.Fatalf("expected one TLSA lookup for the reachable MX, got %d", got)
+	}
+	if got := unreachableTlsaQueries.Load(); got != 0 {
+		t.Fatalf("expected no TLSA lookup for the unreachable MX, got %d", got)
+	}
+}
+
+func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+
+		q := r.Question[0]
+		switch q.Name {
+		case "secure.test.":
+			msg.AuthenticatedData = true
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+				A:   net.ParseIP("192.0.2.30"),
+			})
+		case "unsigned.test.":
+			msg.AuthenticatedData = false
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+				A:   net.ParseIP("192.0.2.31"),
+			})
+		case "secure-nxdomain.test.":
+			msg.AuthenticatedData = true
+			msg.Rcode = dns.RcodeNameError
+		case "unsigned-nxdomain.test.":
+			msg.AuthenticatedData = false
+			msg.Rcode = dns.RcodeNameError
+		case "servfail.test.":
+			msg.AuthenticatedData = false
+			msg.Rcode = dns.RcodeServerFailure
+		default:
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = w.WriteMsg(msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+
+	tests := []struct {
+		name   string
+		host   string
+		status uint8
+	}{
+		{name: "authenticated address", host: "secure.test", status: MxOk},
+		{name: "unauthenticated address", host: "unsigned.test", status: MxNotSec},
+		{name: "authenticated nxdomain", host: "secure-nxdomain.test", status: MxNotSec},
+		{name: "unauthenticated nxdomain", host: "unsigned-nxdomain.test", status: MxNotSec},
+		{name: "servfail", host: "servfail.test", status: MxFail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := checkMxAddress(context.Background(), tt.host, packetConn.LocalAddr().String(), dns.TypeA); got != tt.status {
+				t.Fatalf("checkMxAddress(%q) = %d, want %d", tt.host, got, tt.status)
+			}
+		})
+	}
+}
+
 func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
 	var tlsaQueries atomic.Int32
 	mux := dns.NewServeMux()
