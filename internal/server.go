@@ -446,6 +446,58 @@ func listenSystemdSocket() ([]net.Listener, bool, error) {
 	return listeners, true, nil
 }
 
+func configuredAddressProvidedBySystemd(address string, addressConfigured bool, listeners []net.Listener) bool {
+	address = strings.TrimSpace(address)
+	if !addressConfigured || address == "" {
+		return true
+	}
+	for _, listener := range listeners {
+		if listener != nil && listenerAddressMatchesConfigured(address, listener.Addr()) {
+			return true
+		}
+	}
+	return false
+}
+
+func listenerAddressMatchesConfigured(address string, listenerAddress net.Addr) bool {
+	if listenerAddress == nil {
+		return false
+	}
+	if strings.HasPrefix(address, "unix:") {
+		return strings.HasPrefix(listenerAddress.Network(), "unix") && address[5:] == listenerAddress.String()
+	}
+	if !strings.HasPrefix(listenerAddress.Network(), "tcp") {
+		return false
+	}
+	if address == listenerAddress.String() {
+		return true
+	}
+
+	tcpAddress, ok := listenerAddress.(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port != tcpAddress.Port {
+		return false
+	}
+	if host == "" {
+		return tcpAddress.IP.IsUnspecified()
+	}
+	if zoneIndex := strings.LastIndexByte(host, '%'); zoneIndex >= 0 {
+		if host[zoneIndex+1:] != tcpAddress.Zone {
+			return false
+		}
+		host = host[:zoneIndex]
+	}
+	configuredIP := net.ParseIP(host)
+	return configuredIP != nil && configuredIP.Equal(tcpAddress.IP)
+}
+
 func serveSocketmapListener(l net.Listener) {
 	defer serverWg.Done()
 	limited := newLimitedListener(l, SOCKETMAP_MAX_CONNECTIONS)
@@ -650,6 +702,9 @@ func startServer() error {
 	}
 
 	if !inherited {
+		if strings.TrimSpace(config.Server.Address) == "" {
+			return errors.New("start socketmap server: server.address must not be empty without systemd socket activation")
+		}
 		var directListener net.Listener
 		directListener, err = listenConfiguredAddress(config.Server.Address, config.Server.SocketPermissions)
 		if err == nil {
@@ -675,7 +730,9 @@ func startServer() error {
 			}
 			slog.Info("Server listening", "activation", "systemd", "network", addr.Network(), "address", addr.String())
 		}
-		slog.Warn("Ignoring configured server.address because systemd socket activation is active", "configured_address", config.Server.Address)
+		if !configuredAddressProvidedBySystemd(config.Server.Address, config.Server.addressConfigured, socketmapListeners) {
+			slog.Warn("Ignoring configured server.address because systemd socket activation is active", "configured_address", config.Server.Address)
+		}
 		slog.Info("Listening on all systemd-provided sockets", "count", len(socketmapListeners))
 	} else {
 		addr := socketmapListeners[0].Addr()
@@ -1361,6 +1418,24 @@ var prefetchDomainOnce = prefetchDomainOnceImpl
 
 type queryBranchOptions struct {
 	renewBefore uint32
+	prefetch    bool
+}
+
+type policyLookupLogContextKey struct{}
+
+func withPrefetchPolicyLookupLogging(ctx context.Context) context.Context {
+	return context.WithValue(ctx, policyLookupLogContextKey{}, true)
+}
+
+func policyLookupLogLevel(ctx context.Context) slog.Level {
+	if prefetch, _ := ctx.Value(policyLookupLogContextKey{}).(bool); prefetch {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
+
+func logPolicyLookupFailure(ctx context.Context, message string, args ...any) {
+	slog.Log(ctx, policyLookupLogLevel(ctx), message, args...)
 }
 
 func normalizeDomain(domain string) string {
@@ -1396,6 +1471,7 @@ func prefetchDomain(domain string, c *CacheStruct) domainResult {
 func prefetchDomainOnceImpl(domain string, c *CacheStruct) domainResult {
 	return queryDomainBranchesWithOptions(domain, c, time.Now(), queryBranchOptions{
 		renewBefore: PREFETCH_INTERVAL,
+		prefetch:    true,
 	})
 }
 
@@ -1432,6 +1508,9 @@ func queryDomainBranches(domain string, c *CacheStruct, now time.Time) domainRes
 func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time, opts queryBranchOptions) domainResult {
 	ctx, cancel := context.WithTimeout(bgCtx, time.Duration(POLICY_ATTEMPTS)*REQUEST_TIMEOUT+time.Second)
 	defer cancel()
+	if opts.prefetch {
+		ctx = withPrefetchPolicyLookupLogging(ctx)
+	}
 	var wg sync.WaitGroup
 	var (
 		danePolicy        string

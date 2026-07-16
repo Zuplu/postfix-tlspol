@@ -12,7 +12,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
-	"log/slog"
 	"mime"
 	"net/http"
 	"strconv"
@@ -365,7 +364,7 @@ func isValidMtaStsPolicyMediaType(contentType string) bool {
 func checkMtaSts(ctx context.Context, domain string, mayRetry bool) (string, string, uint32) {
 	resolverAddress, err := config.Dns.GetResolverAddress()
 	if err != nil {
-		slog.Warn("DNS resolver configuration error during MTA-STS lookup", "domain", domain, "error", err)
+		logPolicyLookupFailure(ctx, "DNS resolver configuration error during MTA-STS lookup", "domain", domain, "error", err)
 		return "TEMP", "", 0
 	}
 	attempts := 1
@@ -381,7 +380,7 @@ func checkMtaSts(ctx context.Context, domain string, mayRetry bool) (string, str
 			return "TEMP", "", 0
 		}
 		if attempt == attempts {
-			slog.Warn("Error during MTA-STS lookup", "domain", domain, "error", err, "attempts", attempts)
+			logPolicyLookupFailure(ctx, "Error during MTA-STS lookup", "domain", domain, "error", err, "attempts", attempts)
 			return "TEMP", "", 0
 		}
 		if !waitPolicyRetry(ctx, attempt) {

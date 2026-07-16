@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -60,6 +61,98 @@ func (l *scriptedListener) Addr() net.Addr {
 }
 
 type staticAddr string
+
+func TestConfiguredAddressProvidedBySystemd(t *testing.T) {
+	tcp4 := &scriptedListener{addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8642}}
+	tcp6 := &scriptedListener{addr: &net.TCPAddr{IP: net.ParseIP("fe80::1"), Port: 8642, Zone: "lo"}}
+	unix := &scriptedListener{addr: &net.UnixAddr{Name: "/run/postfix-tlspol/tlspol.sock", Net: "unix"}}
+
+	tests := []struct {
+		name              string
+		address           string
+		addressConfigured bool
+		listeners         []net.Listener
+		want              bool
+	}{
+		{name: "unset address", address: "127.0.0.1:9999", listeners: []net.Listener{tcp4}, want: true},
+		{name: "empty address", addressConfigured: true, listeners: []net.Listener{tcp4}, want: true},
+		{name: "matching first TCP listener", address: "127.0.0.1:8642", addressConfigured: true, listeners: []net.Listener{tcp4, unix}, want: true},
+		{name: "matching later Unix listener", address: "unix:/run/postfix-tlspol/tlspol.sock", addressConfigured: true, listeners: []net.Listener{tcp4, unix}, want: true},
+		{name: "matching scoped IPv6 listener", address: "[fe80::1%lo]:8642", addressConfigured: true, listeners: []net.Listener{tcp6}, want: true},
+		{name: "different TCP port", address: "127.0.0.1:8643", addressConfigured: true, listeners: []net.Listener{tcp4}, want: false},
+		{name: "different TCP address", address: "127.0.0.2:8642", addressConfigured: true, listeners: []net.Listener{tcp4}, want: false},
+		{name: "different Unix path", address: "unix:/run/postfix-tlspol/other.sock", addressConfigured: true, listeners: []net.Listener{unix}, want: false},
+		{name: "no active listeners", address: "127.0.0.1:8642", addressConfigured: true, want: false},
+		{name: "nil listener", address: "127.0.0.1:8642", addressConfigured: true, listeners: []net.Listener{nil}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := configuredAddressProvidedBySystemd(tt.address, tt.addressConfigured, tt.listeners); got != tt.want {
+				t.Fatalf("configuredAddressProvidedBySystemd(%q) = %v, want %v", tt.address, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPolicyLookupLogLevel(t *testing.T) {
+	if got := policyLookupLogLevel(context.Background()); got != slog.LevelWarn {
+		t.Fatalf("ordinary policy lookup log level = %s, want WARN", got)
+	}
+	if got := policyLookupLogLevel(withPrefetchPolicyLookupLogging(context.Background())); got != slog.LevelDebug {
+		t.Fatalf("prefetch policy lookup log level = %s, want DEBUG", got)
+	}
+}
+
+func TestPrefetchedPolicyDowngradeTransitions(t *testing.T) {
+	policies := map[string]string{
+		"dane-only": "dane-only",
+		"dane":      "dane",
+		"sts":       "secure match=mx.example servername=hostname",
+		"none":      "",
+	}
+	warnings := map[string]bool{
+		"dane-only>dane": true,
+		"dane-only>sts":  true,
+		"dane-only>none": true,
+		"dane>sts":       true,
+		"dane>none":      true,
+		"sts>none":       true,
+	}
+
+	for previousName, previous := range policies {
+		for currentName, current := range policies {
+			transition := previousName + ">" + currentName
+			_, _, got := isPrefetchedPolicyDowngrade(previous, current)
+			if got != warnings[transition] {
+				t.Errorf("transition %s warning = %v, want %v", transition, got, warnings[transition])
+			}
+		}
+	}
+	if _, _, got := isPrefetchedPolicyDowngrade("TEMP", ""); got {
+		t.Fatal("temporary lookup result must not be treated as a downgrade")
+	}
+}
+
+func TestCachedPolicyForPrefetchTransitionRetainsExpiredDaneHistory(t *testing.T) {
+	now := time.Now()
+	cached := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(-25 * time.Hour)},
+		Dane: PolicyBranch{
+			Policy:    "dane-only",
+			TTL:       300,
+			ExpiresAt: now.Add(-25 * time.Hour),
+		},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.example servername=hostname",
+			TTL:       86400,
+			ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	if got := cachedPolicyForPrefetchTransition(cached, now); got != "dane-only" {
+		t.Fatalf("historical policy = %q, want dane-only", got)
+	}
+}
 
 func clearCacheHitCountersForTest() {
 	cacheHitCounters.Range(func(key, _ any) bool {

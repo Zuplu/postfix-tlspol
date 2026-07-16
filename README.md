@@ -167,6 +167,8 @@ Configuration example for `/etc/postfix-tlspol/config.yaml`:
 server:
   # server:port to listen as a socketmap server
   # or unix:/run/postfix-tlspol/tlspol.sock for Unix Domain Socket
+  # may be empty when systemd socket activation supplies all listeners
+  # when set with socket activation, it should match one ListenStream address
   address: 127.0.0.1:8642
 
   # optional HTTP-only metrics endpoint, e.g. 127.0.0.1:9642

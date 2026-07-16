@@ -36,6 +36,7 @@ type ServerConfig struct {
 	SocketPermissions os.FileMode `yaml:"socket-permissions"`
 	TlsRpt            bool        `yaml:"tlsrpt"`
 	Prefetch          bool        `yaml:"prefetch"`
+	addressConfigured bool
 }
 
 func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
@@ -52,6 +53,11 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
 	}
+	var fields map[string]any
+	if err := unmarshal(&fields); err != nil {
+		return err
+	}
+	_, c.addressConfigured = fields["address"]
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(strings.ToLower(c.NamedLogLevel))); err != nil {
 		return fmt.Errorf("invalid server.log-level %q: %w", c.NamedLogLevel, err)
@@ -278,7 +284,9 @@ func validateConfig(config *Config) error {
 	config.Server.Address = strings.TrimSpace(config.Server.Address)
 	config.Server.MetricsAddress = strings.TrimSpace(config.Server.MetricsAddress)
 	config.Server.CacheFile = strings.TrimSpace(config.Server.CacheFile)
-	if err := validateListenAddress("server.address", config.Server.Address, false); err != nil {
+	// An empty address is valid for systemd-only deployments. startServer rejects
+	// it when no socket-activated listener is available.
+	if err := validateListenAddress("server.address", config.Server.Address, true); err != nil {
 		return err
 	}
 	if err := validateListenAddress("server.metrics-address", config.Server.MetricsAddress, true); err != nil {

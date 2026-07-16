@@ -76,10 +76,6 @@ func TestLoadConfigRejectsUnknownAndInvalidValues(t *testing.T) {
 			body: "server:\n  address: 127.0.0.1:8642\n  log-format: xml\n",
 		},
 		{
-			name: "empty listener",
-			body: "server:\n  address: ''\n",
-		},
-		{
 			name: "invalid resolver",
 			body: "server:\n  address: 127.0.0.1:8642\ndns:\n  address: 127.0.0.1\n",
 		},
@@ -102,6 +98,42 @@ func TestLoadConfigRejectsUnknownAndInvalidValues(t *testing.T) {
 				t.Fatal("expected invalid configuration to be rejected")
 			}
 		})
+	}
+}
+
+func TestLoadConfigAllowsEmptyAddressForSystemdActivation(t *testing.T) {
+	initializeTestDefaultConfig(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  address: ''\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("load systemd-only configuration: %v", err)
+	}
+	if cfg.Server.Address != "" {
+		t.Fatalf("expected empty server address, got %q", cfg.Server.Address)
+	}
+	if !cfg.Server.addressConfigured {
+		t.Fatal("expected explicit empty address to be tracked as configured")
+	}
+}
+
+func TestLoadConfigTracksUnsetAddress(t *testing.T) {
+	initializeTestDefaultConfig(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  prefetch: true\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("load configuration with default address: %v", err)
+	}
+	if cfg.Server.Address == "" {
+		t.Fatal("expected the default server address to remain available")
+	}
+	if cfg.Server.addressConfigured {
+		t.Fatal("expected omitted address to be tracked as unset")
 	}
 }
 

@@ -28,6 +28,67 @@ const (
 var semaphore chan struct{}
 var activePrefetchScheduler atomic.Pointer[prefetchScheduler]
 
+type prefetchedPolicyLevel uint8
+
+const (
+	prefetchedPolicyNone prefetchedPolicyLevel = iota
+	prefetchedPolicyMtaSts
+	prefetchedPolicyDane
+	prefetchedPolicyDaneOnly
+)
+
+func classifyPrefetchedPolicy(policy string) (string, prefetchedPolicyLevel, bool) {
+	switch firstWord(policy) {
+	case "":
+		return "none", prefetchedPolicyNone, true
+	case "secure":
+		return "sts", prefetchedPolicyMtaSts, true
+	case "dane":
+		return "dane", prefetchedPolicyDane, true
+	case "dane-only":
+		return "dane-only", prefetchedPolicyDaneOnly, true
+	default:
+		return "", prefetchedPolicyNone, false
+	}
+}
+
+func isPrefetchedPolicyDowngrade(previous string, current string) (string, string, bool) {
+	previousName, previousLevel, previousOK := classifyPrefetchedPolicy(previous)
+	currentName, currentLevel, currentOK := classifyPrefetchedPolicy(current)
+	return previousName, currentName, previousOK && currentOK && currentLevel < previousLevel
+}
+
+func cachedPolicyForPrefetchTransition(c *CacheStruct, now time.Time) string {
+	if c == nil {
+		return ""
+	}
+	if policy, _, _, ok := selectCachedPolicy(c, now); ok {
+		if _, _, recognized := classifyPrefetchedPolicy(policy); recognized {
+			return policy
+		}
+	}
+	if _, _, recognized := classifyPrefetchedPolicy(c.Policy); recognized && c.Policy != "" {
+		return c.Policy
+	}
+	if _, _, recognized := classifyPrefetchedPolicy(c.Dane.Policy); recognized && c.Dane.Policy != "" {
+		return c.Dane.Policy
+	}
+	if _, _, recognized := classifyPrefetchedPolicy(c.MtaSts.Policy); recognized && c.MtaSts.Policy != "" {
+		return c.MtaSts.Policy
+	}
+	return ""
+}
+
+func logPrefetchedPolicyDowngrade(domain string, previous *CacheStruct, current *CacheStruct, now time.Time) {
+	previousPolicy := cachedPolicyForPrefetchTransition(previous, now)
+	currentPolicy := cachedPolicyForPrefetchTransition(current, now)
+	previousName, currentName, downgraded := isPrefetchedPolicyDowngrade(previousPolicy, currentPolicy)
+	if !downgraded {
+		return
+	}
+	slog.Warn("Policy downgraded during prefetch", "domain", domain, "previous_policy", previousName, "current_policy", currentName)
+}
+
 type prefetchItem struct {
 	due   time.Time
 	key   string
@@ -216,7 +277,7 @@ func startPrefetching(ctx context.Context) {
 	if !config.Server.Prefetch {
 		return
 	}
-	slog.Info("Prefetching enabled")
+	slog.Debug("Prefetching enabled")
 	semaphore = make(chan struct{}, runtime.NumCPU()*4+2)
 	scheduler := newPrefetchScheduler()
 	activePrefetchScheduler.Store(scheduler)
@@ -405,6 +466,7 @@ func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *C
 	}
 	if updated, ok := cacheAfterFailedBranchDiscard(c, result, now); ok {
 		observePrefetch("discard")
+		logPrefetchedPolicyDowngrade(key, c, updated, now)
 		polCache.Set(key, updated)
 		if due, ok := nextPrefetchTime(updated, now); ok {
 			scheduler.schedule(key, due)
@@ -412,15 +474,16 @@ func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *C
 		if err := polCache.Save(false); err != nil {
 			slog.Error("Could not save cache after failed branch discard", "domain", key, "error", err)
 		}
-		slog.Info("Cleared failed cached policy branch after repeated prefetch failures", "domain", key, "retry_window", PREFETCH_RETRY_MAX_AGE)
+		slog.Debug("Cleared failed cached policy branch after repeated prefetch failures", "domain", key, "retry_window", PREFETCH_RETRY_MAX_AGE)
 		return
 	}
+	logPrefetchedPolicyDowngrade(key, c, nil, now)
 	discardCachedPolicyState(false, key, c)
 	observePrefetch("discard")
 	if err := polCache.Save(false); err != nil {
 		slog.Error("Could not save cache after failed prefetch discard", "domain", key, "error", err)
 	}
-	slog.Info("Removed cached policy after repeated prefetch failures", "domain", key, "retry_window", PREFETCH_RETRY_MAX_AGE)
+	slog.Debug("Removed cached policy after repeated prefetch failures", "domain", key, "retry_window", PREFETCH_RETRY_MAX_AGE)
 }
 
 func failedPolicyGraceDeadline(c *CacheStruct, result domainResult) time.Time {
@@ -490,6 +553,7 @@ func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchSchedule
 		if !usable {
 			if !shouldRetryCachedPolicyPrefetch(entry.Value, now) {
 				itemsCount--
+				logPrefetchedPolicyDowngrade(entry.Key, entry.Value, nil, now)
 				discardCachedPolicyState(false, entry.Key, entry.Value)
 				unscheduleCachedPolicyPrefetch(entry.Key)
 				continue
@@ -506,6 +570,7 @@ func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchSchedule
 		}
 		if entry.Value.Age(now) >= CACHE_MAX_AGE {
 			itemsCount--
+			logPrefetchedPolicyDowngrade(entry.Key, entry.Value, nil, now)
 			discardCachedPolicyState(false, entry.Key, entry.Value)
 			unscheduleCachedPolicyPrefetch(entry.Key)
 			continue
@@ -535,8 +600,12 @@ func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchSchedule
 				(refreshed.MtaStsAttempted && !refreshed.MtaSts.HasData())
 			if hasRefreshedData || refreshed.DaneAttempted || refreshed.MtaStsAttempted {
 				merged := mergeCacheResult(c.Value, refreshed, refreshedAt)
+				_, _, _, selected := selectCachedPolicy(merged, refreshedAt)
+				if selected {
+					logPrefetchedPolicyDowngrade(c.Key, c.Value, merged, refreshedAt)
+				}
 				polCache.Set(c.Key, merged)
-				if _, _, _, ok := selectCachedPolicy(merged, refreshedAt); ok {
+				if selected {
 					if hasRefreshedData {
 						counter.Add(1)
 					}

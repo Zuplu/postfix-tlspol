@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -421,7 +420,7 @@ const (
 func checkDane(ctx context.Context, domain string, mayRetry bool) (string, uint32) {
 	resolverAddress, err := config.Dns.GetResolverAddress()
 	if err != nil {
-		slog.Warn("DNS resolver configuration error during DANE lookup", "domain", domain, "error", err)
+		logPolicyLookupFailure(ctx, "DNS resolver configuration error during DANE lookup", "domain", domain, "error", err)
 		return "TEMP", 0
 	}
 	attempts := 1
@@ -437,7 +436,7 @@ func checkDane(ctx context.Context, domain string, mayRetry bool) (string, uint3
 			return "TEMP", 0
 		}
 		if attempt == attempts {
-			slog.Warn("DNS error during DANE lookup", "domain", domain, "error", err, "attempts", attempts)
+			logPolicyLookupFailure(ctx, "DNS error during DANE lookup", "domain", domain, "error", err, "attempts", attempts)
 			return "TEMP", 0
 		}
 		if !waitPolicyRetry(ctx, attempt) {
