@@ -8,6 +8,7 @@ package tlspol
 import (
 	"errors"
 	"io"
+	"os/exec"
 	"testing"
 )
 
@@ -31,6 +32,21 @@ func TestCliCommandsReturnWriteErrors(t *testing.T) {
 				t.Fatalf("command error = %v, want closed pipe", err)
 			}
 		})
+	}
+}
+
+func TestPagerCancellationOnlyAcceptsInterrupt(t *testing.T) {
+	interruptErr := exec.Command("sh", "-c", "kill -INT $$").Run()
+	if interruptErr == nil || !isPagerCancellation(interruptErr) {
+		t.Fatalf("interrupt error = %v, want pager cancellation", interruptErr)
+	}
+
+	exitErr := exec.Command("sh", "-c", "exit 7").Run()
+	if exitErr == nil || isPagerCancellation(exitErr) {
+		t.Fatalf("ordinary exit error = %v, want real pager failure", exitErr)
+	}
+	if isPagerCancellation(io.ErrClosedPipe) {
+		t.Fatal("non-process error must not be treated as pager cancellation")
 	}
 }
 

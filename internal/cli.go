@@ -8,6 +8,7 @@ package tlspol
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
@@ -182,7 +184,6 @@ func cliDump(conn net.Conn, export bool) error {
 	command := "DUMP"
 	if export {
 		command = "EXPORT"
-	} else {
 	}
 	if err := writeConnection(conn, netstring.Marshal(command)); err != nil {
 		return fmt.Errorf("request cached policies with %s: %w", command, err)
@@ -196,7 +197,7 @@ func cliDump(conn net.Conn, export bool) error {
 				less.Stdin = conn
 				less.Stdout = os.Stdout
 				less.Stderr = os.Stderr
-				if err := less.Run(); err != nil {
+				if err := less.Run(); err != nil && !isPagerCancellation(err) {
 					return fmt.Errorf("display cached policies: %w", err)
 				}
 				return nil
@@ -207,6 +208,15 @@ func cliDump(conn net.Conn, export bool) error {
 		return fmt.Errorf("read cached policies: %w", err)
 	}
 	return nil
+}
+
+func isPagerCancellation(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	return ok && status.Signaled() && status.Signal() == syscall.SIGINT
 }
 
 func cliPurge(conn net.Conn) error {
