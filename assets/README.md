@@ -20,13 +20,13 @@ The dashboard filters by Prometheus `job` and `instance`, so one imported dashbo
 
 ### Preview
 
-[postfix-tlspol-dashboard.png](postfix-tlspol-dashboard.png)
+[![postfix-tlspol Grafana dashboard with production-like synthetic data](postfix-tlspol-dashboard.png)](postfix-tlspol-dashboard.png)
 
 ### Import
 
 Import the dashboard JSON directly:
 
-- Dashboard JSON: [grafana-postfix-tlspol-dashboard.json](assets/grafana-postfix-tlspol-dashboard.json)
+- Dashboard JSON: [grafana-postfix-tlspol-dashboard.json](grafana-postfix-tlspol-dashboard.json)
 
 For file provisioning, mount or copy:
 
