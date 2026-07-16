@@ -10,7 +10,7 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
 
 [![postfix-tlspol Grafana dashboard with production-like synthetic data](assets/postfix-tlspol-dashboard.png)](assets/postfix-tlspol-dashboard.png)
 
-The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket. Metrics include Go runtime state, policy outcomes, cache hit/miss and occupancy data, and prefetch success/failure/discard counters. All metric labels use fixed value sets. You can also set `server.metrics-address` for a separate HTTP-only metrics endpoint that does not expose the socketmap protocol. The bundled dashboard is available at [`assets/grafana-postfix-tlspol-dashboard.json`](assets/grafana-postfix-tlspol-dashboard.json). The preview uses the reproducible [Grafana TestData demo](assets/demo/) rather than production telemetry.
+The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket. Metrics include Go runtime state, policy outcomes, cache hit/miss and occupancy data, and prefetch success/failure/discard counters. All metric labels use fixed value sets. You can also set `server.metrics-address` for a separate HTTP-only metrics endpoint that does not expose the socketmap protocol. The bundled dashboard is available at [`assets/grafana-postfix-tlspol-dashboard.json`](assets/grafana-postfix-tlspol-dashboard.json).
 
 Keep the socketmap listener bound to loopback or a protected Unix socket. Postfix policy queries are available on every configured listener, while the diagnostic and cache-management commands used by `-query`, `-dump`, `-export`, and `-purge` are accepted only from loopback or Unix-socket peers. For Docker deployments, run those administrative commands with `docker exec`.
 
@@ -191,18 +191,6 @@ dns:
   #address: 127.0.0.53:53
 ```
 
-Configuration loading is strict and capped at 1 MiB: unknown YAML fields, invalid log levels or formats, malformed listener/resolver addresses, unsupported socket permission bits, and empty cache paths stop startup with an error. `TLSPOL_PREFETCH` and `TLSPOL_TLSRPT` accept only `0` or `1`; malformed values also stop startup.
-
-The persisted cache is written through a temporary file and atomically renamed. Corrupt or truncated snapshots are rejected and repaired with a valid empty snapshot, while purge and final-shutdown persistence failures are surfaced as errors.
-
 # Prefetching
 
 Prefetching is enabled by default, and postfix-tlspol tries to keep its cache fresh. Refresh failures use bounded retries and preserve still-valid branch state. The in-memory cache is capped at 50,000 entries and pruned to 45,000 entries in one batch, favoring useful and frequently accessed policies.
-
-# Tests
-
-The default test suite uses deterministic local fixtures. Tests that query public DNS and HTTPS services are opt-in:
-
-```sh
-TLSPOL_LIVE_TESTS=1 go test ./internal
-```
