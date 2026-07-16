@@ -571,10 +571,10 @@ func newMetricsHTTPServer(cfg metricsHTTPServerConfig) *http.Server {
 
 type limitedListener struct {
 	net.Listener
+	closeErr  error
 	sem       chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
-	closeErr  error
 }
 
 func newLimitedListener(l net.Listener, limit int) net.Listener {

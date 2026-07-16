@@ -56,19 +56,19 @@ func (e *Expirable) RemainingTTL(t ...time.Time) uint32 {
 }
 
 type Cache[T Cacheable] struct {
-	data                   map[string]T
-	quit                   chan struct{}
-	filePath               string
-	wg                     sync.WaitGroup
+	closeErr            error
+	data                map[string]T
+	quit                chan struct{}
+	filePath            string
+	wg                  sync.WaitGroup
+	savePeriod          time.Duration
+	generation          uint64
+	persistedGeneration uint64
+	sync.RWMutex
 	closeOnce              sync.Once
 	persistMu              sync.Mutex
-	savePeriod             time.Duration
 	dirty                  bool
-	generation             uint64
-	persistedGeneration    uint64
 	hasPersistedGeneration bool
-	closeErr               error
-	sync.RWMutex
 }
 
 type Entry[T Cacheable] struct {
