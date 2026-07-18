@@ -32,7 +32,7 @@
 * chore: update assets/README.md by @DragonWork
 * fix(cli): accept dump pager cancellation by @DragonWork
 * docs(config): remove redundant listener guidance by @DragonWork
-* Treat unsigned MX NXDOMAIN as non-temporary by @croessner in [#173](https://github.com/Zuplu/postfix-tlspol/pull/173)
+* fix(dane): treat unsigned MX NXDOMAIN as non-temporary by @croessner in [#173](https://github.com/Zuplu/postfix-tlspol/pull/173)
 * build: update toolchain to go1.26.5
 * fix(config): ignore unknown keys with warnings
 
