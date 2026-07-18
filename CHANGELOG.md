@@ -1,3 +1,46 @@
+## What's Changed in v1.12.1 (2026-07-18)
+
+* fix(server): harden socketmap control surface by @DragonWork
+* fix(server): drain workers before final cache save by @DragonWork
+* test: stabilize concurrency validation by @DragonWork
+* perf(cache): bound policy cache growth by @DragonWork
+* fix(mta-sts): enforce RFC 8461 discovery rules by @DragonWork
+* fix(server): close active clients during shutdown by @DragonWork
+* fix(docker): supervise resolver and harden runtime by @DragonWork
+* fix(build): preserve source configuration on install by @DragonWork
+* fix(cache): preserve newest concurrent snapshot by @DragonWork
+* perf(server): reduce saturation and scrape overhead by @DragonWork
+* fix(dane): reject unreachable MX hosts by @DragonWork
+* fix(cli): preserve jq startup errors by @DragonWork
+* refactor: simplify version normalization by @DragonWork
+* docs: clarify DANE discovery behavior by @DragonWork
+* feat(grafana): refine operations dashboard by @DragonWork
+* fix(mtasts): retain unexpired policy on refresh failure by @DragonWork
+* fix(dane): support authenticated implicit MX hosts by @DragonWork
+* fix(runtime): fail closed on recovery and startup errors by @DragonWork
+* perf(runtime): reduce cache and request overhead by @DragonWork
+* feat(observability): add cache health dashboard panels by @DragonWork
+* fix(build): normalize binary permissions by @DragonWork
+* chore: add Grafana dashboard screenshot by @DragonWork
+* fix(logging): reduce non-actionable runtime warnings by @DragonWork
+* refactor: field-align structs by @DragonWork
+* fix(logging): restore query result visibility by @DragonWork
+* fix(prefetch): desynchronize scheduler batches by @DragonWork
+* build(docker): bump golang from 1.26.4-alpine3.23 to 1.26.5-alpine3.23 in /deployments by @dependabot[bot] in [#168](https://github.com/Zuplu/postfix-tlspol/pull/168)
+* build(deps): bump the golang-x group across 1 directory with 5 updates by @dependabot[bot] in [#170](https://github.com/Zuplu/postfix-tlspol/pull/170)
+* chore: update README.md by @DragonWork
+* chore: update assets/README.md by @DragonWork
+* fix(cli): accept dump pager cancellation by @DragonWork
+* docs(config): remove redundant listener guidance by @DragonWork
+* Treat unsigned MX NXDOMAIN as non-temporary by @croessner in [#173](https://github.com/Zuplu/postfix-tlspol/pull/173)
+* build: update toolchain to go1.26.5
+* fix(config): ignore unknown keys with warnings
+
+## New Contributors
+* @croessner made their first contribution in [#173](https://github.com/Zuplu/postfix-tlspol/pull/173)
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.11.0...v1.12.1
+
 ## What's Changed in v1.11.0 (2026-07-05)
 
 * build(deps): update toolchain to go1.26.3 by @DragonWork
