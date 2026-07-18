@@ -6,6 +6,8 @@
 package tlspol
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,16 +55,38 @@ dns:
 	}
 }
 
-func TestLoadConfigRejectsUnknownAndInvalidValues(t *testing.T) {
+func TestLoadConfigWarnsAndIgnoresUnknownKeys(t *testing.T) {
+	initializeTestDefaultConfig(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  address: 127.0.0.1:8642\n  addres: 127.0.0.1:9000\ndns:\n  timeout: 1s\nextra:\n  enabled: true\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("unknown configuration keys must not be fatal: %v", err)
+	}
+	if cfg.Server.Address != "127.0.0.1:8642" {
+		t.Fatalf("known configuration was not applied: %q", cfg.Server.Address)
+	}
+	for _, key := range []string{"server.addres", "dns.timeout", "extra"} {
+		if !strings.Contains(logs.String(), "key="+key) {
+			t.Errorf("missing warning for %s in %q", key, logs.String())
+		}
+	}
+}
+
+func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 	initializeTestDefaultConfig(t)
 	tests := []struct {
 		name string
 		body string
 	}{
-		{
-			name: "unknown field",
-			body: "server:\n  addres: 127.0.0.1:8642\n",
-		},
 		{
 			name: "duplicate field",
 			body: "server:\n  address: 127.0.0.1:8642\n  address: 127.0.0.1:9000\n",

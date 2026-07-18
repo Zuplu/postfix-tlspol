@@ -162,6 +162,8 @@ scripts/build.sh
 
 _*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is autoconfigured._
 
+Unknown keys are ignored with a warning; malformed YAML and invalid supported values remain fatal.
+
 Configuration example for `/etc/postfix-tlspol/config.yaml`:
 ```yaml
 server:

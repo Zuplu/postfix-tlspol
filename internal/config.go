@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"unsafe"
@@ -57,6 +58,7 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	if err := unmarshal(&fields); err != nil {
 		return err
 	}
+	warnUnknownConfigKeys(fields, "server", "address", "metrics-address", "cache-file", "log-level", "log-format", "socket-permissions", "tlsrpt", "prefetch")
 	_, c.addressConfigured = fields["address"]
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(strings.ToLower(c.NamedLogLevel))); err != nil {
@@ -241,12 +243,46 @@ func (c *DnsConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	if err := unmarshal((*alias)(c)); err != nil {
 		return err
 	}
+	var fields map[string]any
+	if err := unmarshal(&fields); err != nil {
+		return err
+	}
+	warnUnknownConfigKeys(fields, "dns", "address")
 	return nil
 }
 
 type Config struct {
 	Dns    DnsConfig    `yaml:"dns"`
 	Server ServerConfig `yaml:"server"`
+}
+
+func (c *Config) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias Config
+	if err := unmarshal((*alias)(c)); err != nil {
+		return err
+	}
+	var fields map[string]any
+	if err := unmarshal(&fields); err != nil {
+		return err
+	}
+	warnUnknownConfigKeys(fields, "", "dns", "server")
+	return nil
+}
+
+func warnUnknownConfigKeys(fields map[string]any, prefix string, known ...string) {
+	unknown := make([]string, 0)
+	for key := range fields {
+		if !slices.Contains(known, key) {
+			unknown = append(unknown, key)
+		}
+	}
+	slices.Sort(unknown)
+	for _, key := range unknown {
+		if prefix != "" {
+			key = prefix + "." + key
+		}
+		slog.Warn("Ignoring unknown configuration key", "key", key)
+	}
 }
 
 func SetDefaultConfig(data []byte) {
@@ -271,7 +307,7 @@ func loadConfig(filename string) (Config, error) {
 	}
 
 	var config Config
-	if err := yaml.Load(data, &config, yaml.WithKnownFields()); err != nil {
+	if err := yaml.Load(data, &config, yaml.WithKnownFields(false)); err != nil {
 		return config, err
 	}
 	if err := validateConfig(&config); err != nil {
