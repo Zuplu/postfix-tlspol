@@ -12,8 +12,6 @@ A lightweight and highly performant MTA-STS + DANE/TLSA resolver and TLS policy 
 
 The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix/TCP socket. Metrics include Go runtime state, policy outcomes, cache hit/miss and occupancy data, and prefetch success/failure/discard counters. All metric labels use fixed value sets. You can also set `server.metrics-address` for a separate HTTP-only metrics endpoint that does not expose the socketmap protocol. The bundled dashboard is available at [`assets/grafana-postfix-tlspol-dashboard.json`](assets/grafana-postfix-tlspol-dashboard.json).
 
-Keep the socketmap listener bound to loopback or a protected Unix socket. Postfix policy queries are available on every configured listener, while the diagnostic and cache-management commands used by `-query`, `-dump`, `-export`, and `-purge` are accepted only from loopback or Unix-socket peers. For Docker deployments, run those administrative commands with `docker exec`.
-
 # Logic
 
 - Simultaneously checks for MTA-STS and DANE for a queried domain.
@@ -141,7 +139,7 @@ smtp_tls_security_level = dane
 smtp_tls_policy_maps = socketmap:inet:127.0.0.1:8642:QUERYwithTLSRPT
 ```
 
-Note the `QUERYwithTLSRPT` that enables TLSRPT support for Postfix 3.10+.
+Note the `QUERYwithTLSRPT` that enables TLSRPT support for Postfix 3.10+. Use this even if you disable TLSRPT in Postfix, as postfix-tlspol will provide Postfix with additional information to [harden MTA-STS MX hostname enforcement](https://www.postfix.org/postconf.5.html#smtp_tls_enforce_sts_mx_patterns).
 
 ### Reload
 
@@ -161,8 +159,6 @@ scripts/build.sh
 # Configuration
 
 _*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is autoconfigured._
-
-Unknown keys are ignored with a warning; malformed YAML and invalid supported values remain fatal.
 
 Configuration example for `/etc/postfix-tlspol/config.yaml`:
 ```yaml

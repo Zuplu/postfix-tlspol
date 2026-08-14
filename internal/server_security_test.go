@@ -94,8 +94,8 @@ func TestSocketmapLimitsMatchPostfixWithGrace(t *testing.T) {
 	if SOCKETMAP_MAX_REPLY_BYTES != 100_000 {
 		t.Fatalf("maximum reply payload = %d, want 100000", SOCKETMAP_MAX_REPLY_BYTES)
 	}
-	if SOCKETMAP_IO_TIMEOUT != 105*time.Second {
-		t.Fatalf("socketmap I/O timeout = %s, want 105s", SOCKETMAP_IO_TIMEOUT)
+	if SOCKETMAP_IO_TIMEOUT != 102*time.Second {
+		t.Fatalf("socketmap I/O timeout = %s, want 102s", SOCKETMAP_IO_TIMEOUT)
 	}
 }
 

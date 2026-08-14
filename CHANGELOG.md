@@ -1,3 +1,12 @@
+## What's Changed in v1.12.2 (2026-08-14)
+
+* chore: update CHANGELOG.md by @DragonWork
+* build(deps): bump golang.org/x/mod from 0.38.0 to 0.39.0 in the golang-x group by @dependabot[bot] in [#181](https://github.com/Zuplu/postfix-tlspol/pull/181)
+* fix(socketmap): relax socketmap limits by @DragonWork
+* build(deps): update dependencies by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.12.1...v1.12.2
+
 ## What's Changed in v1.12.1 (2026-07-18)
 
 * fix(server): harden socketmap control surface by @DragonWork
