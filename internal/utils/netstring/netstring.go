@@ -25,6 +25,63 @@ func NewScanner(r io.Reader) *Scanner {
 	return s
 }
 
+// Read decodes one netstring without reading beyond its terminating comma.
+// The payload limit excludes the netstring length prefix and delimiters.
+func Read(r *bufio.Reader, maxPayload int) ([]byte, error) {
+	length := 0
+	digits := 0
+	maxInt := int(^uint(0) >> 1)
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) && digits != 0 {
+				return nil, errors.New("netstring: unexpected EOF")
+			}
+			return nil, err
+		}
+		if b == ':' {
+			if digits == 0 {
+				return nil, errors.New("netstring: empty length")
+			}
+			break
+		}
+		if digits == 1 && length == 0 {
+			return nil, errors.New("netstring: leading zero in length")
+		}
+		if b < '0' || b > '9' {
+			return nil, errors.New("netstring: invalid length character")
+		}
+		digit := int(b - '0')
+		if length > (maxInt-digit)/10 {
+			return nil, errors.New("netstring: invalid length")
+		}
+		length = length*10 + digit
+		digits++
+		if length > maxPayload {
+			return nil, errors.New("netstring: payload too large")
+		}
+	}
+
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, errors.New("netstring: unexpected EOF")
+		}
+		return nil, err
+	}
+	terminator, err := r.ReadByte()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("netstring: unexpected EOF")
+		}
+		return nil, err
+	}
+	if terminator != ',' {
+		return nil, errors.New("netstring: missing comma terminator")
+	}
+	return payload, nil
+}
+
 func splitNetstring(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if len(data) == 0 {
 		return 0, nil, nil

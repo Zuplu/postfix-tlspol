@@ -57,6 +57,55 @@ func TestMarshal(t *testing.T) {
 	}
 }
 
+func TestReadHonorsPayloadLimitAndFrameBoundary(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("5:hello,4:next,"))
+	payload, err := Read(reader, 5)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if string(payload) != "hello" {
+		t.Fatalf("Read() payload = %q, want hello", payload)
+	}
+	payload, err = Read(reader, 4)
+	if err != nil {
+		t.Fatalf("second Read() error = %v", err)
+	}
+	if string(payload) != "next" {
+		t.Fatalf("second Read() payload = %q, want next", payload)
+	}
+
+	_, err = Read(bufio.NewReader(strings.NewReader("6:excess,")), 5)
+	if err == nil || err.Error() != "netstring: payload too large" {
+		t.Fatalf("oversized Read() error = %v, want payload-too-large error", err)
+	}
+}
+
+func TestReadRejectsMalformedFrames(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		frame   string
+		wantErr string
+	}{
+		{name: "empty length", frame: ":,", wantErr: "netstring: empty length"},
+		{name: "leading zero", frame: "01:a,", wantErr: "netstring: leading zero in length"},
+		{name: "invalid length", frame: "x:a,", wantErr: "netstring: invalid length character"},
+		{name: "truncated payload", frame: "2:a", wantErr: "netstring: unexpected EOF"},
+		{name: "missing comma", frame: "1:a.", wantErr: "netstring: missing comma terminator"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Read(bufio.NewReader(strings.NewReader(test.frame)), 8)
+			if err == nil || err.Error() != test.wantErr {
+				t.Fatalf("Read() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func BenchmarkSplitNetstring(b *testing.B) {
 	data := []byte("17:QUERY example.com,")
 	b.ReportAllocs()

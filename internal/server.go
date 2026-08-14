@@ -229,10 +229,10 @@ const (
 	POLICY_RETRY_BASE                  = 250 * time.Millisecond
 	POLICY_BRANCH_RECHECK              = 24 * time.Hour
 	DNS_UDP_PAYLOAD_SIZE        uint16 = 1232
-	SOCKETMAP_MAX_CONNECTIONS          = 128
-	SOCKETMAP_MAX_REQUEST_BYTES        = 1024
-	SOCKETMAP_READ_TIMEOUT             = 30 * time.Second
-	SOCKETMAP_WRITE_TIMEOUT            = 30 * time.Second
+	SOCKETMAP_MAX_CONNECTIONS          = 512
+	SOCKETMAP_MAX_QUERY_BYTES          = 10_000
+	SOCKETMAP_MAX_REPLY_BYTES          = 100_000
+	SOCKETMAP_IO_TIMEOUT               = 102 * time.Second
 	METRICS_MAX_CONNECTIONS            = 64
 	METRICS_MAX_HEADER_BYTES           = 8 << 10
 	METRICS_READ_HEADER_TIMEOUT        = 5 * time.Second
@@ -800,7 +800,7 @@ func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruc
 				} else {
 					res = policy
 				}
-				delivered = writeConnectionResponse(conn, netstring.Marshal("OK "+res))
+				delivered = writeSocketmapReply(conn, "OK "+res)
 			}
 			if delivered {
 				observePolicy(policy)
@@ -1145,7 +1145,7 @@ func replySocketmap(conn net.Conn, domain string, policy string, report string, 
 		if withTlsRpt {
 			res = res + " " + report
 		}
-		delivered = writeConnectionResponse(conn, netstring.Marshal("OK "+res))
+		delivered = writeSocketmapReply(conn, "OK "+res)
 	}
 	if delivered {
 		observePolicy(policy)
@@ -1158,6 +1158,14 @@ func writeConnectionResponse(conn net.Conn, response []byte) bool {
 		return false
 	}
 	return true
+}
+
+func writeSocketmapReply(conn net.Conn, payload string) bool {
+	if len(payload) > SOCKETMAP_MAX_REPLY_BYTES {
+		slog.Error("Socketmap reply exceeds Postfix protocol limit", "bytes", len(payload), "limit", SOCKETMAP_MAX_REPLY_BYTES)
+		return writeConnectionResponse(conn, NS_TEMP)
+	}
+	return writeConnectionResponse(conn, netstring.Marshal(payload))
 }
 
 func writeConnection(conn net.Conn, response []byte) error {
@@ -1192,15 +1200,12 @@ func isLikelyHTTP(reader *bufio.Reader) bool {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	if err := conn.SetReadDeadline(time.Now().Add(SOCKETMAP_READ_TIMEOUT)); err != nil {
-		return
-	}
 	reader := bufio.NewReader(conn)
 	if isLikelyHTTP(reader) {
 		handleHTTPConnection(conn, reader)
 		return
 	}
-	handleSocketmapConnection(&writeDeadlineConn{Conn: conn, timeout: SOCKETMAP_WRITE_TIMEOUT}, reader)
+	handleSocketmapConnection(&writeDeadlineConn{Conn: conn, timeout: SOCKETMAP_IO_TIMEOUT}, reader)
 }
 
 func handleHTTPConnection(conn net.Conn, reader *bufio.Reader) {
@@ -1281,19 +1286,36 @@ func handleMetricsOnlyHTTPRequest(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-//gocyclo:ignore
-func handleSocketmapConnection(conn net.Conn, reader io.Reader) {
-	ns := netstring.NewScanner(reader)
-	ns.Buffer(make([]byte, 512), SOCKETMAP_MAX_REQUEST_BYTES)
+func readSocketmapQuery(conn net.Conn, reader *bufio.Reader) (string, error) {
+	if reader.Buffered() == 0 {
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			return "", err
+		}
+		if _, err := reader.Peek(1); err != nil {
+			return "", err
+		}
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(SOCKETMAP_IO_TIMEOUT)); err != nil {
+		return "", err
+	}
+	payload, readErr := netstring.Read(reader, SOCKETMAP_MAX_QUERY_BYTES)
+	clearErr := conn.SetReadDeadline(time.Time{})
+	if readErr != nil {
+		return "", readErr
+	}
+	if clearErr != nil {
+		return "", clearErr
+	}
+	return string(payload), nil
+}
 
+//gocyclo:ignore
+func handleSocketmapConnection(conn net.Conn, reader *bufio.Reader) {
 	for {
-		if err := conn.SetReadDeadline(time.Now().Add(SOCKETMAP_READ_TIMEOUT)); err != nil {
+		query, err := readSocketmapQuery(conn, reader)
+		if err != nil {
 			return
 		}
-		if !ns.Scan() {
-			return
-		}
-		query := ns.Text()
 		rawCommand, argument, hasArgument := strings.Cut(query, " ")
 		cmd := canonicalSocketmapCommand(rawCommand)
 		if isControlCommand(cmd) && !isLocalControlConnection(conn) {
