@@ -22,7 +22,7 @@ import (
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 const (

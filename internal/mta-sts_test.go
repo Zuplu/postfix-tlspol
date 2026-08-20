@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 func init() {
@@ -25,14 +25,11 @@ func init() {
 
 func TestMtaStsRecordAvailable(t *testing.T) {
 	txt := func(chunks ...string) dns.RR {
-		return &dns.TXT{
-			Hdr: dns.RR_Header{Name: "_mta-sts.example.com.", Rrtype: dns.TypeTXT, Class: dns.ClassINET},
-			Txt: chunks,
-		}
+		return dnsTXT("_mta-sts.example.com.", 0, chunks...)
 	}
 	tests := []struct {
 		name    string
-		rcode   int
+		rcode   uint16
 		answers []dns.RR
 		want    bool
 		wantErr bool
@@ -53,7 +50,7 @@ func TestMtaStsRecordAvailable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: tt.rcode}, Answer: tt.answers}
+			msg := &dns.Msg{MsgHeader: dns.MsgHeader{Rcode: tt.rcode}, Answer: tt.answers}
 			got, err := mtaStsRecordAvailable(msg)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)

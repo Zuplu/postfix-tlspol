@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns/dnsconf"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -274,7 +274,7 @@ func waitForResolvConfServer(t *testing.T, rc *ResolvConf, server string) {
 	assertResolvConfServer(t, rc.Get(), server)
 }
 
-func assertResolvConfServer(t *testing.T, cfg *dns.ClientConfig, server string) {
+func assertResolvConfServer(t *testing.T, cfg *dnsconf.Config, server string) {
 	t.Helper()
 	if cfg == nil {
 		t.Fatalf("expected resolver server %q, got nil config", server)

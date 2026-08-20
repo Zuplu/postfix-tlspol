@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 type observedDNSQuery struct {
@@ -22,19 +22,29 @@ type observedDNSQuery struct {
 	do      bool
 }
 
-func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
-	if client.UDPSize != DNS_UDP_PAYLOAD_SIZE {
-		t.Fatalf("expected DNS client UDPSize %d, got %d", DNS_UDP_PAYLOAD_SIZE, client.UDPSize)
+func BenchmarkNewDNSQuery(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		m := newDNSQuery("_25._tcp.mx.example.test", dns.TypeTLSA, true)
+		if m == nil {
+			b.Fatal("newDNSQuery returned nil")
+		}
 	}
+}
 
+func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 	observed := make(chan observedDNSQuery, 8)
 	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+		if err := r.Unpack(); err != nil {
+			t.Errorf("unpack DNS request: %v", err)
+			return
+		}
 		if len(r.Question) == 0 {
 			return
 		}
-		q := r.Question[0]
-		opt := r.IsEdns0()
+		q := dnsQuestion(r)
+		opt := dnsEDNS0(r)
 		if opt == nil {
 			t.Errorf("expected EDNS0 on %s query for %s", dns.TypeToString[q.Qtype], q.Name)
 		} else {
@@ -42,38 +52,26 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 		}
 
 		msg := new(dns.Msg)
-		msg.SetReply(r)
+		setDNSReply(msg, r)
 		switch q.Qtype {
 		case dns.TypeMX:
 			msg.AuthenticatedData = true
-			msg.Answer = append(msg.Answer, &dns.MX{
-				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: 300},
-				Mx:  "mx.edns.test.",
-			})
+			msg.Answer = append(msg.Answer, dnsMX(q.Name, 300, 0, "mx.edns.test."))
 		case dns.TypeA:
 			msg.AuthenticatedData = false
-			msg.Answer = append(msg.Answer, &dns.A{
-				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
-				A:   net.ParseIP("192.0.2.10"),
-			})
+			msg.Answer = append(msg.Answer, dnsA(q.Name, 300, "192.0.2.10"))
 		case dns.TypeAAAA:
 			msg.AuthenticatedData = true
-			msg.Answer = append(msg.Answer, &dns.AAAA{
-				Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 300},
-				AAAA: net.ParseIP("2001:db8::10"),
-			})
+			msg.Answer = append(msg.Answer, dnsAAAA(q.Name, 300, "2001:db8::10"))
 		case dns.TypeTLSA:
 			msg.AuthenticatedData = true
-			msg.SetRcode(r, dns.RcodeNameError)
+			setDNSRcode(msg, r, dns.RcodeNameError)
 		case dns.TypeTXT:
-			msg.Answer = append(msg.Answer, &dns.TXT{
-				Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300},
-				Txt: []string{"v=STSv1; id=edns1;"},
-			})
+			msg.Answer = append(msg.Answer, dnsTXT(q.Name, 300, "v=STSv1; id=edns1;"))
 		default:
-			msg.SetRcode(r, dns.RcodeNameError)
+			setDNSRcode(msg, r, dns.RcodeNameError)
 		}
-		_ = w.WriteMsg(msg)
+		_ = writeDNSMsg(w, msg)
 	})
 
 	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
@@ -82,10 +80,10 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ActivateAndServe() }()
+	go func() { _ = server.ListenAndServe() }()
 	var shutdownOnce sync.Once
 	shutdown := func() {
-		shutdownOnce.Do(func() { _ = server.Shutdown() })
+		shutdownOnce.Do(func() { server.Shutdown(context.Background()) })
 	}
 	t.Cleanup(shutdown)
 
@@ -129,27 +127,28 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 	var tcpQueries atomic.Int32
 
 	udpMux := dns.NewServeMux()
-	udpMux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+	udpMux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+		if err := r.Unpack(); err != nil {
+			t.Errorf("unpack DNS request: %v", err)
+			return
+		}
 		udpQueries.Add(1)
-		if opt := r.IsEdns0(); opt == nil || opt.UDPSize() != DNS_UDP_PAYLOAD_SIZE {
+		if opt := dnsEDNS0(r); opt == nil || opt.UDPSize() != DNS_UDP_PAYLOAD_SIZE {
 			t.Errorf("expected UDP query EDNS0 size %d, got %#v", DNS_UDP_PAYLOAD_SIZE, opt)
 		}
 		msg := new(dns.Msg)
-		msg.SetReply(r)
+		setDNSReply(msg, r)
 		msg.Truncated = true
-		_ = w.WriteMsg(msg)
+		_ = writeDNSMsg(w, msg)
 	})
 
 	tcpMux := dns.NewServeMux()
-	tcpMux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+	tcpMux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		tcpQueries.Add(1)
 		msg := new(dns.Msg)
-		msg.SetReply(r)
-		msg.Answer = append(msg.Answer, &dns.TXT{
-			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300},
-			Txt: []string{"v=STSv1; id=tcp1;"},
-		})
-		_ = w.WriteMsg(msg)
+		setDNSReply(msg, r)
+		msg.Answer = append(msg.Answer, dnsTXT(dnsQuestion(r).Name, 300, "v=STSv1; id=tcp1;"))
+		_ = writeDNSMsg(w, msg)
 	})
 
 	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -164,11 +163,11 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 
 	udpServer := &dns.Server{PacketConn: packetConn, Handler: udpMux}
 	tcpServer := &dns.Server{Listener: tcpListener, Handler: tcpMux}
-	go func() { _ = udpServer.ActivateAndServe() }()
-	go func() { _ = tcpServer.ActivateAndServe() }()
+	go func() { _ = udpServer.ListenAndServe() }()
+	go func() { _ = tcpServer.ListenAndServe() }()
 	t.Cleanup(func() {
-		_ = udpServer.Shutdown()
-		_ = tcpServer.Shutdown()
+		udpServer.Shutdown(context.Background())
+		tcpServer.Shutdown(context.Background())
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

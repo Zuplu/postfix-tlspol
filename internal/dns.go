@@ -8,20 +8,18 @@ package tlspol
 import (
 	"context"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 func newDNSQuery(name string, qtype uint16, dnssecOK bool) *dns.Msg {
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(name), qtype)
-	m.SetEdns0(DNS_UDP_PAYLOAD_SIZE, dnssecOK)
+	m := dns.NewMsg(name, qtype)
+	m.UDPSize = DNS_UDP_PAYLOAD_SIZE
+	m.Security = dnssecOK
 	return m
 }
 
 func exchangeDNS(ctx context.Context, m *dns.Msg, resolverAddress string) (*dns.Msg, error) {
-	udpClient := client
-	udpClient.Net = "udp"
-	r, _, err := udpClient.ExchangeContext(ctx, m, resolverAddress)
+	r, _, err := client.Exchange(ctx, m, "udp", resolverAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -29,9 +27,7 @@ func exchangeDNS(ctx context.Context, m *dns.Msg, resolverAddress string) (*dns.
 		return r, nil
 	}
 
-	tcpClient := client
-	tcpClient.Net = "tcp"
-	r, _, err = tcpClient.ExchangeContext(ctx, m, resolverAddress)
+	r, _, err = client.Exchange(ctx, m, "tcp", resolverAddress)
 	if err != nil {
 		return nil, err
 	}

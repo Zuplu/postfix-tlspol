@@ -16,7 +16,8 @@ import (
 
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 type ResultWithTTL struct {
@@ -90,11 +91,11 @@ func lookupMxRecords(ctx context.Context, domain string, resolverAddress string,
 	incompl := false
 	switch r.Rcode {
 	case dns.RcodeSuccess:
-		if !r.MsgHdr.AuthenticatedData {
+		if !r.AuthenticatedData {
 			incompl = true
 		}
 	case dns.RcodeNameError:
-		return nil, !r.MsgHdr.AuthenticatedData, nil
+		return nil, !r.AuthenticatedData, nil
 	default:
 		return nil, false, errors.New(dns.RcodeToString[r.Rcode])
 	}
@@ -109,15 +110,15 @@ func lookupMxRecords(ctx context.Context, domain string, resolverAddress string,
 		if !ok {
 			continue
 		}
-		owner := strings.ToLower(dns.Fqdn(strings.TrimSpace(rr.Hdr.Name)))
-		target := strings.ToLower(dns.Fqdn(strings.TrimSpace(rr.Target)))
+		owner := strings.ToLower(dnsutil.Fqdn(strings.TrimSpace(rr.Hdr.Name)))
+		target := strings.ToLower(dnsutil.Fqdn(strings.TrimSpace(rr.Target)))
 		if previous, ok := cnameHops[owner]; ok && previous.target != target {
 			return nil, false, errors.New("multiple CNAME targets during MX lookup")
 		}
-		cnameHops[owner] = cnameHop{target: target, ttl: rr.Hdr.Ttl}
+		cnameHops[owner] = cnameHop{target: target, ttl: rr.Hdr.TTL}
 	}
 
-	mxOwner := strings.ToLower(dns.Fqdn(domain))
+	mxOwner := strings.ToLower(dnsutil.Fqdn(domain))
 	var cnameTTL uint32
 	haveCnameTTL := false
 	seenCnames := make(map[string]struct{})
@@ -155,13 +156,13 @@ func lookupMxRecords(ctx context.Context, domain string, resolverAddress string,
 			host := strings.ToLower(strings.TrimSpace(mx.Mx))
 			key := strings.TrimSuffix(host, ".")
 			if index, ok := seen[key]; ok {
-				if mx.Hdr.Ttl < records[index].ttl {
-					records[index].ttl = mx.Hdr.Ttl
+				if mx.Hdr.TTL < records[index].ttl {
+					records[index].ttl = mx.Hdr.TTL
 				}
 				continue
 			}
 			seen[key] = len(records)
-			records = append(records, mxRecord{host: dns.Fqdn(host), ttl: mx.Hdr.Ttl})
+			records = append(records, mxRecord{host: dnsutil.Fqdn(host), ttl: mx.Hdr.TTL})
 		}
 	}
 	if len(records) != 0 && haveCnameTTL {
@@ -183,7 +184,7 @@ func lookupMxRecords(ctx context.Context, domain string, resolverAddress string,
 			return nil, true, nil
 		}
 		records = append(records, mxRecord{
-			host: dns.Fqdn(domain),
+			host: dnsutil.Fqdn(domain),
 			ttl:  negativeResponseTTL(r),
 		})
 	}
@@ -199,7 +200,7 @@ func negativeResponseTTL(r *dns.Msg) uint32 {
 		if !ok {
 			continue
 		}
-		candidate := min(soa.Hdr.Ttl, soa.Minttl)
+		candidate := min(soa.Hdr.TTL, soa.Minttl)
 		if !haveTTL || candidate < ttl {
 			ttl = candidate
 			haveTTL = true
@@ -311,7 +312,7 @@ func checkMxAddress(ctx context.Context, mx string, resolverAddress string, reco
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess:
-		if !r.MsgHdr.AuthenticatedData {
+		if !r.AuthenticatedData {
 			return MxNotSec
 		}
 		for _, answer := range r.Answer {
@@ -377,7 +378,7 @@ func checkTlsa(ctx context.Context, mx string, resolverAddress string) ResultWit
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess, dns.RcodeNameError:
-		if !r.MsgHdr.AuthenticatedData {
+		if !r.AuthenticatedData {
 			return ResultWithTTL{Result: "", TTL: 0}
 		}
 	default:
@@ -394,12 +395,12 @@ func checkTlsa(ctx context.Context, mx string, resolverAddress string) ResultWit
 		if tlsa, ok := answer.(*dns.TLSA); ok {
 			if isTlsaUsable(tlsa) {
 				// TLSA records are usable, enforce DANE, return directly
-				return ResultWithTTL{Result: "dane-only", TTL: tlsa.Hdr.Ttl}
+				return ResultWithTTL{Result: "dane-only", TTL: tlsa.Hdr.TTL}
 			} else {
 				// let Postfix decide if DANE is possible, it downgrades to "encrypt" if not; continue searching
 				result = "dane"
-				if !haveTTL || tlsa.Hdr.Ttl < minTTL {
-					minTTL = tlsa.Hdr.Ttl
+				if !haveTTL || tlsa.Hdr.TTL < minTTL {
+					minTTL = tlsa.Hdr.TTL
 					haveTTL = true
 				}
 			}

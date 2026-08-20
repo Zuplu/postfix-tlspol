@@ -10,7 +10,7 @@
 #  even if current machine supports v4)
 #
 #  Set env NOTEST=1 to skip deterministic tests.
-#  Set TLSPOL_LIVE_TESTS=1 to include public DNS and HTTPS integration tests.
+#  Set TLSPOL_LIVE_TESTS=0 to skip public DNS and HTTPS integration tests.
 #
 #  Installation path controls:
 #    PREFIX         install root (default "/")

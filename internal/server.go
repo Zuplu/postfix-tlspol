@@ -31,7 +31,7 @@ import (
 	"github.com/Zuplu/postfix-tlspol/internal/utils/netstring"
 	"github.com/Zuplu/postfix-tlspol/internal/utils/valid"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -242,11 +242,15 @@ const (
 )
 
 var (
-	Version           = "undefined"
-	bgCtx             = context.Background()
-	levelVar          = new(slog.LevelVar)
-	queryGroup        singleflight.Group
-	client            = dns.Client{UDPSize: DNS_UDP_PAYLOAD_SIZE, Timeout: REQUEST_TIMEOUT}
+	Version    = "undefined"
+	bgCtx      = context.Background()
+	levelVar   = new(slog.LevelVar)
+	queryGroup singleflight.Group
+	client     = dns.Client{Transport: &dns.Transport{
+		Dialer:       &net.Dialer{Timeout: REQUEST_TIMEOUT},
+		ReadTimeout:  REQUEST_TIMEOUT,
+		WriteTimeout: REQUEST_TIMEOUT,
+	}}
 	config            Config
 	polCache          *cache.Cache[*CacheStruct]
 	NS_NOTFOUND       = netstring.Marshal("NOTFOUND ")

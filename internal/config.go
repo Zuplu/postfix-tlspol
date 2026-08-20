@@ -18,7 +18,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns/dnsconf"
 	"go.yaml.in/yaml/v4"
 	"golang.org/x/sys/unix"
 )
@@ -73,7 +73,7 @@ type DnsConfig struct {
 }
 
 type ResolvConf struct {
-	config *dns.ClientConfig
+	config *dnsconf.Config
 	path   string
 	sync.RWMutex
 }
@@ -100,7 +100,7 @@ func NewResolvConf(path string) *ResolvConf {
 	return rc
 }
 
-func (rc *ResolvConf) Get() *dns.ClientConfig {
+func (rc *ResolvConf) Get() *dnsconf.Config {
 	rc.RLock()
 	cfg := rc.config
 	rc.RUnlock()
@@ -114,7 +114,7 @@ func (rc *ResolvConf) Get() *dns.ClientConfig {
 }
 
 func (rc *ResolvConf) load(successMessage string) bool {
-	cfg, err := dns.ClientConfigFromFile(rc.path)
+	cfg, err := dnsconf.FromFile(rc.path)
 	if err != nil {
 		slog.Error("Reading DNS configuration failed", "path", rc.path, "error", err)
 		return false

@@ -49,7 +49,30 @@ func TestDaneOverMtaSts(t *testing.T) {
 
 func requireLiveNetworkTests(t *testing.T) {
 	t.Helper()
-	if os.Getenv("TLSPOL_LIVE_TESTS") != "1" {
-		t.Skip("set TLSPOL_LIVE_TESTS=1 to run tests against public DNS and HTTPS services")
+	if !liveNetworkTestsEnabled() {
+		t.Skip("live network tests disabled by TLSPOL_LIVE_TESTS=0")
+	}
+}
+
+func liveNetworkTestsEnabled() bool {
+	return os.Getenv("TLSPOL_LIVE_TESTS") != "0"
+}
+
+func TestLiveNetworkTestsEnabled(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "default", want: true},
+		{name: "enabled", value: "1", want: true},
+		{name: "disabled", value: "0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TLSPOL_LIVE_TESTS", test.value)
+			if got := liveNetworkTestsEnabled(); got != test.want {
+				t.Fatalf("liveNetworkTestsEnabled() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
