@@ -1,6 +1,13 @@
+## What's Changed in v1.13.0 (2026-08-20)
+
+* build(docker): bump golang from 1.26.5-alpine3.23 to 1.27.0-alpine3.24 in /deployments by @DragonWork
+* build: update toolchain to go1.27.0 by @DragonWork
+* build(deps): migrate from github.com/miekg/dns to newer codeberg.org/miekg/dns by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.12.2...v1.13.0
+
 ## What's Changed in v1.12.2 (2026-08-14)
 
-* chore: update CHANGELOG.md by @DragonWork
 * build(deps): bump golang.org/x/mod from 0.38.0 to 0.39.0 in the golang-x group by @dependabot[bot] in [#181](https://github.com/Zuplu/postfix-tlspol/pull/181)
 * fix(socketmap): relax socketmap limits by @DragonWork
 * build(deps): update dependencies by @DragonWork
