@@ -1,5 +1,5 @@
-# codeberg.org/miekg/dns v0.6.101
-## explicit; go 1.25.0
+# codeberg.org/miekg/dns v0.6.103
+## explicit; go 1.27.0
 codeberg.org/miekg/dns
 codeberg.org/miekg/dns/deleg
 codeberg.org/miekg/dns/dnsconf
