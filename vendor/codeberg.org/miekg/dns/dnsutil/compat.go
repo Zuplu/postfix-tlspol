@@ -3,9 +3,10 @@ package dnsutil
 import "codeberg.org/miekg/dns"
 
 // SetQuestion set the question section in the message m.
-// It generates an ID and sets the RecursionDesired (RD) bit to true.
+// It generates an ID and sets the RecursionDesired (RD) bit to true. If c is given it's used as the class,
+// otherwise it default to [dns.ClassINET]
 // If the type t isn't known to this library, nil is returned. Also see [dns.NewMsg] and [Question].
-func SetQuestion(m *dns.Msg, z string, t uint16) *dns.Msg {
+func SetQuestion(m *dns.Msg, z string, t uint16, c ...uint16) *dns.Msg {
 	m.ID = dns.ID()
 	m.RecursionDesired = true
 	var rr dns.RR
@@ -16,6 +17,9 @@ func SetQuestion(m *dns.Msg, z string, t uint16) *dns.Msg {
 	rr = newFn()
 	rr.Header().Name = z
 	rr.Header().Class = dns.ClassINET
+	if len(c) > 0 {
+		rr.Header().Class = c[0]
+	}
 
 	m.Question = []dns.RR{rr}
 	return m
