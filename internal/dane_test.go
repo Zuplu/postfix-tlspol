@@ -89,8 +89,7 @@ func TestCheckDaneOnceReturnsErrorWhenMxAddressLookupTimesOut(t *testing.T) {
 		client.Transport.WriteTimeout = originalWriteTimeout
 	})
 
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		if len(r.Question) == 0 {
 			return
 		}
@@ -114,7 +113,7 @@ func TestCheckDaneOnceReturnsErrorWhenMxAddressLookupTimesOut(t *testing.T) {
 		}
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatalf("failed to listen for test DNS server: %v", err)
@@ -145,8 +144,7 @@ func TestGetMxRecordsDeduplicatesAndLimitsAddressLookups(t *testing.T) {
 	var seenMu sync.Mutex
 	seenQueries := map[string]int{}
 
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		if len(r.Question) == 0 {
 			return
 		}
@@ -207,7 +205,7 @@ func TestGetMxRecordsDeduplicatesAndLimitsAddressLookups(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -257,8 +255,7 @@ func TestCheckTlsaRecordsLimitsConcurrentLookups(t *testing.T) {
 	var slowInFlight atomic.Int32
 	var drainedBeforeBatch atomic.Bool
 
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		if len(r.Question) == 0 {
 			return
 		}
@@ -298,7 +295,7 @@ func TestCheckTlsaRecordsLimitsConcurrentLookups(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -346,8 +343,7 @@ func updateMaxInt32(maxValue *atomic.Int32, value int32) {
 }
 
 func TestDaneMxAddressLookupFailureIsTemporary(t *testing.T) {
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 		msg.AuthenticatedData = true
@@ -367,7 +363,7 @@ func TestDaneMxAddressLookupFailureIsTemporary(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -383,8 +379,7 @@ func TestDaneMxAddressLookupFailureIsTemporary(t *testing.T) {
 }
 
 func TestDaneUnauthenticatedSuccessfulMxAddressLookupIsNotTemporary(t *testing.T) {
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 
@@ -406,7 +401,7 @@ func TestDaneUnauthenticatedSuccessfulMxAddressLookupIsNotTemporary(t *testing.T
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -428,8 +423,7 @@ func TestDaneUnauthenticatedNxdomainForOneMxDoesNotBlockOthers(t *testing.T) {
 	var validTlsaQueries atomic.Int32
 	var unreachableTlsaQueries atomic.Int32
 
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 
@@ -462,7 +456,7 @@ func TestDaneUnauthenticatedNxdomainForOneMxDoesNotBlockOthers(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -490,8 +484,7 @@ func TestDaneUnauthenticatedNxdomainPreventsMandatoryDane(t *testing.T) {
 	var validTlsaQueries atomic.Int32
 	var unreachableTlsaQueries atomic.Int32
 
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 		msg.AuthenticatedData = true
@@ -520,7 +513,7 @@ func TestDaneUnauthenticatedNxdomainPreventsMandatoryDane(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -545,8 +538,7 @@ func TestDaneUnauthenticatedNxdomainPreventsMandatoryDane(t *testing.T) {
 }
 
 func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 
@@ -573,7 +565,7 @@ func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -604,8 +596,7 @@ func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
 
 func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
 	var tlsaQueries atomic.Int32
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 		msg.AuthenticatedData = true
@@ -625,7 +616,7 @@ func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -649,8 +640,7 @@ func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
 func TestDaneAuthenticatedMxNodataUsesImplicitMx(t *testing.T) {
 	var addressQueries atomic.Int32
 	var tlsaQueries atomic.Int32
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 		msg.AuthenticatedData = true
@@ -677,7 +667,7 @@ func TestDaneAuthenticatedMxNodataUsesImplicitMx(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -710,8 +700,7 @@ func TestDaneDoesNotUseImplicitMxForNxdomainOrNullMx(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var followupQueries atomic.Int32
-			mux := dns.NewServeMux()
-			mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+			handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 				msg := new(dns.Msg)
 				setDNSReply(msg, r)
 				msg.AuthenticatedData = true
@@ -728,7 +717,7 @@ func TestDaneDoesNotUseImplicitMxForNxdomainOrNullMx(t *testing.T) {
 				_ = writeDNSMsg(w, msg)
 			})
 
-			server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+			server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 			packetConn, err := net.ListenPacket("udp", server.Addr)
 			if err != nil {
 				t.Fatal(err)
@@ -761,8 +750,7 @@ func TestNegativeResponseTTLUsesSoaMinimum(t *testing.T) {
 
 func TestDaneFollowsSecureCnameDuringMxLookup(t *testing.T) {
 	var targetMxQueries atomic.Int32
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
 		msg.AuthenticatedData = true
@@ -783,7 +771,7 @@ func TestDaneFollowsSecureCnameDuringMxLookup(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)

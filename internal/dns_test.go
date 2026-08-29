@@ -34,8 +34,7 @@ func BenchmarkNewDNSQuery(b *testing.B) {
 
 func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 	observed := make(chan observedDNSQuery, 8)
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		if err := r.Unpack(); err != nil {
 			t.Errorf("unpack DNS request: %v", err)
 			return
@@ -74,7 +73,7 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: mux}
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
 	packetConn, err := net.ListenPacket("udp", server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -126,8 +125,7 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 	var udpQueries atomic.Int32
 	var tcpQueries atomic.Int32
 
-	udpMux := dns.NewServeMux()
-	udpMux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	udpHandler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		if err := r.Unpack(); err != nil {
 			t.Errorf("unpack DNS request: %v", err)
 			return
@@ -142,8 +140,7 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 		_ = writeDNSMsg(w, msg)
 	})
 
-	tcpMux := dns.NewServeMux()
-	tcpMux.HandleFunc(".", func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	tcpHandler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		tcpQueries.Add(1)
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
@@ -161,8 +158,8 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	udpServer := &dns.Server{PacketConn: packetConn, Handler: udpMux}
-	tcpServer := &dns.Server{Listener: tcpListener, Handler: tcpMux}
+	udpServer := &dns.Server{PacketConn: packetConn, Handler: udpHandler}
+	tcpServer := &dns.Server{Listener: tcpListener, Handler: tcpHandler}
 	go func() { _ = udpServer.ListenAndServe() }()
 	go func() { _ = tcpServer.ListenAndServe() }()
 	t.Cleanup(func() {
