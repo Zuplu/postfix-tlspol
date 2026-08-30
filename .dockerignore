@@ -4,4 +4,5 @@ deployments
 init
 configs/config.yaml
 build
+/target
 *.md

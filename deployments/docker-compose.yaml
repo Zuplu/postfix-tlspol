@@ -6,8 +6,6 @@ services:
       context: ..
       dockerfile: ./deployments/Dockerfile
       args:
-        TARGETPLATFORM: ${TARGETPLATFORM:-}
-        GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
         VERSION: ${VERSION:-0.0.0-dev}
     ports:
       - "127.0.0.1:8642:8642"

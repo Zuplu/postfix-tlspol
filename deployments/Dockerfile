@@ -55,43 +55,51 @@ server:
   ede: yes
   interface: 127.0.0.1
   port: 8053
+  do-not-query-localhost: yes
   do-ip4: yes
   prefer-ip4: yes
   do-ip6: yes
   prefer-ip6: no
   do-udp: yes
   do-tcp: yes
+  udp-connect: yes
   max-udp-size: 1232
   edns-buffer-size: 1232
   auto-trust-anchor-file: /var/lib/unbound/trusted-key.key
+  msg-cache-size: 16m
+  rrset-cache-size: 32m
   cache-min-ttl: 10
   cache-max-ttl: 240
+  cache-max-negative-ttl: 240
+  # Preserve authoritative reply TTLs while the resolver cache still expires at cache-max-ttl.
   serve-original-ttl: yes
   serve-expired: no
   prefetch-key: yes
   prefetch: yes
   hide-identity: yes
   hide-version: yes
-  target-fetch-policy: "4 3 2 2 1"
+  hide-trustanchor: yes
+  target-fetch-policy: "3 2 1 0 0"
   harden-glue: yes
   harden-dnssec-stripped: yes
-  harden-algo-downgrade: yes
-  harden-below-nxdomain: no
+  harden-algo-downgrade: no
+  harden-below-nxdomain: yes
   harden-referral-path: no
   harden-large-queries: no
   harden-short-bufsize: yes
   harden-unverified-glue: no
   harden-unknown-additional: no
-  aggressive-nsec: no
+  aggressive-nsec: yes
+  val-clean-additional: yes
   val-permissive-mode: no
-  unknown-server-time-limit: 1500
-  jostle-timeout: 1000
-  discard-timeout: 4000
+  unknown-server-time-limit: 376
+  jostle-timeout: 200
+  discard-timeout: 1900
   so-reuseport: yes
   num-threads: 2
-  qname-minimisation: no
+  qname-minimisation: yes
   minimal-responses: yes
-  infra-cache-min-rtt: 4500
+  infra-cache-min-rtt: 50
   infra-keep-probing: yes
   module-config: "validator iterator"
 remote-control:
@@ -109,7 +117,7 @@ EOR
 RUN <<EOR
   cat <<EOF > /entrypoint.sh
 #!/bin/sh
-set -e
+set -eu
 unbound_pid=""
 tlspol_pid=""
 
@@ -126,12 +134,14 @@ stop_children() {
 	done
 }
 
+# shellcheck disable=SC2329 # Invoked by the signal trap below.
 shutdown() {
 	trap - TERM INT QUIT
 	stop_children
 	exit 0
 }
 
+# shellcheck disable=SC2329 # Invoked by the signal trap below.
 reload() {
 	if [ -n "\$tlspol_pid" ]; then
 		kill -HUP "\$tlspol_pid" 2>/dev/null || true
@@ -157,7 +167,7 @@ chmod 0600 /var/lib/unbound/trusted-key.key
 /usr/sbin/unbound -d -c /etc/unbound/unbound.conf &
 unbound_pid="\$!"
 ready=0
-for i in \$(seq 1 30); do
+for _ in \$(seq 1 30); do
   if nslookup -type=SOA . 127.0.0.1:8053 >/dev/null 2>&1; then
     ready=1
     break
