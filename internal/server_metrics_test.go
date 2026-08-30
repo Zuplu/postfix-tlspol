@@ -938,9 +938,68 @@ func TestCacheMaintenancePreservesConcurrentReplacement(t *testing.T) {
 	if changed || current != fresh {
 		t.Fatal("stale eviction snapshot removed a refreshed cache entry")
 	}
+	replacement := cloneCacheStruct(stale)
+	replacement.Policy = "secure"
+	current, changed = replaceCacheEntryIfCurrent("example.com", stale, replacement)
+	if changed || current != fresh {
+		t.Fatal("stale replacement snapshot overwrote a refreshed cache entry")
+	}
 	stored, ok := polCache.Get("example.com")
 	if !ok || stored != fresh {
 		t.Fatal("refreshed cache entry was not preserved")
+	}
+}
+
+func TestStoreMergedDomainResultPreservesConcurrentBranchAndCounterUpdates(t *testing.T) {
+	oldPolCache := polCache
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+	}()
+
+	now := time.Now()
+	stale := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Minute)},
+		MtaSts: PolicyBranch{
+			Policy:    "secure match=mx.old.example servername=hostname",
+			TTL:       60,
+			ExpiresAt: now.Add(time.Minute),
+		},
+		Counter: 2,
+	}
+	current := cloneCacheStruct(stale)
+	current.Dane = PolicyBranch{
+		Policy:    "dane-only",
+		TTL:       300,
+		ExpiresAt: now.Add(5 * time.Minute),
+	}
+	current.Counter = 7
+	polCache.Set("overlap.example", current)
+
+	result := domainResult{
+		MtaSts: PolicyBranch{
+			Policy: "secure match=mx.new.example servername=hostname",
+			Report: "policy_type=sts policy_domain=overlap.example",
+			TTL:    600,
+		},
+		MtaStsAttempted: true,
+	}
+	previous, stored := storeMergedDomainResult("overlap.example", result, now, 3)
+	if previous != current {
+		t.Fatal("expected refresh to merge against the latest cache entry")
+	}
+	if stored.Dane.Policy != "dane-only" || stored.Dane.ExpiresAt != current.Dane.ExpiresAt {
+		t.Fatalf("concurrent DANE refresh was lost: %+v", stored.Dane)
+	}
+	if stored.MtaSts.Policy != result.MtaSts.Policy {
+		t.Fatalf("MTA-STS refresh was not applied: %+v", stored.MtaSts)
+	}
+	if stored.Counter != 10 {
+		t.Fatalf("counter = %d, want 10", stored.Counter)
+	}
+	if cached, ok := polCache.Get("overlap.example"); !ok || cached != stored {
+		t.Fatal("merged result was not stored atomically")
 	}
 }
 
@@ -2219,6 +2278,53 @@ func TestScheduleFailedPolicyPrefetchPreservesStatsOnDiscard(t *testing.T) {
 	}
 	if _, ok := scheduler.nextDue(); ok {
 		t.Fatal("expected stats-only entry not to be scheduled")
+	}
+}
+
+func TestScheduleFailedPolicyPrefetchPreservesConcurrentReplacement(t *testing.T) {
+	oldPolCache := polCache
+	polCache = cache.New[*CacheStruct](filepath.Join(t.TempDir(), "cache.db"), time.Hour)
+	defer func() {
+		polCache.Close()
+		polCache = oldPolCache
+	}()
+
+	now := time.Now()
+	key := "concurrent-prefetch.example"
+	stale := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Hour)},
+		Dane: PolicyBranch{
+			Policy:    "dane",
+			TTL:       300,
+			ExpiresAt: now.Add(-time.Hour),
+		},
+	}
+	fresh := &CacheStruct{
+		Expirable: &cache.Expirable{ExpiresAt: now.Add(10 * time.Minute)},
+		Dane: PolicyBranch{
+			Policy:    "dane-only",
+			TTL:       600,
+			ExpiresAt: now.Add(10 * time.Minute),
+		},
+	}
+	polCache.Set(key, stale)
+	snapshot, _ := polCache.Get(key)
+	polCache.Set(key, fresh)
+
+	scheduler := newPrefetchScheduler()
+	scheduler.schedule(key, now)
+	scheduler.failures[key] = prefetchFailure{
+		firstFailed: now.Add(-PREFETCH_RETRY_MAX_AGE),
+		attempts:    8,
+	}
+	scheduleFailedPolicyPrefetch(scheduler, key, snapshot, domainResult{}, now)
+
+	stored, found := polCache.Get(key)
+	if !found || stored != fresh {
+		t.Fatal("stale prefetch failure discarded a concurrent cache replacement")
+	}
+	if _, ok := scheduler.nextDue(); !ok {
+		t.Fatal("concurrent replacement was not rescheduled")
 	}
 }
 

@@ -201,6 +201,19 @@ func removeCacheEntryIfCurrent(key string, expected *CacheStruct) (*CacheStruct,
 	return nil, true
 }
 
+func replaceCacheEntryIfCurrent(key string, expected *CacheStruct, replacement *CacheStruct) (*CacheStruct, bool) {
+	polCache.Lock()
+	defer polCache.Unlock()
+	current, found := cachedEntryLocked(key)
+	if !found || current != expected {
+		return current, false
+	}
+	polCache.Update(true, key, func(*CacheStruct, bool) (*CacheStruct, bool) {
+		return replacement, true
+	})
+	return replacement, true
+}
+
 func cloneCacheStruct(c *CacheStruct) *CacheStruct {
 	if c == nil {
 		return &CacheStruct{
@@ -1059,6 +1072,18 @@ func mergeCacheResult(c *CacheStruct, result domainResult, now time.Time) *Cache
 	return cs
 }
 
+func storeMergedDomainResult(domain string, result domainResult, now time.Time, counterDelta uint32) (*CacheStruct, *CacheStruct) {
+	var previous *CacheStruct
+	var merged *CacheStruct
+	polCache.Update(false, domain, func(current *CacheStruct, _ bool) (*CacheStruct, bool) {
+		previous = current
+		merged = mergeCacheResult(current, result, now)
+		merged.Counter += counterDelta
+		return merged, true
+	})
+	return previous, merged
+}
+
 func policyBranchRecheckTTL() uint32 {
 	return uint32(POLICY_BRANCH_RECHECK / time.Second)
 }
@@ -1373,9 +1398,7 @@ func handleSocketmapConnection(conn net.Conn, reader *bufio.Reader) {
 		if result.TTL != 0 || result.Dane.HasData() || result.MtaSts.HasData() ||
 			(c != nil && (result.DaneAttempted || result.MtaStsAttempted)) {
 			now := time.Now()
-			cs := mergeCacheResult(c, result, now)
-			cs.Counter += drainCacheHitCounter(domain) + 1
-			polCache.Set(domain, cs)
+			_, cs := storeMergedDomainResult(domain, result, now, drainCacheHitCounter(domain)+1)
 			enforceCacheLimit()
 			if _, _, _, ok := selectCachedPolicy(cs, now); ok {
 				resetCachedPolicyPrefetchFailures(domain)
