@@ -6,13 +6,50 @@
 package tlspol
 
 import (
+	"context"
 	"io"
 	"net/netip"
+	"sync"
+	"testing"
+	"time"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 )
+
+func startTestDNSServer(t *testing.T, server *dns.Server) func() {
+	t.Helper()
+
+	started := make(chan struct{})
+	serveErr := make(chan error, 1)
+	server.NotifyStartedFunc = func(context.Context) {
+		close(started)
+	}
+	go func() {
+		serveErr <- server.ListenAndServe()
+	}()
+
+	select {
+	case <-started:
+	case err := <-serveErr:
+		t.Fatalf("start test DNS server: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out starting test DNS server")
+	}
+
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			server.Shutdown(context.Background())
+			if err := <-serveErr; err != nil {
+				t.Errorf("stop test DNS server: %v", err)
+			}
+		})
+	}
+	t.Cleanup(shutdown)
+	return shutdown
+}
 
 type dnsTestQuestion struct {
 	Name  string

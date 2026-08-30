@@ -119,12 +119,7 @@ func TestCheckDaneOnceReturnsErrorWhenMxAddressLookupTimesOut(t *testing.T) {
 		t.Fatalf("failed to listen for test DNS server: %v", err)
 	}
 	server.PacketConn = packetConn
-	go func() {
-		_ = server.ListenAndServe()
-	}()
-	t.Cleanup(func() {
-		server.Shutdown(context.Background())
-	})
+	startTestDNSServer(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -211,8 +206,7 @@ func TestGetMxRecordsDeduplicatesAndLimitsAddressLookups(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -301,8 +295,7 @@ func TestCheckTlsaRecordsLimitsConcurrentLookups(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -369,8 +362,7 @@ func TestDaneMxAddressLookupFailureIsTemporary(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	policy, _, err := checkDaneOnce(context.Background(), "victim.test", packetConn.LocalAddr().String())
 	if err == nil {
@@ -407,8 +399,7 @@ func TestDaneUnauthenticatedSuccessfulMxAddressLookupIsNotTemporary(t *testing.T
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	policy, ttl, err := checkDaneOnce(context.Background(), "unsigned.test", packetConn.LocalAddr().String())
 	if err != nil {
@@ -462,8 +453,7 @@ func TestDaneUnauthenticatedNxdomainForOneMxDoesNotBlockOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	policy, ttl, err := checkDaneOnce(context.Background(), "mixed.test", packetConn.LocalAddr().String())
 	if err != nil {
@@ -519,8 +509,7 @@ func TestDaneUnauthenticatedNxdomainPreventsMandatoryDane(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	policy, ttl, err := checkDaneOnce(context.Background(), "mixed-secure.test", packetConn.LocalAddr().String())
 	if err != nil {
@@ -571,8 +560,7 @@ func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	tests := []struct {
 		name   string
@@ -622,8 +610,7 @@ func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	policy, ttl, err := checkDaneOnce(context.Background(), "nodata.test", packetConn.LocalAddr().String())
 	if err != nil {
@@ -673,8 +660,7 @@ func TestDaneAuthenticatedMxNodataUsesImplicitMx(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	policy, ttl, err := checkDaneOnce(context.Background(), "implicit.test", packetConn.LocalAddr().String())
 	if err != nil {
@@ -723,8 +709,7 @@ func TestDaneDoesNotUseImplicitMxForNxdomainOrNullMx(t *testing.T) {
 				t.Fatal(err)
 			}
 			server.PacketConn = packetConn
-			go func() { _ = server.ListenAndServe() }()
-			t.Cleanup(func() { server.Shutdown(context.Background()) })
+			startTestDNSServer(t, server)
 
 			policy, ttl, err := checkDaneOnce(context.Background(), "nomail.test", packetConn.LocalAddr().String())
 			if err != nil || policy != "" || ttl != 0 {
@@ -777,8 +762,7 @@ func TestDaneFollowsSecureCnameDuringMxLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	startTestDNSServer(t, server)
 
 	policy, ttl, err := checkDaneOnce(context.Background(), "alias.test", packetConn.LocalAddr().String())
 	if err != nil {

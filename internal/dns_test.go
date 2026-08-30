@@ -8,7 +8,6 @@ package tlspol
 import (
 	"context"
 	"net"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,12 +78,7 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.PacketConn = packetConn
-	go func() { _ = server.ListenAndServe() }()
-	var shutdownOnce sync.Once
-	shutdown := func() {
-		shutdownOnce.Do(func() { server.Shutdown(context.Background()) })
-	}
-	t.Cleanup(shutdown)
+	shutdown := startTestDNSServer(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -160,12 +154,8 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 
 	udpServer := &dns.Server{PacketConn: packetConn, Handler: udpHandler}
 	tcpServer := &dns.Server{Listener: tcpListener, Handler: tcpHandler}
-	go func() { _ = udpServer.ListenAndServe() }()
-	go func() { _ = tcpServer.ListenAndServe() }()
-	t.Cleanup(func() {
-		udpServer.Shutdown(context.Background())
-		tcpServer.Shutdown(context.Background())
-	})
+	startTestDNSServer(t, udpServer)
+	startTestDNSServer(t, tcpServer)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
