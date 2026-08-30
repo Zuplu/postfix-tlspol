@@ -313,6 +313,36 @@ func TestServeSocketmapListenerContinuesAfterAcceptError(t *testing.T) {
 	}
 }
 
+func TestAcceptRetryDelayIsBounded(t *testing.T) {
+	delay := time.Duration(0)
+	want := []time.Duration{
+		5 * time.Millisecond,
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		40 * time.Millisecond,
+		80 * time.Millisecond,
+		160 * time.Millisecond,
+		320 * time.Millisecond,
+		640 * time.Millisecond,
+		time.Second,
+		time.Second,
+	}
+	for i, expected := range want {
+		delay = nextAcceptRetryDelay(delay)
+		if delay != expected {
+			t.Fatalf("retry %d delay = %s, want %s", i+1, delay, expected)
+		}
+	}
+}
+
+func TestAcceptRetryWaitHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if waitAcceptRetry(ctx, time.Second) {
+		t.Fatal("canceled accept retry reported success")
+	}
+}
+
 func TestObservePolicyMetrics(t *testing.T) {
 	metricDaneTotal.Store(0)
 	metricDaneOnlyTotal.Store(0)

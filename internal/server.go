@@ -252,6 +252,8 @@ const (
 	METRICS_READ_TIMEOUT               = 10 * time.Second
 	METRICS_WRITE_TIMEOUT              = 10 * time.Second
 	METRICS_IDLE_TIMEOUT               = 30 * time.Second
+	ACCEPT_RETRY_INITIAL_DELAY         = 5 * time.Millisecond
+	ACCEPT_RETRY_MAX_DELAY             = time.Second
 )
 
 var (
@@ -516,6 +518,7 @@ func listenerAddressMatchesConfigured(address string, listenerAddress net.Addr) 
 func serveSocketmapListener(l net.Listener) {
 	defer serverWg.Done()
 	limited := newLimitedListener(l, SOCKETMAP_MAX_CONNECTIONS)
+	var retryDelay time.Duration
 
 	for {
 		conn, err := limited.Accept()
@@ -523,15 +526,19 @@ func serveSocketmapListener(l net.Listener) {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				break
 			}
+			retryDelay = nextAcceptRetryDelay(retryDelay)
 			addr := l.Addr()
 			if addr == nil {
-				slog.Error("Error accepting connection", "error", err, "network", "<unknown>", "address", "<unknown>")
+				slog.Error("Error accepting connection", "error", err, "network", "<unknown>", "address", "<unknown>", "retry_in", retryDelay)
 			} else {
-				slog.Error("Error accepting connection", "error", err, "network", addr.Network(), "address", addr.String())
+				slog.Error("Error accepting connection", "error", err, "network", addr.Network(), "address", addr.String(), "retry_in", retryDelay)
 			}
-			time.Sleep(100 * time.Millisecond)
+			if !waitAcceptRetry(bgCtx, retryDelay) {
+				return
+			}
 			continue
 		}
+		retryDelay = 0
 		activeConnections.Store(conn, struct{}{})
 		connectionWg.Go(func() {
 			defer func() {
@@ -539,6 +546,24 @@ func serveSocketmapListener(l net.Listener) {
 			}()
 			handleConnection(conn)
 		})
+	}
+}
+
+func nextAcceptRetryDelay(previous time.Duration) time.Duration {
+	if previous == 0 {
+		return ACCEPT_RETRY_INITIAL_DELAY
+	}
+	return min(previous*2, ACCEPT_RETRY_MAX_DELAY)
+}
+
+func waitAcceptRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
