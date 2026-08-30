@@ -45,7 +45,6 @@ func TestMarshal(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -229,7 +228,6 @@ func TestSplitNetstring_ValidCases(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -284,7 +282,6 @@ func TestSplitNetstring_IncompleteNeedMoreData_NotEOF(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -379,7 +376,6 @@ func TestSplitNetstring_ErrorCasesAtEOF(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -431,7 +427,6 @@ func TestScanner_ErrorPropagation(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -534,13 +529,7 @@ func (r *chunkedReader) Read(p []byte) (int, error) {
 	if r.offset >= len(r.data) {
 		return 0, io.EOF
 	}
-	n := r.chunkSize
-	if n > len(r.data)-r.offset {
-		n = len(r.data) - r.offset
-	}
-	if n > len(p) {
-		n = len(p)
-	}
+	n := min(min(r.chunkSize, len(r.data)-r.offset), len(p))
 	copy(p, r.data[r.offset:r.offset+n])
 	r.offset += n
 	return n, nil

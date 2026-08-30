@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -88,8 +89,7 @@ func New[T Cacheable](filePath string, savePeriod time.Duration) *Cache[T] {
 		c.dirty = true
 		c.generation++
 	}
-	c.wg.Add(1)
-	go c.periodicSave()
+	c.wg.Go(c.periodicSave)
 	return c
 }
 
@@ -180,7 +180,6 @@ func (c *Cache[T]) CloseWithError() error {
 }
 
 func (c *Cache[T]) periodicSave() {
-	defer c.wg.Done()
 	ticker := time.NewTicker(c.savePeriod)
 	defer ticker.Stop()
 	for {
@@ -261,9 +260,7 @@ func (c *Cache[T]) persistSnapshot(data map[string]T, generation uint64, force b
 
 func (c *Cache[T]) snapshotLocked() (map[string]T, uint64) {
 	snapshot := make(map[string]T, len(c.data))
-	for k, v := range c.data {
-		snapshot[k] = v
-	}
+	maps.Copy(snapshot, c.data)
 	return snapshot, c.generation
 }
 

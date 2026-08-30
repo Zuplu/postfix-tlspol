@@ -231,10 +231,8 @@ func checkMxRecords(ctx context.Context, records []mxRecord, resolverAddress str
 	jobs := make(chan mxRecord)
 	workers := min(DANE_MX_LOOKUP_CONCURRENCY, len(records))
 	var wg sync.WaitGroup
-	wg.Add(workers)
 	for range workers {
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-ctx.Done():
@@ -255,7 +253,7 @@ func checkMxRecords(ctx context.Context, records []mxRecord, resolverAddress str
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	go func() {
@@ -476,10 +474,8 @@ func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress s
 	jobs := make(chan string)
 	workers := min(DANE_MX_LOOKUP_CONCURRENCY, len(mxRecords))
 	var wg sync.WaitGroup
-	wg.Add(workers)
 	for range workers {
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-ctx.Done():
@@ -496,7 +492,7 @@ func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress s
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	go func() {
@@ -526,7 +522,7 @@ func getDanePolicy(ctx context.Context, cancel func(), ttl uint32, incompl bool,
 	if incompl {
 		minPolicy = NoDane
 	}
-	for i := 0; i < numRecords; i++ {
+	for range numRecords {
 		var res ResultWithTTL
 		select {
 		case result, ok := <-tlsaResults:

@@ -1218,12 +1218,10 @@ func TestQueryDomainSingleflight(t *testing.T) {
 
 	const workers = 8
 	var wg sync.WaitGroup
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			queryDomain("example.com")
-		}()
+		})
 	}
 
 	// Allow goroutines to block inside the first call
@@ -1789,7 +1787,7 @@ func TestPrefetchBatchesUseStartupPhaseAndJitter(t *testing.T) {
 
 	jitters := make(map[time.Duration]struct{})
 	previous := first
-	for index := int64(0); index < 32; index++ {
+	for index := range int64(32) {
 		batch := scheduler.batchTime(index)
 		nominal := scheduler.batchOrigin.Add(time.Duration(index) * PREFETCH_SLOT_INTERVAL)
 		jitter := batch.Sub(nominal)

@@ -168,10 +168,7 @@ func (s *prefetchScheduler) batchAtOrAfter(t time.Time) time.Time {
 	if !t.After(first) {
 		return first
 	}
-	index := int64(t.Sub(s.batchOrigin) / PREFETCH_SLOT_INTERVAL)
-	if index < 0 {
-		index = 0
-	}
+	index := max(int64(t.Sub(s.batchOrigin)/PREFETCH_SLOT_INTERVAL), 0)
 	due := s.batchTime(index)
 	if due.Before(t) {
 		due = s.batchTime(index + 1)
@@ -624,52 +621,50 @@ func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchSchedule
 			wg.Wait()
 			return
 		}
-		wg.Add(1)
-		go func(c cache.Entry[*CacheStruct], sem chan struct{}) {
+		wg.Go(func() {
 			defer func() {
 				<-sem
-				wg.Done()
 			}()
 			// Refresh the cached policy
-			refreshed := prefetchDomain(c.Key, c.Value)
+			refreshed := prefetchDomain(entry.Key, entry.Value)
 			refreshedAt := time.Now()
 			hasRefreshedData := refreshed.Dane.HasData() || refreshed.MtaSts.HasData()
 			hasFailedAttempt := (refreshed.DaneAttempted && !refreshed.Dane.HasData()) ||
 				(refreshed.MtaStsAttempted && !refreshed.MtaSts.HasData())
 			if hasRefreshedData || refreshed.DaneAttempted || refreshed.MtaStsAttempted {
-				merged := mergeCacheResult(c.Value, refreshed, refreshedAt)
+				merged := mergeCacheResult(entry.Value, refreshed, refreshedAt)
 				_, _, _, selected := selectCachedPolicy(merged, refreshedAt)
 				if selected {
-					logPrefetchedPolicyDowngrade(c.Key, c.Value, merged, refreshedAt)
+					logPrefetchedPolicyDowngrade(entry.Key, entry.Value, merged, refreshedAt)
 				}
-				polCache.Set(c.Key, merged)
+				polCache.Set(entry.Key, merged)
 				if selected {
 					if hasRefreshedData {
 						counter.Add(1)
 					}
 					if hasFailedAttempt {
-						scheduleFailedPolicyPrefetch(scheduler, c.Key, merged, refreshed, refreshedAt)
+						scheduleFailedPolicyPrefetch(scheduler, entry.Key, merged, refreshed, refreshedAt)
 						return
 					}
 					if hasRefreshedData {
 						observePrefetch("success")
 					}
-					scheduler.resetFailures(c.Key)
-					scheduleCachedPolicyPrefetch(c.Key, merged, refreshedAt)
+					scheduler.resetFailures(entry.Key)
+					scheduleCachedPolicyPrefetch(entry.Key, merged, refreshedAt)
 				} else {
-					scheduleFailedPolicyPrefetch(scheduler, c.Key, c.Value, refreshed, refreshedAt)
+					scheduleFailedPolicyPrefetch(scheduler, entry.Key, entry.Value, refreshed, refreshedAt)
 				}
-			} else if _, _, _, ok := selectCachedPolicy(c.Value, refreshedAt); ok {
-				scheduler.resetFailures(c.Key)
-				if due, ok := scheduler.nextPrefetchTimeAfterMiss(c.Value, refreshedAt); ok {
-					scheduler.schedule(c.Key, due)
+			} else if _, _, _, ok := selectCachedPolicy(entry.Value, refreshedAt); ok {
+				scheduler.resetFailures(entry.Key)
+				if due, ok := scheduler.nextPrefetchTimeAfterMiss(entry.Value, refreshedAt); ok {
+					scheduler.schedule(entry.Key, due)
 				} else {
-					scheduleCachedPolicyPrefetch(c.Key, c.Value, refreshedAt)
+					scheduleCachedPolicyPrefetch(entry.Key, entry.Value, refreshedAt)
 				}
 			} else {
-				scheduleFailedPolicyPrefetch(scheduler, c.Key, c.Value, refreshed, refreshedAt)
+				scheduleFailedPolicyPrefetch(scheduler, entry.Key, entry.Value, refreshed, refreshedAt)
 			}
-		}(entry, sem)
+		})
 	}
 	wg.Wait()
 	count := counter.Load()

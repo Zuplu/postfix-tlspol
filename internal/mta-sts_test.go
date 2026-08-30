@@ -50,7 +50,7 @@ func TestMtaStsRecordAvailable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := &dns.Msg{MsgHeader: dns.MsgHeader{Rcode: tt.rcode}, Answer: tt.answers}
+			msg := &dns.Msg{Rcode: tt.rcode, Answer: tt.answers}
 			got, err := mtaStsRecordAvailable(msg)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)

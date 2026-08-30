@@ -340,11 +340,9 @@ func StartDaemon(v string, licenseText string) error {
 	listenForSignals(daemonCtx, cancelDaemon)
 
 	var prefetchWg sync.WaitGroup
-	prefetchWg.Add(1)
-	go func() {
-		defer prefetchWg.Done()
+	prefetchWg.Go(func() {
 		startPrefetching(daemonCtx)
-	}()
+	})
 	serverErr := startServer()
 	cancelDaemon()
 	closeActiveConnections()
@@ -422,7 +420,7 @@ func listenSystemdSocket() ([]net.Listener, bool, error) {
 	}
 
 	listeners := make([]net.Listener, 0, fds)
-	for i := 0; i < fds; i++ {
+	for i := range fds {
 		fdNum := uintptr(3 + i)
 		fdFile := os.NewFile(fdNum, fmt.Sprintf("systemd-listen-fd-%d", fdNum))
 		if fdFile == nil {
@@ -521,15 +519,13 @@ func serveSocketmapListener(l net.Listener) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		connectionWg.Add(1)
 		activeConnections.Store(conn, struct{}{})
-		go func() {
+		connectionWg.Go(func() {
 			defer func() {
 				activeConnections.Delete(conn)
-				connectionWg.Done()
 			}()
 			handleConnection(conn)
-		}()
+		})
 	}
 }
 
@@ -1097,17 +1093,14 @@ func replyJson(ctx context.Context, conn net.Conn, domain string) {
 		msRpt string
 		msTTL uint32
 	)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		dPol, dTTL = checkDanePolicy(ctx, domain, true)
 		tb = time.Now()
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		msPol, msRpt, msTTL = checkMtaStsPolicy(ctx, domain, true)
 		tc = time.Now()
-	}()
+	})
 	wg.Wait()
 	r := Result{
 		Version: Version,
@@ -1562,15 +1555,12 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 
 	switch {
 	case queryDane && queryMtaSts:
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
-		}()
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
-		}()
+		})
 		wg.Wait()
 	case queryDane:
 		danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)

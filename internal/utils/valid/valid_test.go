@@ -29,7 +29,6 @@ func TestIsHex(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := IsHex(tc.in); got != tc.want {
@@ -68,7 +67,6 @@ func TestSHA(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := tc.fn(tc.in); got != tc.want {
@@ -118,7 +116,6 @@ func TestIsDNSName(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := IsDNSName(tc.in); got != tc.want {

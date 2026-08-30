@@ -15,7 +15,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func startTestDNSServer(t *testing.T, server *dns.Server) func() {
@@ -99,54 +98,52 @@ func dnsHeader(name string, ttl uint32) dns.Header {
 
 func dnsMX(name string, ttl uint32, preference uint16, mx string) *dns.MX {
 	return &dns.MX{
-		Hdr: dnsHeader(name, ttl),
-		MX:  rdata.MX{Preference: preference, Mx: mx},
+		Hdr:        dnsHeader(name, ttl),
+		Preference: preference, Mx: mx,
 	}
 }
 
 func dnsA(name string, ttl uint32, address string) *dns.A {
 	return &dns.A{
-		Hdr: dnsHeader(name, ttl),
-		A:   rdata.A{Addr: netip.MustParseAddr(address)},
+		Hdr:  dnsHeader(name, ttl),
+		Addr: netip.MustParseAddr(address),
 	}
 }
 
 func dnsAAAA(name string, ttl uint32, address string) *dns.AAAA {
 	return &dns.AAAA{
 		Hdr:  dnsHeader(name, ttl),
-		AAAA: rdata.AAAA{Addr: netip.MustParseAddr(address)},
+		Addr: netip.MustParseAddr(address),
 	}
 }
 
 func dnsTXT(name string, ttl uint32, text ...string) *dns.TXT {
 	return &dns.TXT{
 		Hdr: dnsHeader(name, ttl),
-		TXT: rdata.TXT{Txt: text},
+		Txt: text,
 	}
 }
 
 func dnsTLSA(name string, ttl uint32, usage, selector, matchingType uint8, certificate string) *dns.TLSA {
 	return &dns.TLSA{
-		Hdr: dnsHeader(name, ttl),
-		TLSA: rdata.TLSA{
-			Usage:        usage,
-			Selector:     selector,
-			MatchingType: matchingType,
-			Certificate:  certificate,
-		},
+		Hdr:          dnsHeader(name, ttl),
+		Usage:        usage,
+		Selector:     selector,
+		MatchingType: matchingType,
+		Certificate:  certificate,
 	}
 }
 
 func dnsSOA(name string, ttl, negativeTTL uint32) *dns.SOA {
 	return &dns.SOA{
-		Hdr: dnsHeader(name, ttl),
-		SOA: rdata.SOA{Minttl: negativeTTL},
+		Hdr:    dnsHeader(name, ttl),
+		Minttl: negativeTTL,
 	}
 }
 
 func dnsCNAME(name string, ttl uint32, target string) *dns.CNAME {
 	return &dns.CNAME{
-		Hdr:   dnsHeader(name, ttl),
-		CNAME: rdata.CNAME{Target: target},
+		Hdr:    dnsHeader(name, ttl),
+		Target: target,
 	}
 }

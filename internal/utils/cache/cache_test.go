@@ -29,10 +29,8 @@ func init() {
 
 func newTestValue(expiresAt time.Time, payload string) *testValue {
 	return &testValue{
-		Expirable: Expirable{
-			ExpiresAt: expiresAt,
-		},
-		Payload: payload,
+		ExpiresAt: expiresAt,
+		Payload:   payload,
 	}
 }
 
@@ -449,13 +447,10 @@ func TestCacheConcurrentSetGet(t *testing.T) {
 	const perWorker = 64
 
 	var wg sync.WaitGroup
-	wg.Add(workers)
 
-	for w := 0; w < workers; w++ {
-		w := w
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perWorker; i++ {
+	for w := range workers {
+		wg.Go(func() {
+			for i := range perWorker {
 				key := time.Now().Add(time.Duration(w*perWorker+i) * time.Nanosecond).Format(time.RFC3339Nano)
 				val := newTestValue(time.Now().Add(1*time.Minute), key)
 				c.Set(key, val)
@@ -463,7 +458,7 @@ func TestCacheConcurrentSetGet(t *testing.T) {
 					t.Errorf("unexpected get result for key %q", key)
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -507,7 +502,7 @@ func BenchmarkWriteSnapshot(b *testing.B) {
 	payload := strings.Repeat("x", 128)
 	data := make(map[string]*testValue, entries)
 	expiresAt := time.Date(2026, 4, 2, 16, 0, 0, 0, time.UTC)
-	for i := 0; i < entries; i++ {
+	for i := range entries {
 		key := "domain-" + strconv.Itoa(i) + ".example"
 		data[key] = newTestValue(expiresAt, payload)
 	}
