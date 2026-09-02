@@ -1,3 +1,18 @@
+## What's Changed in v1.14.0 (2026-09-02)
+
+* build(deps): update miekg/dns to v0.6.105 by @DragonWork
+* test(dns): synchronize test server startup by @DragonWork
+* refactor(go): adopt Go 1.27 idioms by @DragonWork
+* perf(docker): tune Unbound resolver by @DragonWork
+* fix(cache): merge concurrent policy refreshes by @DragonWork
+* fix(server): back off accept failures by @DragonWork
+* fix(dane): stop after insecure MX address lookup by @DragonWork
+* build(go): update toolchain to go1.27.1 by @DragonWork
+* build(docker): bump golang from `4c9fe60` to `cf6fca6` in /deployments by @dependabot[bot] in [#190](https://github.com/Zuplu/postfix-tlspol/pull/190)
+* build(deps): update x/crypto to v0.56.0
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.13.0...v1.14.0
+
 ## What's Changed in v1.13.0 (2026-08-20)
 
 * build(docker): bump golang from 1.26.5-alpine3.23 to 1.27.0-alpine3.24 in /deployments by @DragonWork
