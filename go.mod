@@ -2,6 +2,8 @@ module github.com/Zuplu/postfix-tlspol
 
 go 1.27.0
 
+toolchain go1.27.1
+
 require (
 	codeberg.org/miekg/dns v0.6.105
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
