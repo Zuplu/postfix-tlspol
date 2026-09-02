@@ -410,6 +410,94 @@ func TestDaneUnauthenticatedSuccessfulMxAddressLookupIsNotTemporary(t *testing.T
 	}
 }
 
+func TestDaneInsecureMxAddressDoesNotFailOnOtherAddressFamily(t *testing.T) {
+	var aaaaQueries atomic.Int32
+	var tlsaQueries atomic.Int32
+
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		setDNSReply(msg, r)
+
+		q := dnsQuestion(r)
+		switch {
+		case q.Name == "mixed-security.test." && q.Qtype == dns.TypeMX:
+			msg.AuthenticatedData = true
+			msg.Answer = append(msg.Answer, dnsMX(q.Name, 300, 10, "mx.insecure-address.test."))
+		case q.Name == "mx.insecure-address.test." && q.Qtype == dns.TypeA:
+			msg.AuthenticatedData = false
+			msg.Answer = append(msg.Answer, dnsA(q.Name, 300, "192.0.2.10"))
+		case q.Name == "mx.insecure-address.test." && q.Qtype == dns.TypeAAAA:
+			aaaaQueries.Add(1)
+			msg.Rcode = dns.RcodeServerFailure
+		case q.Name == "_25._tcp.mx.insecure-address.test." && q.Qtype == dns.TypeTLSA:
+			tlsaQueries.Add(1)
+			msg.AuthenticatedData = true
+			msg.Answer = append(msg.Answer, dnsTLSA(q.Name, 300, 3, 1, 1, strings.Repeat("a", 64)))
+		default:
+			msg.AuthenticatedData = true
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = writeDNSMsg(w, msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	startTestDNSServer(t, server)
+
+	policy, ttl, err := checkDaneOnce(context.Background(), "mixed-security.test", packetConn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("expected an insecure address response to disable DANE without a temporary error, got %v", err)
+	}
+	if policy != "" || ttl != 0 {
+		t.Fatalf("expected no DANE policy for an insecure MX address, got policy=%q ttl=%d", policy, ttl)
+	}
+	if got := aaaaQueries.Load(); got != 0 {
+		t.Fatalf("expected the insecure A response to make the broken AAAA lookup irrelevant, got %d AAAA queries", got)
+	}
+	if got := tlsaQueries.Load(); got != 0 {
+		t.Fatalf("expected TLSA lookup to be skipped for an insecure MX address, got %d queries", got)
+	}
+}
+
+func TestDaneSecureAddressNodataDoesNotHideOtherAddressFamilyFailure(t *testing.T) {
+	handler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		setDNSReply(msg, r)
+		msg.AuthenticatedData = true
+
+		q := dnsQuestion(r)
+		switch {
+		case q.Name == "secure-partial.test." && q.Qtype == dns.TypeMX:
+			msg.Answer = append(msg.Answer, dnsMX(q.Name, 300, 10, "mx.secure-partial.test."))
+		case q.Name == "mx.secure-partial.test." && q.Qtype == dns.TypeA:
+			// Authenticated NODATA does not establish whether an AAAA address exists.
+		case q.Name == "mx.secure-partial.test." && q.Qtype == dns.TypeAAAA:
+			msg.AuthenticatedData = false
+			msg.Rcode = dns.RcodeServerFailure
+		default:
+			msg.Rcode = dns.RcodeNameError
+		}
+		_ = writeDNSMsg(w, msg)
+	})
+
+	server := &dns.Server{Addr: "127.0.0.1:0", Net: "udp", Handler: handler}
+	packetConn, err := net.ListenPacket("udp", server.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.PacketConn = packetConn
+	startTestDNSServer(t, server)
+
+	policy, ttl, err := checkDaneOnce(context.Background(), "secure-partial.test", packetConn.LocalAddr().String())
+	if err == nil {
+		t.Fatalf("expected the unresolved AAAA lookup to remain a temporary error, got policy=%q ttl=%d", policy, ttl)
+	}
+}
+
 func TestDaneUnauthenticatedNxdomainForOneMxDoesNotBlockOthers(t *testing.T) {
 	var validTlsaQueries atomic.Int32
 	var unreachableTlsaQueries atomic.Int32
@@ -569,7 +657,7 @@ func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
 	}{
 		{name: "authenticated address", host: "secure.test", status: MxOk},
 		{name: "unauthenticated address", host: "unsigned.test", status: MxNotSec},
-		{name: "authenticated nxdomain", host: "secure-nxdomain.test", status: MxNotSec},
+		{name: "authenticated nxdomain", host: "secure-nxdomain.test", status: MxNoAddress},
 		{name: "unauthenticated nxdomain", host: "unsigned-nxdomain.test", status: MxNotSec},
 		{name: "servfail", host: "servfail.test", status: MxFail},
 	}

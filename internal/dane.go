@@ -67,6 +67,8 @@ func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([
 			}
 		case MxNotSec:
 			incompl = true
+		case MxNoAddress:
+			// A securely unreachable MX host cannot contribute a TLSA policy.
 		}
 	}
 	if lookupErr != nil {
@@ -279,6 +281,7 @@ const (
 	MxOk uint8 = iota
 	MxFail
 	MxNotSec
+	MxNoAddress
 )
 
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
@@ -289,9 +292,15 @@ func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 
 	failed := false
 	for _, t := range []uint16{dns.TypeA, dns.TypeAAAA} {
-		switch checkMxAddress(ctx, mx, resolverAddress, t) {
+		status := checkMxAddress(ctx, mx, resolverAddress, t)
+		switch status {
 		case MxOk:
 			return MxOk
+		case MxNotSec:
+			// An insecure address response rules out DANE for this MX host.
+			// Do not let an unrelated failure for the other address family
+			// turn that completed result into a temporary policy error.
+			return MxNotSec
 		case MxFail:
 			failed = true
 		}
@@ -299,7 +308,7 @@ func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 	if failed {
 		return MxFail
 	}
-	return MxNotSec
+	return MxNoAddress
 }
 
 func checkMxAddress(ctx context.Context, mx string, resolverAddress string, recordType uint16) uint8 {
@@ -325,10 +334,13 @@ func checkMxAddress(ctx context.Context, mx string, resolverAddress string, reco
 				}
 			}
 		}
-		return MxNotSec
+		return MxNoAddress
 	case dns.RcodeNameError:
 		// NXDOMAIN is a completed negative response, not a temporary DNS error.
-		return MxNotSec
+		if !r.AuthenticatedData {
+			return MxNotSec
+		}
+		return MxNoAddress
 	default:
 		return MxFail
 	}

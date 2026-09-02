@@ -56,8 +56,7 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 			msg.AuthenticatedData = true
 			msg.Answer = append(msg.Answer, dnsMX(q.Name, 300, 0, "mx.edns.test."))
 		case dns.TypeA:
-			msg.AuthenticatedData = false
-			msg.Answer = append(msg.Answer, dnsA(q.Name, 300, "192.0.2.10"))
+			msg.AuthenticatedData = true
 		case dns.TypeAAAA:
 			msg.AuthenticatedData = true
 			msg.Answer = append(msg.Answer, dnsAAAA(q.Name, 300, "2001:db8::10"))
