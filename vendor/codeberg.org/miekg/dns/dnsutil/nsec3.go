@@ -8,7 +8,9 @@ import (
 	"codeberg.org/miekg/dns/internal/pack"
 )
 
-// NSEC3Name returns the hashed owner name according to RFC 5155.
+// NSEC3Name returns the hashed owner name according to RFC 5155. The hash is always SHA-1, the only algorithm
+// RFC 5155 defines; when hashing a name for comparison with an NSEC3 record, check that record's Hash field
+// first.
 func NSEC3Name(s, salt string, iter uint16) string {
 	hashdata := make([]byte, hex.DecodedLen(len(salt))+255)
 	n, err := pack.Name(s, hashdata, 0, nil, false)

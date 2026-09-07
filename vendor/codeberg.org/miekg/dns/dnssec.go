@@ -87,21 +87,22 @@ var AlgorithmToHash = map[uint8]crypto.Hash{
 
 // DNSSEC hashing algorithm codes.
 const (
-	_      uint8 = iota
-	SHA1         // RFC 4034.
-	SHA256       // RFC 4509.
-	GOST94       // RFC 5933.
-	SHA384       // Experimental.
-	SHA512       // Experimental.
+	SHA1     uint8 = 1 // RFC 4034.
+	SHA256   uint8 = 2 // RFC 4509.
+	GOST94   uint8 = 3 // RFC 5933.
+	SHA384   uint8 = 4 // RFC 6605.
+	GOST2012 uint8 = 5 // RFC 9558.
+	SM3      uint8 = 6 // RFC 9563.
 )
 
 // HashToString is a map of hash IDs to names.
 var HashToString = map[uint8]string{
-	SHA1:   "SHA1",
-	SHA256: "SHA256",
-	GOST94: "GOST94",
-	SHA384: "SHA384",
-	SHA512: "SHA512",
+	SHA1:     "SHA1",
+	SHA256:   "SHA256",
+	GOST94:   "GOST94",
+	SHA384:   "SHA384",
+	GOST2012: "GOST2012",
+	SM3:      "SM3",
 }
 
 // DNSKEY flag values.
@@ -178,8 +179,6 @@ func (k *DNSKEY) ToDS(h uint8) *DS {
 		hash = crypto.SHA256
 	case SHA384:
 		hash = crypto.SHA384
-	case SHA512:
-		hash = crypto.SHA512
 	default:
 		return nil
 	}
