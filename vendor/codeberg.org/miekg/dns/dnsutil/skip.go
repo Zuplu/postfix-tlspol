@@ -2,13 +2,15 @@ package dnsutil
 
 type skip uint
 
+// These constants are used in the [Skip] function.
 const (
 	SkipForward skip = iota + 1
 	SkipBackward
 )
 
 // Skip skips n labels in s in the desired direction. If the returned bool is true then beginning
-// the name was reached if this is the case s is returned as-is.
+// the name was reached if this is the case s is returned as-is. The direction can be  [SkipForward]
+// or [SkipBackward].
 func Skip(s string, n int, direction skip) (string, bool) {
 	switch direction {
 	case SkipForward:

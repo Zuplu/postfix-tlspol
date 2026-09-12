@@ -140,7 +140,7 @@ func unpackRR(msg *cryptobyte.String, msgBuf []byte) (RR, error) {
 		rr = newFn()
 		*rr.Header() = *h
 	} else {
-		rr = &RFC3597{Hdr: *h}
+		rr = &RFC3597{Hdr: *h, RRType: typ}
 	}
 
 	if rdlength == 0 {
@@ -357,8 +357,7 @@ func unpackRRs(cnt uint16, msg *cryptobyte.String, msgBuf []byte) ([]RR, error) 
 	return dst, nil
 }
 
-// Unpack unpacks a binary message that sits in m.Data to a Msg structure. Multiple OPT, TSIG or SIG RRs in
-// the Additional (Extra) section return an error.
+// Unpack unpacks a binary message that sits in m.Data to a Msg structure.
 func (m *Msg) Unpack() (err error) {
 	s := cryptobyte.String(m.Data)
 	var counts uint64 // read all counters into 64 bits and slice the 16 bits values out of it
@@ -383,7 +382,7 @@ func (m *Msg) Unpack() (err error) {
 
 	if m.offset > MsgHeaderSize {
 		if !s.Skip(int(m.offset - MsgHeaderSize)) {
-			return unpack.Errorf("overflow %s", "MsgHeader")
+			return fmt.Errorf("overflow %s", "MsgHeader")
 		}
 		goto Rest
 	}
@@ -414,16 +413,11 @@ Rest:
 	}
 
 	// Check for the OPT RR and remove it entirely, unpack the OPT for option codes and put those in the Pseudo
-	// section. The last OPT RR will be used, multiple OPT RRs triggers an error. Multiple TISG/SIGs also
-	// create an error.
-	var op, ts, si uint16 = 0, 0, 0
-	m.Pseudo = make([]RR, 0, 3)
+	// section. We will only check one OPT, any others will be left in Extra.
+Extra1:
 	for i := len(m.Extra) - 1; i >= 0; i-- {
 		switch opt := m.Extra[i].(type) {
 		case *OPT:
-			if op > 0 {
-				return unpack.Errorf("multiple OPT in Extra")
-			}
 			m.Security = opt.Security()
 			m.CompactAnswers = opt.CompactAnswers()
 			m.Delegation = opt.Delegation()
@@ -432,31 +426,23 @@ Rest:
 			// RFC 6891 mandates that the payload size in an OPT record less than 512 (MinMsgSize) bytes must be treated as equal to 512 bytes.
 			m.UDPSize = max(opt.UDPSize(), MinMsgSize)
 
+			m.Pseudo = make([]RR, len(opt.Options), len(opt.Options)+1) // +1 for tsig/sig zero, avoid 2x in a append
 			for j := range opt.Options {
-				m.Pseudo = append(m.Pseudo, RR(opt.Options[j]))
+				m.Pseudo[j] = RR(opt.Options[j])
 			}
-
 			m.Extra[i] = m.Extra[len(m.Extra)-1] // opt's place switch with last rr
 			m.Extra = m.Extra[:len(m.Extra)-1]   // remove cruft
-			op++
-		case *TSIG:
-			if ts > 0 {
-				return unpack.Errorf("multiple TSIG in Extra")
-			}
+			break Extra1
+		}
+	}
+Extra2:
+	for i := len(m.Extra) - 1; i >= 0; i-- {
+		switch m.Extra[i].(type) {
+		case *TSIG, *SIG:
 			m.Pseudo = append(m.Pseudo, m.Extra[i])
-
-			m.Extra[i] = m.Extra[len(m.Extra)-1]
-			m.Extra = m.Extra[:len(m.Extra)-1]
-			ts++
-		case *SIG:
-			if si > 0 {
-				return unpack.Errorf("multiple SIG in Extra")
-			}
-			m.Pseudo = append(m.Pseudo, m.Extra[i])
-
-			m.Extra[i] = m.Extra[len(m.Extra)-1]
-			m.Extra = m.Extra[:len(m.Extra)-1]
-			si++
+			m.Extra[i] = m.Extra[len(m.Extra)-1] // sig/tsig's place switch with last rr
+			m.Extra = m.Extra[:len(m.Extra)-1]   // remove cruft
+			break Extra2
 		}
 	}
 

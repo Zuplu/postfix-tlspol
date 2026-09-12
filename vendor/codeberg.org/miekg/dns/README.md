@@ -5,6 +5,8 @@
 
 > Less is more.
 
+This work is partly funded by the [Nominet DNS Fund](https://nominet.uk/our-impact/nominet-dns-fund/).
+
 Complete and usable DNS library. All Resource Records are supported, including the DNSSEC types. It follows a
 lean and mean philosophy. Server side and client side programming is supported, i.e. you can build servers and
 resolvers with it.

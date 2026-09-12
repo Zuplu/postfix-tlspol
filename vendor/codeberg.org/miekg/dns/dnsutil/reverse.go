@@ -27,7 +27,7 @@ func IsReverse(s string) int {
 	return 0
 }
 
-// ReverseAddr returns the in-addr.arpa. or ip6.arpa. hostname of the IP
+// ReverseAddr returns the in-addr.arpa. [IP4arpa] or ip6.arpa. [IP6arpa] hostname of the IP
 // address suitable for reverse DNS ([dns.PTR]) record lookups. Also see [AddrReverse].
 func ReverseAddr(ip netip.Addr) (arpa string) {
 	const hexDigit = "0123456789abcdef"
@@ -58,8 +58,8 @@ func ReverseAddr(ip netip.Addr) (arpa string) {
 }
 
 // AddrReverse turns a standard [dns.PTR] reverse record name into an IP address.
-// 54.119.58.176.in-addr.arpa. becomes 176.58.119.54. If the conversion
-// fails nil is returned. Also see [ReverseAddr].
+// 54.119.58.176.in-addr.arpa. becomes 176.58.119.54. Both in-addr.arpa [IP4arpa] and ip6.arpa [IP6arpa]
+// are supported. If the conversion fails nil is returned. Also see [ReverseAddr].
 func AddrReverse(s string) (ip netip.Addr) {
 	switch IsReverse(s) {
 	case IPv4Family:
