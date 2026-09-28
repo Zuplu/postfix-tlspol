@@ -8,6 +8,7 @@ package tlspol
 import (
 	"context"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -114,18 +115,57 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 	}
 }
 
-func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
+func TestPolicyDNSQueriesRetryTruncatedUDPOverTCP(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		qtype         uint16
+		authenticated bool
+		wantPolicy    string
+	}{
+		{name: "MTA-STS", qtype: dns.TypeTXT},
+		{name: "authenticated DANE", qtype: dns.TypeTLSA, authenticated: true, wantPolicy: "dane-only"},
+		{name: "unauthenticated DANE", qtype: dns.TypeTLSA},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			testPolicyDNSQueryRetriesTruncatedUDPOverTCP(t, tt.qtype, tt.authenticated, tt.wantPolicy)
+		})
+	}
+}
+
+func testPolicyDNSQueryRetriesTruncatedUDPOverTCP(t *testing.T, qtype uint16, authenticated bool, wantPolicy string) {
+	t.Helper()
 	var udpQueries atomic.Int32
 	var tcpQueries atomic.Int32
+	wantName := "_mta-sts.truncated.test."
+	if qtype == dns.TypeTLSA {
+		wantName = "_25._tcp.truncated.test."
+	}
 
-	udpHandler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	checkQuery := func(r *dns.Msg) bool {
 		if err := r.Unpack(); err != nil {
 			t.Errorf("unpack DNS request: %v", err)
-			return
+			return false
 		}
-		udpQueries.Add(1)
+		if len(r.Question) != 1 {
+			t.Errorf("expected one question, got %d", len(r.Question))
+			return false
+		}
+		if q := dnsQuestion(r); q.Name != wantName || q.Qtype != qtype {
+			t.Errorf("expected %s question for %s, got %+v", dns.TypeToString[qtype], wantName, q)
+		}
 		if opt := dnsEDNS0(r); opt == nil || opt.UDPSize() != DNS_UDP_PAYLOAD_SIZE {
-			t.Errorf("expected UDP query EDNS0 size %d, got %#v", DNS_UDP_PAYLOAD_SIZE, opt)
+			t.Errorf("expected query EDNS0 size %d, got %#v", DNS_UDP_PAYLOAD_SIZE, opt)
+		}
+		if r.Security != (qtype == dns.TypeTLSA) || !r.RecursionDesired || r.CheckingDisabled {
+			t.Errorf("unexpected query flags: DO=%v RD=%v CD=%v", r.Security, r.RecursionDesired, r.CheckingDisabled)
+		}
+		return true
+	}
+
+	udpHandler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+		udpQueries.Add(1)
+		if !checkQuery(r) {
+			return
 		}
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
@@ -135,10 +175,20 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 
 	tcpHandler := dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 		tcpQueries.Add(1)
+		if !checkQuery(r) {
+			return
+		}
 		msg := new(dns.Msg)
 		setDNSReply(msg, r)
-		msg.Answer = append(msg.Answer, dnsTXT(dnsQuestion(r).Name, 300, "v=STSv1; id=tcp1;"))
-		_ = writeDNSMsg(w, msg)
+		msg.AuthenticatedData = authenticated
+		if qtype == dns.TypeTLSA {
+			msg.Answer = append(msg.Answer, dnsTLSA(wantName, 120, 3, 1, 1, strings.Repeat("ab", 32)))
+		} else {
+			msg.Answer = append(msg.Answer, dnsTXT(wantName, 300, "v=STSv1; id=", "tcp1;"))
+		}
+		if err := writeDNSMsg(w, msg); err != nil {
+			t.Errorf("write TCP reply: %v", err)
+		}
 	})
 
 	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -158,15 +208,20 @@ func TestExchangeDNSRetriesTruncatedUDPOverTCP(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	r, err := exchangeDNS(ctx, newDNSQuery("truncated.test", dns.TypeTXT, false), packetConn.LocalAddr().String())
-	if err != nil {
-		t.Fatalf("expected TCP retry after truncated UDP response: %v", err)
-	}
-	if r.Truncated {
-		t.Fatal("expected TCP retry response not to be truncated")
-	}
-	if len(r.Answer) != 1 {
-		t.Fatalf("expected answer from TCP retry, got %d answers", len(r.Answer))
+	if qtype == dns.TypeTLSA {
+		result := checkTlsa(ctx, "truncated.test", packetConn.LocalAddr().String())
+		var wantTTL uint32
+		if authenticated {
+			wantTTL = 120
+		}
+		if result.Err != nil || result.Result != wantPolicy || result.TTL != wantTTL {
+			t.Fatalf("expected policy %q with TTL %d after TCP retry, got %+v", wantPolicy, wantTTL, result)
+		}
+	} else {
+		ok, err := checkMtaStsRecord(ctx, "truncated.test", packetConn.LocalAddr().String())
+		if err != nil || !ok {
+			t.Fatalf("expected split MTA-STS TXT record after TCP retry, got ok=%v err=%v", ok, err)
+		}
 	}
 	if udpQueries.Load() != 1 || tcpQueries.Load() != 1 {
 		t.Fatalf("expected one UDP query and one TCP retry, got udp=%d tcp=%d", udpQueries.Load(), tcpQueries.Load())
