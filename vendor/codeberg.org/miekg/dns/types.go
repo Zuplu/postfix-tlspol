@@ -1143,7 +1143,13 @@ type EUI48 struct {
 	rdata.EUI48
 }
 
-func (rr *EUI48) String() string { return rr.Hdr.String() + rr.EUI48.String() }
+func (rr *EUI48) String() string {
+	sb := sprintHeader(rr)
+	sb.WriteString(rr.EUI48.String())
+	s := sb.String()
+	builderPool.Put(*sb)
+	return s
+}
 
 // EUI64 RR. See RFC 7043.
 type EUI64 struct {
@@ -1151,7 +1157,13 @@ type EUI64 struct {
 	rdata.EUI64
 }
 
-func (rr *EUI64) String() string { return rr.Hdr.String() + rr.EUI64.String() }
+func (rr *EUI64) String() string {
+	sb := sprintHeader(rr)
+	sb.WriteString(rr.EUI64.String())
+	s := sb.String()
+	builderPool.Put(*sb)
+	return s
+}
 
 // CAA RR. See RFC 6844.
 type CAA struct {
@@ -1308,7 +1320,13 @@ var _ RR = &OPT{}
 // RESINFO RR. See RFC 9606.
 type RESINFO struct{ TXT }
 
-func (rr *RESINFO) String() string { return rr.Hdr.String() + rr.TXT.TXT.String() }
+func (rr *RESINFO) String() string {
+	sb := sprintHeader(rr)
+	sb.WriteString(rr.TXT.TXT.String())
+	s := sb.String()
+	builderPool.Put(*sb)
+	return s
+}
 
 // SVCB RR. See RFC 9460.
 type SVCB struct {
