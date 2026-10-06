@@ -633,6 +633,10 @@ func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
 		case "unsigned-nxdomain.test.":
 			msg.AuthenticatedData = false
 			msg.Rcode = dns.RcodeNameError
+		case "unsigned-nodata.test.":
+			msg.AuthenticatedData = false
+		case "secure-nodata.test.":
+			msg.AuthenticatedData = true
 		case "servfail.test.":
 			msg.AuthenticatedData = false
 			msg.Rcode = dns.RcodeServerFailure
@@ -658,7 +662,9 @@ func TestCheckMxAddressClassifiesCompletedAndTemporaryResponses(t *testing.T) {
 		{name: "authenticated address", host: "secure.test", status: MxOk},
 		{name: "unauthenticated address", host: "unsigned.test", status: MxNotSec},
 		{name: "authenticated nxdomain", host: "secure-nxdomain.test", status: MxNoAddress},
-		{name: "unauthenticated nxdomain", host: "unsigned-nxdomain.test", status: MxNotSec},
+		{name: "unauthenticated nxdomain", host: "unsigned-nxdomain.test", status: MxInsecureNoAddress},
+		{name: "authenticated nodata", host: "secure-nodata.test", status: MxNoAddress},
+		{name: "unauthenticated nodata", host: "unsigned-nodata.test", status: MxInsecureNoAddress},
 		{name: "servfail", host: "servfail.test", status: MxFail},
 	}
 	for _, tt := range tests {

@@ -65,7 +65,7 @@ func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([
 				lookupErr = errors.New("DNS error during MX address lookup")
 				cancel()
 			}
-		case MxNotSec:
+		case MxNotSec, MxInsecureNoAddress:
 			incompl = true
 		case MxNoAddress:
 			// A securely unreachable MX host cannot contribute a TLSA policy.
@@ -282,31 +282,43 @@ const (
 	MxFail
 	MxNotSec
 	MxNoAddress
+	MxInsecureNoAddress
 )
 
 // Checks whether a specific MX record has DNSSEC-signed A/AAAA records
 func checkMx(ctx context.Context, mx string, resolverAddress string) uint8 {
 	if !valid.IsDNSName(mx) {
-		return MxNotSec
+		return MxInsecureNoAddress
 	}
 
 	failed := false
+	insecure := false
 	for _, t := range []uint16{dns.TypeA, dns.TypeAAAA} {
 		status := checkMxAddress(ctx, mx, resolverAddress, t)
 		switch status {
 		case MxOk:
+			if insecure {
+				return MxNotSec
+			}
 			return MxOk
 		case MxNotSec:
 			// An insecure address response rules out DANE for this MX host.
 			// Do not let an unrelated failure for the other address family
 			// turn that completed result into a temporary policy error.
 			return MxNotSec
+		case MxInsecureNoAddress:
+			// A negative answer does not establish an address for delivery.
+			// Check the other family while retaining the insecure DNS path.
+			insecure = true
 		case MxFail:
 			failed = true
 		}
 	}
 	if failed {
 		return MxFail
+	}
+	if insecure {
+		return MxInsecureNoAddress
 	}
 	return MxNoAddress
 }
@@ -319,26 +331,32 @@ func checkMxAddress(ctx context.Context, mx string, resolverAddress string, reco
 	}
 	switch r.Rcode {
 	case dns.RcodeSuccess:
-		if !r.AuthenticatedData {
-			return MxNotSec
-		}
 		for _, answer := range r.Answer {
 			switch recordType {
 			case dns.TypeA:
 				if _, ok := answer.(*dns.A); ok {
+					if !r.AuthenticatedData {
+						return MxNotSec
+					}
 					return MxOk
 				}
 			case dns.TypeAAAA:
 				if _, ok := answer.(*dns.AAAA); ok {
+					if !r.AuthenticatedData {
+						return MxNotSec
+					}
 					return MxOk
 				}
 			}
+		}
+		if !r.AuthenticatedData {
+			return MxInsecureNoAddress
 		}
 		return MxNoAddress
 	case dns.RcodeNameError:
 		// NXDOMAIN is a completed negative response, not a temporary DNS error.
 		if !r.AuthenticatedData {
-			return MxNotSec
+			return MxInsecureNoAddress
 		}
 		return MxNoAddress
 	default:
