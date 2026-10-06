@@ -46,45 +46,53 @@ type mxCheckResult struct {
 const DANE_MX_LOOKUP_CONCURRENCY = 4
 const DANE_CNAME_MAX_DEPTH = 8
 
-func getMxRecords(ctx context.Context, domain string, resolverAddress string) ([]string, uint32, error, bool) {
-	records, incompl, err := lookupMxRecords(ctx, domain, resolverAddress, 0)
-	if err != nil || len(records) == 0 {
-		return nil, 0, err, incompl
+type mxLookupResult struct {
+	hosts    []string
+	ttl      uint32
+	insecure bool
+	partial  bool
+}
+
+func getMxRecords(ctx context.Context, domain string, resolverAddress string) (mxLookupResult, error) {
+	records, insecure, err := lookupMxRecords(ctx, domain, resolverAddress, 0)
+	result := mxLookupResult{insecure: insecure}
+	if err != nil {
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
 
-	cctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var lookupErr error
-	var mxRecords []string
-	var minTTL uint32
+	addressable := 0
 	haveTTL := false
-	for result := range checkMxRecords(cctx, records, resolverAddress) {
-		switch result.status {
+	for mx := range checkMxRecords(ctx, records, resolverAddress) {
+		switch mx.status {
 		case MxOk:
-			mxRecords = append(mxRecords, result.host)
-			if !haveTTL || result.ttl < minTTL {
-				minTTL = result.ttl
+			addressable++
+			result.hosts = append(result.hosts, mx.host)
+			if !haveTTL || mx.ttl < result.ttl {
+				result.ttl = mx.ttl
 				haveTTL = true
 			}
+		case MxNotSec:
+			addressable++
+			result.insecure = true
+		case MxInsecureNoAddress:
+			result.insecure = true
 		case MxFail:
-			if lookupErr == nil {
-				lookupErr = errors.New("DNS error during MX address lookup")
-				cancel()
-			}
-		case MxNotSec, MxInsecureNoAddress:
-			incompl = true
+			// RFC 7672 section 2.1.2: other MX hosts may still be usable.
+			result.partial = true
 		case MxNoAddress:
 			// A securely unreachable MX host cannot contribute a TLSA policy.
 		}
 	}
-	if lookupErr != nil {
-		return nil, 0, lookupErr, false
-	}
 	if err := ctx.Err(); err != nil {
-		return nil, 0, err, false
+		return mxLookupResult{}, err
 	}
-
-	return mxRecords, minTTL, nil, incompl
+	if result.partial && addressable == 0 {
+		return mxLookupResult{}, errors.New("DNS error during MX address lookup")
+	}
+	return result, nil
 }
 
 func lookupMxRecords(ctx context.Context, domain string, resolverAddress string, depth int) ([]mxRecord, bool, error) {
@@ -480,18 +488,27 @@ func checkDane(ctx context.Context, domain string, mayRetry bool) daneResult {
 }
 
 func checkDaneOnce(ctx context.Context, domain string, resolverAddress string) (daneResult, error) {
-	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain, resolverAddress)
+	mx, err := getMxRecords(ctx, domain, resolverAddress)
 	if err != nil {
 		return daneResult{}, err
 	}
-	numRecords := len(mxRecords)
-	if numRecords == 0 {
-		return daneResult{}, nil
+	if len(mx.hosts) == 0 {
+		return daneResult{Partial: mx.partial}, nil
 	}
 	cctx, cancel := context.WithCancel(ctx)
-	tlsaResults := checkTlsaRecords(cctx, mxRecords, resolverAddress)
-	policy, ttl, err := getDanePolicy(cctx, cancel, ttl, incompl, numRecords, tlsaResults)
-	return daneResult{Policy: policy, TTL: ttl}, err
+	tlsaResults := checkTlsaRecords(cctx, mx.hosts, resolverAddress)
+	policy, ttl, err := getDanePolicy(cctx, cancel, mx.ttl, mx.insecure || mx.partial, len(mx.hosts), tlsaResults)
+	if err != nil {
+		// getDanePolicy cancelled the workers; finish them before retrying.
+		for range tlsaResults {
+		}
+		// Addressable hosts with failed TLSA lookups must not be bypassed by STS.
+		return daneResult{}, err
+	}
+	if mx.partial {
+		ttl = 0
+	}
+	return daneResult{Policy: policy, TTL: ttl, Partial: mx.partial}, nil
 }
 
 func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress string) <-chan ResultWithTTL {

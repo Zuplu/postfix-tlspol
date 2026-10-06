@@ -82,7 +82,7 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, _, err, _ := getMxRecords(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil {
+	if _, err := getMxRecords(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil {
 		t.Fatalf("expected DANE MX path to complete: %v", err)
 	}
 	if _, err := checkDaneOnce(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil {

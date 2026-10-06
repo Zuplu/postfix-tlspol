@@ -20,6 +20,7 @@ The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix
   - Apply the authenticated implicit-MX rule when a DNSSEC-authenticated MX query returns NOERROR without MX records, while keeping NXDOMAIN and Null MX responses distinct, as required by [RFC 7672, Section 2.2.2](https://www.rfc-editor.org/rfc/rfc7672.html#section-2.2.2).
   - Bound negative DNS cache lifetimes by the smaller SOA TTL and SOA MINIMUM value, following [RFC 2308, Section 5](https://www.rfc-editor.org/rfc/rfc2308.html#section-5).
   - Resolve each MX host's A/AAAA records before querying TLSA. Hosts without address records are unreachable, and only DNSSEC-authenticated address paths proceed to TLSA discovery, as required by [RFC 7672, Section 2.2.2](https://www.rfc-editor.org/rfc/rfc7672.html#section-2.2.2). Independent MX lookups run with bounded concurrency.
+  - If an MX host's address lookup fails, continue with other hosts that have addresses. A failed domain MX lookup, address failures with no usable hosts remaining, or a TLSA lookup failure still returns a temporary error. Partial address-lookup results apply only to the current request and are not cached; a surviving DANE policy uses `dane` rather than inferring `dane-only` from an incomplete set of hosts.
   - Verify TLSA records for correctness and supported parameters, only then the `dane-only` policy (Mandatory DANE) will be returned.
   - In case of unsupported parameters or malformed TLSA records, `dane` (Opportunistic DANE) is returned.
   - In those edge cases, Postfix will try to enforce DANE if the TLSA records are usable. If they are not (despite valid DNSSEC signatures, e. g. malformed record set by the legitimate domain administrator or unsupported parameters), it will fall back to *mandatory* but unauthenticated TLS (thus `encrypt` at worst).
@@ -27,11 +28,11 @@ The socketmap listener auto-detects HTTP and exposes `/metrics` on the same Unix
 
 - **For MTA-STS:**
   - Check for an existing MTA-STS record over DNS, and if found, fetch the policy via HTTPS.
-  - DANE is authoritative when fresh and usable. MTA-STS is only used when fresh DANE state explicitly proves that no DANE policy is available.
-  - Temporary DANE failures do not downgrade to MTA-STS. TLSA records must be explicitly and verifiably not available for MTA-STS to overrule DANE.
+  - DANE is authoritative when fresh and usable. MTA-STS only takes effect when the addressable MX hosts have no applicable DANE policy.
+  - Temporary DANE failures do not downgrade to MTA-STS. MTA-STS can apply when the addressable MX hosts have no DANE policy; hosts with failed address lookups are skipped for that request. TLSA lookup failures on addressable hosts still block this fallback.
   - MTA-STS and DANE state are cached independently, so a later refreshed DANE result immediately overrides a still-fresh MTA-STS policy.
   - A temporary or unavailable policy refresh does not erase an unexpired cached MTA-STS policy. A successfully fetched `mode: none` policy still replaces the cached policy immediately.
-  - When fresh DANE state confirms that no applicable DANE policy is available for the domain, MTA-STS can take effect and return a `secure` policy with explicit `match=` constraints from the policy's MX patterns.
+  - MTA-STS returns a `secure` policy with explicit `match=` constraints from the policy's MX patterns.
 
 - DANE and MTA-STS branches are cached by `minimum TTL of all DNSSEC/DANE queries` and for no longer than the MTA-STS `max_age`, respectively. The served result is derived from the fresh branch state on every cache hit, with mandatory DANE (`dane-only`) taking precedence.
 

@@ -212,7 +212,8 @@ func TestGetMxRecordsDeduplicatesAndLimitsAddressLookups(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	mxRecords, ttl, err, incompl := getMxRecords(ctx, "many.test", packetConn.LocalAddr().String())
+	result, err := getMxRecords(ctx, "many.test", packetConn.LocalAddr().String())
+	mxRecords, ttl, incompl := result.hosts, result.ttl, result.insecure
 	if err != nil {
 		t.Fatalf("expected MX records to validate without error: %v", err)
 	}
