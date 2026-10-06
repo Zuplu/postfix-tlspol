@@ -41,7 +41,8 @@ func TestDane(t *testing.T) {
 					t.SkipNow()
 					return
 				}
-				policy, _ := checkDane(bgCtx, domain, true)
+				result := checkDane(bgCtx, domain, true)
+				policy := result.Policy
 				if policy != "dane-only" {
 					t.Skipf("Expected DANE for %q, but not detected", domain)
 				} else if !passedOnce {
@@ -123,7 +124,8 @@ func TestCheckDaneOnceReturnsErrorWhenMxAddressLookupTimesOut(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	policy, ttl, err := checkDaneOnce(ctx, "example.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(ctx, "example.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err == nil {
 		t.Fatalf("expected temporary MX address lookup failure to be returned as an error, got policy=%q ttl=%d", policy, ttl)
 	}
@@ -364,7 +366,8 @@ func TestDaneMxAddressLookupFailureIsTemporary(t *testing.T) {
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, _, err := checkDaneOnce(context.Background(), "victim.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "victim.test", packetConn.LocalAddr().String())
+	policy := result.Policy
 	if err == nil {
 		t.Fatalf("expected MX address lookup failure to be treated as temporary error, got policy %q", policy)
 	}
@@ -401,7 +404,8 @@ func TestDaneUnauthenticatedSuccessfulMxAddressLookupIsNotTemporary(t *testing.T
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "unsigned.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "unsigned.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err != nil {
 		t.Fatalf("expected unsigned successful MX address lookup to be treated as no DANE, got error %v", err)
 	}
@@ -448,7 +452,8 @@ func TestDaneInsecureMxAddressDoesNotFailOnOtherAddressFamily(t *testing.T) {
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "mixed-security.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "mixed-security.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err != nil {
 		t.Fatalf("expected an insecure address response to disable DANE without a temporary error, got %v", err)
 	}
@@ -492,7 +497,8 @@ func TestDaneSecureAddressNodataDoesNotHideOtherAddressFamilyFailure(t *testing.
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "secure-partial.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "secure-partial.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err == nil {
 		t.Fatalf("expected the unresolved AAAA lookup to remain a temporary error, got policy=%q ttl=%d", policy, ttl)
 	}
@@ -543,7 +549,8 @@ func TestDaneUnauthenticatedNxdomainForOneMxDoesNotBlockOthers(t *testing.T) {
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "mixed.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "mixed.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err != nil {
 		t.Fatalf("expected an unsigned NXDOMAIN MX target not to block reachable MX hosts, got %v", err)
 	}
@@ -599,7 +606,8 @@ func TestDaneUnauthenticatedNxdomainPreventsMandatoryDane(t *testing.T) {
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "mixed-secure.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "mixed-secure.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err != nil {
 		t.Fatalf("expected an unsigned NXDOMAIN MX target not to fail DANE discovery, got %v", err)
 	}
@@ -706,7 +714,8 @@ func TestDaneAuthenticatedAddressNodataSkipsTlsa(t *testing.T) {
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "nodata.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "nodata.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err != nil {
 		t.Fatalf("expected authenticated NODATA to be treated as unreachable, got %v", err)
 	}
@@ -756,7 +765,8 @@ func TestDaneAuthenticatedMxNodataUsesImplicitMx(t *testing.T) {
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "implicit.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "implicit.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err != nil {
 		t.Fatalf("implicit MX lookup failed: %v", err)
 	}
@@ -805,7 +815,8 @@ func TestDaneDoesNotUseImplicitMxForNxdomainOrNullMx(t *testing.T) {
 			server.PacketConn = packetConn
 			startTestDNSServer(t, server)
 
-			policy, ttl, err := checkDaneOnce(context.Background(), "nomail.test", packetConn.LocalAddr().String())
+			result, err := checkDaneOnce(context.Background(), "nomail.test", packetConn.LocalAddr().String())
+			policy, ttl := result.Policy, result.TTL
 			if err != nil || policy != "" || ttl != 0 {
 				t.Fatalf("expected no DANE policy, got policy=%q ttl=%d err=%v", policy, ttl, err)
 			}
@@ -858,7 +869,8 @@ func TestDaneFollowsSecureCnameDuringMxLookup(t *testing.T) {
 	server.PacketConn = packetConn
 	startTestDNSServer(t, server)
 
-	policy, ttl, err := checkDaneOnce(context.Background(), "alias.test", packetConn.LocalAddr().String())
+	result, err := checkDaneOnce(context.Background(), "alias.test", packetConn.LocalAddr().String())
+	policy, ttl := result.Policy, result.TTL
 	if err != nil {
 		t.Fatalf("CNAME MX lookup failed: %v", err)
 	}

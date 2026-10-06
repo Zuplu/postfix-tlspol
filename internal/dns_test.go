@@ -85,7 +85,7 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 	if _, _, err, _ := getMxRecords(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil {
 		t.Fatalf("expected DANE MX path to complete: %v", err)
 	}
-	if _, _, err := checkDaneOnce(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil {
+	if _, err := checkDaneOnce(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil {
 		t.Fatalf("expected DANE TLSA path to complete: %v", err)
 	}
 	if ok, err := checkMtaStsRecord(ctx, "edns.test", packetConn.LocalAddr().String()); err != nil || !ok {

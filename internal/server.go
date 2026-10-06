@@ -1055,6 +1055,10 @@ func mergeCacheResult(c *CacheStruct, result domainResult, now time.Time) *Cache
 	cs := cloneCacheStruct(c)
 	resultDane := result.Dane
 	resultMtaSts := result.MtaSts
+	if result.DanePartial && cs.Dane.Policy == "" {
+		// An incomplete refresh cannot renew a cached absence of DANE.
+		cs.Dane = PolicyBranch{}
+	}
 	if resultDane.HasData() {
 		dane := resultDane
 		mtaStsPolicy := cs.MtaSts.Policy
@@ -1136,15 +1140,14 @@ func replyJson(ctx context.Context, conn net.Conn, domain string) {
 	var (
 		wg    sync.WaitGroup
 		tb    time.Time = ta
-		dPol  string
-		dTTL  uint32
+		dane  daneResult
 		tc    time.Time = ta
 		msPol string
 		msRpt string
 		msTTL uint32
 	)
 	wg.Go(func() {
-		dPol, dTTL = checkDanePolicy(ctx, domain, true)
+		dane = checkDanePolicy(ctx, domain, true)
 		tb = time.Now()
 	})
 	wg.Go(func() {
@@ -1156,8 +1159,8 @@ func replyJson(ctx context.Context, conn net.Conn, domain string) {
 		Version: Version,
 		Domain:  domain,
 		Dane: DanePolicy{
-			Policy: dPol,
-			TTL:    dTTL,
+			Policy: dane.Policy,
+			TTL:    dane.TTL,
 			Time:   tb.Sub(ta).Truncate(time.Millisecond).Seconds(),
 		},
 		MtaSts: MtaStsPolicy{
@@ -1475,6 +1478,7 @@ type domainResult struct {
 	MtaSts          PolicyBranch
 	TTL             uint32
 	DaneTemp        bool
+	DanePartial     bool
 	DaneAttempted   bool
 	MtaStsAttempted bool
 }
@@ -1580,8 +1584,7 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 	}
 	var wg sync.WaitGroup
 	var (
-		danePolicy        string
-		daneTTL           uint32
+		dane              daneResult
 		mtaStsPol         string
 		mtaStsRpt         string
 		mtaStsTTL         uint32
@@ -1604,22 +1607,22 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 	switch {
 	case queryDane && queryMtaSts:
 		wg.Go(func() {
-			danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
+			dane = checkDanePolicy(ctx, domain, true)
 		})
 		wg.Go(func() {
 			mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
 		})
 		wg.Wait()
 	case queryDane:
-		danePolicy, daneTTL = checkDanePolicy(ctx, domain, true)
+		dane = checkDanePolicy(ctx, domain, true)
 	case queryMtaSts:
 		mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
 	}
 
-	daneTemp := danePolicy == "TEMP"
+	daneTemp := dane.Policy == "TEMP"
 	refreshedDane := PolicyBranch{}
-	if queryDane {
-		refreshedDane = branchFromResult(danePolicy, "", daneTTL)
+	if queryDane && !dane.Partial {
+		refreshedDane = branchFromResult(dane.Policy, "", dane.TTL)
 		daneForSelection = refreshedDane
 	}
 	refreshedMtaSts := PolicyBranch{}
@@ -1632,6 +1635,16 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 		}
 	}
 	policy, report, ttl := selectedPolicyFromBranches(daneForSelection, mtaStsForSelected, daneTemp)
+	if dane.Partial && !daneTemp {
+		// Use this lookup only for the current request. TTL=0 alone is not
+		// sufficient: branchFromResult would cache it as a completed lookup.
+		policy, report, ttl = dane.Policy, "", 0
+		if daneForSelection.Policy != "" && daneForSelection.HasData() {
+			policy, report, ttl = daneForSelection.Policy, daneForSelection.Report, daneForSelection.TTL
+		} else if policy == "" {
+			policy, report = mtaStsForSelected.Policy, mtaStsForSelected.Report
+		}
+	}
 	return domainResult{
 		Policy:          policy,
 		Report:          report,
@@ -1639,6 +1652,7 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 		Dane:            refreshedDane,
 		MtaSts:          refreshedMtaSts,
 		DaneTemp:        daneTemp,
+		DanePartial:     dane.Partial,
 		DaneAttempted:   queryDane,
 		MtaStsAttempted: queryMtaSts,
 	}

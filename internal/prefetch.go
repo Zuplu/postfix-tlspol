@@ -503,6 +503,13 @@ func scheduleFailedPolicyPrefetch(scheduler *prefetchScheduler, key string, c *C
 		slog.Debug("Scheduled policy prefetch retry", "domain", key, "attempts", attempts, "delay", delay, "due", due)
 		return
 	}
+	if result.DanePartial {
+		// Partial address lookups must never turn into cached "no DANE",
+		// even after the usual failure window. Retain the independent STS
+		// branch and retry; normal cache expiry still applies.
+		scheduler.schedule(key, now.Add(PREFETCH_RETRY_MAX_INTERVAL))
+		return
+	}
 	if updated, ok := cacheAfterFailedBranchDiscard(c, result, now); ok {
 		current, replaced := replaceCacheEntryIfCurrent(key, c, updated)
 		if !replaced {

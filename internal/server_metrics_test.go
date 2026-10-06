@@ -445,8 +445,8 @@ func BenchmarkSingleBranchPolicyRefresh(b *testing.B) {
 		checkDanePolicy = originalDane
 		checkMtaStsPolicy = originalMtaSts
 	})
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
-		return "", 300
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
+		return daneResult{Policy: "", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		b.Fatal("unexpected MTA-STS refresh")
@@ -1400,8 +1400,8 @@ func TestQueryDomainDaneTempDoesNotDowngradeToMtaSts(t *testing.T) {
 		checkMtaStsPolicy = origMtaSts
 	}()
 
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
-		return "TEMP", 0
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
+		return daneResult{Policy: "TEMP", TTL: 0}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		return "secure match=mx.example servername=hostname", "policy_type=sts", 86400
@@ -1424,8 +1424,8 @@ func TestQueryDomainUsesMtaStsOnlyAfterFreshNoDane(t *testing.T) {
 		checkMtaStsPolicy = origMtaSts
 	}()
 
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
-		return "", 300
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
+		return daneResult{Policy: "", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		return "secure match=mx.example servername=hostname", "policy_type=sts", 86400
@@ -1447,9 +1447,9 @@ func TestRefreshDomainReusesFreshMtaStsBranch(t *testing.T) {
 
 	var daneCalls atomic.Int32
 	var mtaStsCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "", 300
+		return daneResult{Policy: "", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		mtaStsCalls.Add(1)
@@ -1498,9 +1498,9 @@ func TestPrefetchDomainRenewsNearExpiryMtaStsBranch(t *testing.T) {
 
 	var daneCalls atomic.Int32
 	var mtaStsCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "", 86400
+		return daneResult{Policy: "", TTL: 86400}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		mtaStsCalls.Add(1)
@@ -1566,8 +1566,8 @@ func TestPrefetchDomainRetainsUnexpiredMtaStsWhenLivePolicyUnavailable(t *testin
 		checkMtaStsPolicy = origMtaSts
 	}()
 
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
-		return "", 86400
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
+		return daneResult{Policy: "", TTL: 86400}
 	}
 	now := time.Now()
 	cached := &CacheStruct{
@@ -1627,9 +1627,9 @@ func TestQueryDomainThrottlesMtaStsWhenDanePolicyCached(t *testing.T) {
 
 	var daneCalls atomic.Int32
 	var mtaStsCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "dane-only", 300
+		return daneResult{Policy: "dane-only", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		mtaStsCalls.Add(1)
@@ -1668,8 +1668,8 @@ func TestQueryDomainRetriesMtaStsAfterDailyDanePolicyWindow(t *testing.T) {
 	}()
 
 	var mtaStsCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
-		return "dane-only", 300
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
+		return daneResult{Policy: "dane-only", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		mtaStsCalls.Add(1)
@@ -1703,9 +1703,9 @@ func TestQueryDomainThrottlesDaneWhenMtaStsPolicyCachedAndDaneMissing(t *testing
 
 	var daneCalls atomic.Int32
 	var mtaStsCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "dane-only", 300
+		return daneResult{Policy: "dane-only", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		mtaStsCalls.Add(1)
@@ -1749,9 +1749,9 @@ func TestQueryDomainDoesNotThrottlePreviouslyAvailableDaneWhenMtaStsPolicyCached
 	}()
 
 	var daneCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "dane-only", 300
+		return daneResult{Policy: "dane-only", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		return "secure match=mx.example servername=hostname", "policy_type=sts", 600
@@ -1792,9 +1792,9 @@ func TestQueryDomainRetriesDaneAfterDailyMtaStsPolicyWindow(t *testing.T) {
 	}()
 
 	var daneCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "", 300
+		return daneResult{Policy: "", TTL: 300}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		return "secure match=mx.example servername=hostname", "policy_type=sts", 600
@@ -2077,9 +2077,9 @@ func TestPrefetchDuePoliciesExtendsNearExpiryMtaSts(t *testing.T) {
 	}()
 
 	var daneCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "", 0
+		return daneResult{Policy: "", TTL: 0}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		return "secure match=mx.example servername=hostname", "policy_type=sts", 600
@@ -2140,9 +2140,9 @@ func TestPrefetchDuePoliciesBacksOffNearExpiryMtaStsFailure(t *testing.T) {
 	}()
 
 	var daneCalls atomic.Int32
-	checkDanePolicy = func(context.Context, string, bool) (string, uint32) {
+	checkDanePolicy = func(context.Context, string, bool) daneResult {
 		daneCalls.Add(1)
-		return "", 0
+		return daneResult{Policy: "", TTL: 0}
 	}
 	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
 		return "TEMP", "", 0

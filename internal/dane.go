@@ -20,6 +20,12 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
+type daneResult struct {
+	Policy  string
+	TTL     uint32
+	Partial bool
+}
+
 type ResultWithTTL struct {
 	Err    error
 	Result string
@@ -444,47 +450,48 @@ const (
 	DaneOnly
 )
 
-func checkDane(ctx context.Context, domain string, mayRetry bool) (string, uint32) {
+func checkDane(ctx context.Context, domain string, mayRetry bool) daneResult {
 	resolverAddress, err := config.Dns.GetResolverAddress()
 	if err != nil {
 		logPolicyLookupFailure(ctx, "DNS resolver configuration error during DANE lookup", "domain", domain, "error", err)
-		return "TEMP", 0
+		return daneResult{Policy: "TEMP"}
 	}
 	attempts := 1
 	if mayRetry {
 		attempts = POLICY_ATTEMPTS
 	}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		policy, ttl, err := checkDaneOnce(ctx, domain, resolverAddress)
+		result, err := checkDaneOnce(ctx, domain, resolverAddress)
 		if err == nil {
-			return policy, ttl
+			return result
 		}
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-			return "TEMP", 0
+			return daneResult{Policy: "TEMP"}
 		}
 		if attempt == attempts {
 			logPolicyLookupFailure(ctx, "DNS error during DANE lookup", "domain", domain, "error", err, "attempts", attempts)
-			return "TEMP", 0
+			return daneResult{Policy: "TEMP"}
 		}
 		if !waitPolicyRetry(ctx, attempt) {
-			return "TEMP", 0
+			return daneResult{Policy: "TEMP"}
 		}
 	}
-	return "TEMP", 0
+	return daneResult{Policy: "TEMP"}
 }
 
-func checkDaneOnce(ctx context.Context, domain string, resolverAddress string) (string, uint32, error) {
+func checkDaneOnce(ctx context.Context, domain string, resolverAddress string) (daneResult, error) {
 	mxRecords, ttl, err, incompl := getMxRecords(ctx, domain, resolverAddress)
 	if err != nil {
-		return "", 0, err
+		return daneResult{}, err
 	}
 	numRecords := len(mxRecords)
 	if numRecords == 0 {
-		return "", 0, nil
+		return daneResult{}, nil
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	tlsaResults := checkTlsaRecords(cctx, mxRecords, resolverAddress)
-	return getDanePolicy(cctx, cancel, ttl, incompl, numRecords, tlsaResults)
+	policy, ttl, err := getDanePolicy(cctx, cancel, ttl, incompl, numRecords, tlsaResults)
+	return daneResult{Policy: policy, TTL: ttl}, err
 }
 
 func checkTlsaRecords(ctx context.Context, mxRecords []string, resolverAddress string) <-chan ResultWithTTL {
