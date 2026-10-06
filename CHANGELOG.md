@@ -1,3 +1,18 @@
+## What's Changed in v1.14.1 (2026-10-06)
+
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#193](https://github.com/Zuplu/postfix-tlspol/pull/193)
+* build(deps): bump codeberg.org/miekg/dns from 0.6.105 to 0.6.109 by @dependabot[bot] in [#192](https://github.com/Zuplu/postfix-tlspol/pull/192)
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#194](https://github.com/Zuplu/postfix-tlspol/pull/194)
+* build(docker): bump golang from `cf6fca6` to `8a5910f` in /deployments by @dependabot[bot] in [#196](https://github.com/Zuplu/postfix-tlspol/pull/196)
+* build(deps): bump codeberg.org/miekg/dns from 0.6.109 to 0.6.114 by @dependabot[bot] in [#198](https://github.com/Zuplu/postfix-tlspol/pull/198)
+* build(deps): bump miekg dns to v0.6.117 by @DragonWork
+* fix(dane): distinguish unsigned addresses from negative answers by @DragonWork
+* fix(cache): avoid caching partial DANE evaluations by @DragonWork
+* fix(dane): continue after individual MX address failures by @DragonWork
+* build(deps): bump codeberg.org/miekg/dns from 0.6.117 to 0.6.118 by @dependabot[bot] in [#201](https://github.com/Zuplu/postfix-tlspol/pull/201)
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.14.0...v1.14.1
+
 ## What's Changed in v1.14.0 (2026-09-02)
 
 * build(deps): update miekg/dns to v0.6.105 by @DragonWork
