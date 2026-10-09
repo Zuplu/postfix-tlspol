@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+
+[changelog]
+header = ""
+body = """
+## What's Changed in {{ version }} ({{ timestamp | date(format="%Y-%m-%d") }})
+
+{% for commit in commits -%}
+* {{ commit.raw_message | split(pat="\n") | first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% elif commit.author.name == "DragonWork" %} by @DragonWork{% elif commit.author.name %} by {{ commit.author.name }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}](https://github.com/Zuplu/postfix-tlspol/pull/{{ commit.remote.pr_number }}){% endif %}
+{% endfor %}
+{%- if previous.version %}
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/{{ previous.version }}...{{ version }}
+{% endif %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = true
+commit_parsers = [
+    { message = '^chore\(deps\)!?:', skip = false },
+    { message = '^chore(?:\(|!?:)', skip = true },
+]
+filter_commits = false
+tag_pattern = '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$'
+sort_commits = "oldest"
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true
+initial_tag = "1.0.0"
+
+[remote.github]
+owner = "Zuplu"
+repo = "postfix-tlspol"

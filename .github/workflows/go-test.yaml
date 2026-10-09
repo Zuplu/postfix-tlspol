@@ -1,27 +1,63 @@
-# Made with ❤️ by Zuplu.
-# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
-name: 🧪 Run unit tests
+name: Go and release checks
 
 on:
   push:
-    paths: "**/*.go"
+    branches: [main]
+    paths:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+      - vendor/**
+      - VERSION
+      - cliff.toml
+      - .github/**
+      - scripts/**
+      - deployments/**
   pull_request:
   workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: 🕵🏻‍♂️ Analyze Compiling, DANE and MTA-STS Lookup
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TLSPOL_LIVE_TESTS: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - name: 📦 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: ⚙️ Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          go-version-file: ./go.mod
-      - name: 🧐 Test basic functionality
-        run: go test -v -count=1 -failfast -tags netgo ./...
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check formatting and vendored dependencies
+        run: |
+          test -z "$(gofmt -l main.go internal)"
+          go mod tidy
+          go mod vendor
+          git diff --exit-code -- go.mod go.sum vendor
+          test -z "$(git ls-files --others --exclude-standard -- vendor)"
+      - name: Check Go packages and race safety
+        run: |
+          go vet -mod=vendor -tags netgo ./...
+          go test -mod=vendor -race -count=1 -tags netgo ./...
+          CGO_ENABLED=0 go build -mod=vendor -tags netgo -o "$RUNNER_TEMP/postfix-tlspol" .
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+        with:
+          tool: git-cliff@2.14.2,actionlint@1.7.12
+          fallback: none
+      - name: Check release preparation and workflows
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+          actionlint

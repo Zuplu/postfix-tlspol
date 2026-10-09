@@ -157,6 +157,26 @@ git pull
 scripts/build.sh
 ```
 
+# Releases
+
+Run the [Release workflow](https://github.com/Zuplu/postfix-tlspol/actions/workflows/release.yaml) on `main`. Choose `auto` to select the next version from Conventional Commits, `patch`, `minor`, or `major` to choose the increment, or an exact version such as `1.15.0` or `1.15.0-rc.1`. The version must be newer than the current release. `cliff.toml` controls the release notes and automatic bumps; existing changelog sections are preserved.
+
+With **publish** unchecked, the workflow tests the project, prepares `VERSION` and a new section at the beginning of `CHANGELOG.md`, uploads the `release-source` artifact, and builds the Docker platforms. It does not change the branch, create a tag, or publish images.
+
+With **publish** checked, it also records a GitHub-signed `chore(release): prepare v…` commit on `main`, reserves the version tag, and creates a draft GitHub release. All Docker jobs use that exact commit. After every image and the multi-platform manifest succeeds, the workflow publishes the GitHub release with the immutable image digest. Stable releases update Docker's version aliases and `latest`; prereleases receive only their full version tag. Rebuilding an older version does not replace newer aliases.
+
+For example, to publish an explicit version with the GitHub CLI:
+
+```sh
+gh workflow run release.yaml --ref main -f version=1.15.0 -F publish=true
+```
+
+Publication uses the repository's `GITHUB_TOKEN` and the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository or organization secrets. The workflow calls the Docker workflow directly, so it does not depend on a bot-created tag triggering another run. If publication fails after preparation, use **Re-run failed jobs** on the original run; the tag and draft are checked before reuse. Start a new release only after resolving that run.
+
+Release automation and its tests live in `.github/scripts/`. Run `python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v` with git-cliff 2.14.2 installed to check the version, changelog, and publication behavior locally.
+
+The Docker matrix requires all ten targets, including RISC-V, in the pinned Go base image. If an upstream image is missing a target, the release stops before changing `main` or creating a tag. Update the pinned digest once every architecture is available, then run the release workflow. Publication waits for every platform build.
+
 # Configuration
 
 _*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is autoconfigured._

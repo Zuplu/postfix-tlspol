@@ -1,106 +1,138 @@
-# Made with ❤️ by Zuplu.
-# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
-name: 🚀 Build and Deploy Docker Images
+name: Build Docker images
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild, such as v1.15.0
+        type: string
+        required: true
+      publish:
+        description: Push images and the multi-platform manifest to Docker Hub
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+      prepared:
+        type: boolean
+        default: false
+      publish:
+        type: boolean
+        default: false
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+    outputs:
+      digest:
+        description: Published multi-platform image digest
+        value: ${{ jobs.bundle.outputs.digest }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.repository }}
+  cancel-in-progress: false
 
 env:
-  REGISTRY_IMAGE: "zuplu/postfix-tlspol"
-
-permissions: read-all
+  REGISTRY_IMAGE: zuplu/postfix-tlspol
 
 jobs:
-  test:
-    name: 🧪 Unit Testing
-    uses: ./.github/workflows/go-test.yaml
-
   metadata:
-    name: 📊 Synthesize Docker Metadata
+    if: github.server_url == 'https://github.com' && github.repository == 'Zuplu/postfix-tlspol'
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ toJSON(steps.metadata.outputs.version) }}
-      tags: ${{ toJSON(steps.metadata.outputs.tags) }}
-      labels: ${{ toJSON(steps.metadata.outputs.labels) }}
-      annotations: ${{ toJSON(steps.metadata.outputs.annotations) }}
-      json: ${{ toJSON(steps.metadata.outputs.json) }}
+      version: ${{ steps.metadata.outputs.version }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      publish: ${{ steps.metadata.outputs.publish }}
+      matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
-      - name: 📦 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ inputs.source_ref || inputs.tag || github.ref }}
           fetch-depth: 0
-          fetch-tags: true
-
-      - name: ✨ Detect Version Tag
-        run: |
-          VERSION="$(git describe --tags --abbrev=0 --match 'v*')"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          BRANCH="$(git branch --show-current)"
-          IS_LATEST="false"
-          if [ "$BRANCH" = "main" ]; then
-            NEW_COMMITS="$(git rev-list HEAD...@{upstream} --count)"
-            if [ "$NEW_COMMITS" -eq 0 ]; then
-              IS_LATEST="true"
-            fi
-          fi
-          echo "IS_LATEST=$IS_LATEST" >> "$GITHUB_ENV"
-
-      - id: metadata
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
-        env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.prepared
         with:
-          context: git
-          images: ${{ env.REGISTRY_IMAGE }}
-          tags: |
-            type=semver,pattern=v{{version}},value=${{ env.VERSION }}
-            type=semver,pattern=v{{major}}.{{minor}},value=${{ env.VERSION }}
-            type=semver,pattern=v{{major}},value=${{ env.VERSION }}
-            type=raw,value=latest,enable=${{ env.IS_LATEST }}
+          name: release-source
+          path: ${{ runner.temp }}/release/
+      - name: Apply prepared release files
+        if: inputs.prepared
+        run: python3 .github/scripts/release.py apply "$RUNNER_TEMP/release/prepared-release.json"
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
+      - name: Select platforms present in the pinned Go image
+        id: platforms
+        run: |
+          matrix="$(python3 .github/scripts/release.py docker-platforms)"
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+      - name: Validate the exact release revision
+        id: metadata
+        env:
+          RELEASE_VERSION: ${{ inputs.version || inputs.tag || github.ref_name }}
+          PREPARED: ${{ inputs.prepared }}
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          python3 .github/scripts/release.py docker-metadata "$RELEASE_VERSION" > "$RUNNER_TEMP/docker-metadata.json"
+          if [ "$PREPARED" != true ]; then
+            tag="v${RELEASE_VERSION#v}"
+            test "$(git rev-parse "refs/tags/$tag^{commit}")" = "$(git rev-parse HEAD)"
+          fi
+          {
+            jq -r '"version=" + .version, "commit=" + .commit' "$RUNNER_TEMP/docker-metadata.json"
+            printf 'publish=%s\n' "$PUBLISH"
+          } >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: metadata
+    uses: ./.github/workflows/go-test.yaml
+    with:
+      source_ref: ${{ needs.metadata.outputs.commit }}
 
   build:
-    name: 🚧 Build Docker Images
-    needs: [test, metadata]
-    strategy:
-      matrix:
-        platform:
-          - linux/amd64
-          - linux/amd64/v2
-          - linux/amd64/v3
-          - linux/arm/v6
-          - linux/arm/v7
-          - linux/arm64
-          - linux/386
-          - linux/ppc64le
-          - linux/riscv64
-          - linux/s390x
+    needs: [metadata, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.metadata.outputs.matrix) }}
     steps:
-      - name: 📑 Prepare environment
-        run: |
-          PLATFORM="$(echo "${{ matrix.platform }}" | tr '/' '-')"
-          echo "PLATFORM=$PLATFORM" >> "$GITHUB_ENV"
-
-      - name: 📦 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: ⚙️ Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
-
-      - name: 🛠️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
-
-      - name: 🔐 Login to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.prepared
+        with:
+          name: release-source
+          path: ${{ runner.temp }}/release/
+      - name: Apply prepared release files
+        if: inputs.prepared
+        run: python3 .github/scripts/release.py apply "$RUNNER_TEMP/release/prepared-release.json"
+      - name: Select artifact name
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: printf 'PLATFORM_ID=%s\n' "${PLATFORM//\//-}" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        if: needs.metadata.outputs.publish == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: 🏗️ Build platform-specific Docker image 🚧
+      - name: Build the selected platform
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         env:
@@ -110,70 +142,83 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             GITHUB_ACTIONS=1
-            VERSION=${{ fromJSON(fromJSON(needs.metadata.outputs.json)).labels['org.opencontainers.image.version'] }}
+            VERSION=${{ needs.metadata.outputs.version }}
           context: .
           file: deployments/Dockerfile
-          push: true
+          push: ${{ needs.metadata.outputs.publish == 'true' }}
           sbom: true
           provenance: true
-          labels: ${{ fromJSON(needs.metadata.outputs.labels) }}
-          annotations: ${{ fromJSON(needs.metadata.outputs.annotations) }}
-          outputs: type=image,"name=${{ env.REGISTRY_IMAGE }}",push-by-digest=true,name-canonical=true,push=true
-          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM }}
-          cache-from: type=gha,scope=${{ env.PLATFORM }}
-
-      - name: 📄 Export digest
+          labels: |
+            org.opencontainers.image.title=postfix-tlspol
+            org.opencontainers.image.source=https://github.com/Zuplu/postfix-tlspol
+            org.opencontainers.image.version=${{ needs.metadata.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.metadata.outputs.commit }}
+            org.opencontainers.image.licenses=Apache-2.0
+          outputs: ${{ needs.metadata.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY_IMAGE) || 'type=cacheonly' }}
+      - name: Export digest
+        if: needs.metadata.outputs.publish == 'true'
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
-
-      - name: 📤 Upload digest
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${IMAGE_DIGEST#sha256:}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: needs.metadata.outputs.publish == 'true'
         with:
-          name: digest-${{ env.PLATFORM }}
+          name: digest-${{ env.PLATFORM_ID }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
 
   bundle:
-    name: 📦 Bundle and Deploy ✨
+    if: needs.metadata.outputs.publish == 'true'
     needs: [metadata, build]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
       attestations: write
       artifact-metadata: write
-    env:
-      METADATA: ${{ fromJSON(needs.metadata.outputs.json) }}
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
     steps:
-      - name: 📥 Download digests
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: ${{ runner.temp }}/digests
           pattern: digest-*
           merge-multiple: true
-
-      - name: 🔐 Login to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: ✨ Bundle and push manifest
-        working-directory: ${{ runner.temp }}/digests
+      - name: Publish the multi-platform manifest
+        id: manifest
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
-          DIGEST="$(docker buildx imagetools create --progress rawjson \
-            $(jq -r '.tags | map("-t \(.)") | join(" ")' <<< "$METADATA") \
-            $(printf "${{ env.REGISTRY_IMAGE }}@sha256:%s " *) 2>&1 | \
-            jq -r 'select(has("logs")) | .logs[].data | @base64d | match("sha256:[a-f0-9]{64}").string' | tail -n1)"
-          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
-
-      - name: 🔏 Attest build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
-        id: attest
+          python3 .github/scripts/release.py docker-metadata "$RELEASE_VERSION" > "$RUNNER_TEMP/docker-metadata.json"
+          mapfile -t tags < <(jq -r '.tags[]' "$RUNNER_TEMP/docker-metadata.json")
+          args=()
+          for tag in "${tags[@]}"; do args+=(-t "$tag"); done
+          for file in "$RUNNER_TEMP"/digests/*; do
+            digest="${file##*/}"
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            args+=("$REGISTRY_IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/manifest.json" "${args[@]}"
+          digest="$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/manifest.json")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-name: docker.io/${{ env.REGISTRY_IMAGE }}
-          subject-digest: ${{ env.DIGEST }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
