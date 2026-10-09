@@ -274,6 +274,9 @@ def docker_platforms(manifest):
     selected = []
     for target in targets:
         base = "linux/amd64" if target.startswith("linux/amd64/") else target
+        if target == "linux/riscv64" and base not in available:
+            print("Pinned Go image has no linux/riscv64 build; omitting RISC-V", file=sys.stderr)
+            continue
         require(base in available, "Pinned Go image is missing required platform " + target)
         selected.append({"platform": target})
     return {"include": selected}

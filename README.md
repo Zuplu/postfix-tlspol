@@ -175,7 +175,7 @@ Publication uses the repository's `GITHUB_TOKEN` and the `DOCKERHUB_USERNAME` an
 
 Release automation and its tests live in `.github/scripts/`. Run `python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v` with git-cliff 2.14.2 installed to check the version, changelog, and publication behavior locally.
 
-The Docker matrix requires all ten targets, including RISC-V, in the pinned Go base image. If an upstream image is missing a target, the release stops before changing `main` or creating a tag. Update the pinned digest once every architecture is available, then run the release workflow. Publication waits for every platform build.
+The Docker matrix requires the nine standard targets in the pinned Go base image and adds RISC-V when that image contains a `linux/riscv64` manifest. Updating the pinned digest can enable RISC-V without editing the workflow. Publication waits for every selected platform build.
 
 # Configuration
 

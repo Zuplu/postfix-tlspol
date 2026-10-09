@@ -241,7 +241,7 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "VERSION"):
             release.docker_metadata(self.root, "1.15.0")
 
-    def test_platform_matrix_requires_every_target_including_riscv(self):
+    def test_platform_matrix_includes_riscv_only_when_available(self):
         manifest = {"manifests": [
             {"platform": {"os": "linux", "architecture": arch, "variant": variant}}
             for arch, variant in (
@@ -249,8 +249,7 @@ class ReleaseTests(unittest.TestCase):
                 ("386", None), ("ppc64le", None), ("s390x", None),
             )
         ]}
-        with self.assertRaisesRegex(ValueError, "required platform linux/riscv64"):
-            release.docker_platforms(manifest)
+        self.assertEqual(len(release.docker_platforms(manifest)["include"]), 9)
         manifest["manifests"].append({"platform": {"os": "linux", "architecture": "riscv64"}})
         selected = release.docker_platforms(manifest)["include"]
         self.assertEqual(len(selected), 10)
