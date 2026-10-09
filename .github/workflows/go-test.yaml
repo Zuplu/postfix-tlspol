@@ -55,9 +55,10 @@ jobs:
           CGO_ENABLED=0 go build -mod=vendor -tags netgo -o "$RUNNER_TEMP/postfix-tlspol" .
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
         with:
-          tool: git-cliff@2.14.2,actionlint@1.7.12
+          tool: git-cliff@2.14.2
           fallback: none
       - name: Check release preparation and workflows
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
-          actionlint
+          GOBIN="$RUNNER_TEMP/workflow-tools" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$RUNNER_TEMP/workflow-tools/actionlint"
