@@ -1,8 +1,6 @@
 module github.com/Zuplu/postfix-tlspol
 
-go 1.27.0
-
-toolchain go1.27.1
+go 1.27.2
 
 require (
 	codeberg.org/miekg/dns v0.6.118
@@ -13,5 +11,5 @@ require (
 
 require (
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 )

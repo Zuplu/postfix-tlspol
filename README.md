@@ -92,7 +92,7 @@ Press _d_ for Docker when prompted or select it if a terminal UI appears.
 These requirements only apply if you use the non-Docker variant for installation, i. e. as a systemd service unit.
 
 - Postfix
-- Go (latest)
+- Go 1.27.2 or newer
 - DNSSEC-validating DNS server (preferably on localhost)
 
 ### Build and install
