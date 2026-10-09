@@ -212,3 +212,5 @@ dns:
 # Prefetching
 
 Prefetching is enabled by default, and postfix-tlspol tries to keep its cache fresh. Refresh failures use bounded retries and preserve still-valid branch state. The in-memory cache is capped at 50,000 entries and pruned to 45,000 entries in one batch, favoring useful and frequently accessed policies.
+
+MTA-STS policies with an advertised `max_age` below 300 seconds are fetched on demand and are not prefetched. Exactly 300 seconds remains eligible; the cutoff uses the original lifetime, not the time remaining before expiry. DANE refreshes remain independent. All prefetching stops after 14 days without a domain query and resumes when that domain is queried again, including a cache hit. Query access times are persisted; background refreshes and cache inspection do not update them. Existing cache entries without a last-access time are removed at startup, so upgrading starts with a fresh cache.

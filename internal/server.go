@@ -36,8 +36,10 @@ import (
 )
 
 type CacheStruct struct {
+	LastAccess        time.Time
 	DaneLastAttempt   time.Time
 	MtaStsLastAttempt time.Time
+	MtaStsMaxAge      *uint32
 	*cache.Expirable
 	Policy  string // legacy/selected policy, retained for old cache files and dumps
 	Report  string
@@ -164,7 +166,9 @@ func discardCachedPolicyState(haveLock bool, key string, c *CacheStruct) {
 		return
 	}
 	polCache.Update(haveLock, key, func(*CacheStruct, bool) (*CacheStruct, bool) {
-		return statsOnlyCacheEntry(counter), true
+		entry := statsOnlyCacheEntry(counter)
+		entry.LastAccess = cachedLastAccess(key, c)
+		return entry, true
 	})
 	cleanupCacheHitCounterIfUnused(haveLock, key)
 }
@@ -347,7 +351,7 @@ func StartDaemon(v string, licenseText string) error {
 	if err := readEnv(); err != nil {
 		return err
 	}
-	polCache = cache.New[*CacheStruct](config.Server.CacheFile, time.Duration(600*time.Second))
+	polCache = cache.NewWithSaveHook[*CacheStruct](config.Server.CacheFile, 600*time.Second, flushQueryAccesses)
 	_ = tidyCache()
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
 	bgCtx = daemonCtx
@@ -823,6 +827,10 @@ func startServer() error {
 func tryCachedPolicy(conn net.Conn, domain string, withTlsRpt bool) (*CacheStruct, bool) {
 	c, found := polCache.Get(domain)
 	if found {
+		now := time.Now()
+		if recordCachedQuery(domain, c, now) {
+			scheduleCachedPolicyPrefetch(domain, prefetchEntry(domain, c), now)
+		}
 		policy, report, ttl, ok := selectCachedPolicy(c, time.Now())
 		if ok {
 			var delivered bool
@@ -1086,6 +1094,9 @@ func mergeCacheResult(c *CacheStruct, result domainResult, now time.Time) *Cache
 	}
 	if result.MtaStsAttempted {
 		cs.MtaStsLastAttempt = now
+		if result.MtaStsMaxAge != nil || resultMtaSts.HasData() {
+			cs.MtaStsMaxAge = result.MtaStsMaxAge
+		}
 	}
 	policy, report, ttl, ok := selectCachedPolicy(cs, now)
 	if ok {
@@ -1108,6 +1119,10 @@ func storeMergedDomainResult(domain string, result domainResult, now time.Time, 
 		previous = current
 		merged = mergeCacheResult(current, result, now)
 		merged.Counter += counterDelta
+		merged.LastAccess = cachedLastAccess(domain, current)
+		if counterDelta != 0 && now.After(merged.LastAccess) {
+			merged.LastAccess = now
+		}
 		return merged, true
 	})
 	return previous, merged
@@ -1407,6 +1422,12 @@ func handleSocketmapConnection(conn net.Conn, reader *bufio.Reader) {
 		}
 
 		if cmd == "JSON" {
+			if c, found := polCache.Get(domain); found {
+				now := time.Now()
+				if recordCachedQuery(domain, c, now) {
+					scheduleCachedPolicyPrefetch(domain, prefetchEntry(domain, c), now)
+				}
+			}
 			ctx, cancel := context.WithTimeout(bgCtx, 2*REQUEST_TIMEOUT)
 			replyJson(ctx, conn, domain)
 			cancel()
@@ -1472,6 +1493,7 @@ func isLocalControlConnection(conn net.Conn) bool {
 }
 
 type domainResult struct {
+	MtaStsMaxAge    *uint32
 	Policy          string
 	Report          string
 	Dane            PolicyBranch
@@ -1603,6 +1625,9 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 
 	queryDane := shouldQueryDane(c, daneForQuery, mtaStsForQuery, now, opts.renewBefore)
 	queryMtaSts := shouldQueryMtaSts(c, daneForQuery, mtaStsForQuery, now, opts.renewBefore)
+	if opts.prefetch && !mtaStsPrefetchAllowed(c) {
+		queryMtaSts = false
+	}
 
 	switch {
 	case queryDane && queryMtaSts:
@@ -1626,7 +1651,11 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 		daneForSelection = refreshedDane
 	}
 	refreshedMtaSts := PolicyBranch{}
+	var mtaStsMaxAge *uint32
 	if queryMtaSts {
+		if mtaStsPol != "TEMP" && (mtaStsPol != "" || mtaStsRpt != "" || mtaStsTTL != 0) {
+			mtaStsMaxAge = &mtaStsTTL
+		}
 		candidate := mtaStsBranchFromResult(mtaStsPol, mtaStsRpt, mtaStsTTL)
 		livePolicyUnavailable := mtaStsPol == "TEMP" || mtaStsPol == "" && mtaStsTTL == 0
 		if !livePolicyUnavailable || !mtaStsForSelected.HasData() {
@@ -1646,6 +1675,7 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 		}
 	}
 	return domainResult{
+		MtaStsMaxAge:    mtaStsMaxAge,
 		Policy:          policy,
 		Report:          report,
 		TTL:             ttl,
@@ -1691,7 +1721,9 @@ func shouldQueryMtaSts(c *CacheStruct, daneForSelection PolicyBranch, mtaStsForS
 	if mtaStsForSelection.HasData() {
 		return false
 	}
-	if c != nil && !c.MtaStsLastAttempt.IsZero() && now.Before(c.MtaStsLastAttempt.Add(MTA_STS_FETCH_RETRY_INTERVAL)) {
+	completedShortPolicy := c != nil && renewBefore == 0 && !mtaStsPrefetchAllowed(c) &&
+		c.MtaStsLastAttempt.Equal(c.MtaSts.ExpiresAt.Add(-time.Duration(c.MtaSts.TTL)*time.Second))
+	if c != nil && !completedShortPolicy && !c.MtaStsLastAttempt.IsZero() && now.Before(c.MtaStsLastAttempt.Add(MTA_STS_FETCH_RETRY_INTERVAL)) {
 		return false
 	}
 	if c != nil && c.Dane.Policy != "" && beforeBranchRecheck(c.MtaStsLastAttempt, now, renewBefore) {
@@ -1730,6 +1762,7 @@ func dumpCachedPolicies(conn net.Conn, export bool) {
 
 func purgeCache(conn net.Conn) {
 	err := polCache.Purge()
+	flushQueryAccesses(polCache, false)
 	flushCacheHitCounters(false)
 	clearPrefetchSchedule()
 	if err != nil {
@@ -1741,11 +1774,20 @@ func purgeCache(conn net.Conn) {
 }
 
 func tidyCache() []cache.Entry[*CacheStruct] {
+	flushQueryAccesses(polCache, false)
 	flushCacheHitCounters(false)
 	items := polCache.Items(false)
 	now := time.Now()
 	entries := make([]cache.Entry[*CacheStruct], 0, len(items))
 	for _, entry := range items {
+		if entry.Value.LastAccess.IsZero() {
+			if _, removed := removeCacheEntryIfCurrent(entry.Key, entry.Value); removed {
+				cacheHitCounters.Delete(entry.Key)
+				pendingQueryAccesses.Delete(entry.Key)
+				unscheduleCachedPolicyPrefetch(entry.Key)
+			}
+			continue
+		}
 		removeEmptyStats := entry.Value.policyStateEmpty() && entry.Value.Counter == 0
 		removeExpiredNoPolicy := !entry.Value.policyStateEmpty() && entry.Value.noPolicyOnly() && entry.Value.RemainingTTL(now) == 0
 		removeStalePolicy := !entry.Value.policyStateEmpty() && entry.Value.Age(now) >= CACHE_MAX_AGE
@@ -1771,6 +1813,7 @@ func tidyCache() []cache.Entry[*CacheStruct] {
 		if removed {
 			pruned++
 			cacheHitCounters.Delete(entry.Key)
+			pendingQueryAccesses.Delete(entry.Key)
 			unscheduleCachedPolicyPrefetch(entry.Key)
 		} else if current != nil {
 			entries = append(entries, cache.Entry[*CacheStruct]{Key: entry.Key, Value: current})

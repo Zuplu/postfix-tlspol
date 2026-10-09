@@ -57,6 +57,7 @@ func (e *Expirable) RemainingTTL(t ...time.Time) uint32 {
 }
 
 type Cache[T Cacheable] struct {
+	beforeSave          func(*Cache[T], bool)
 	closeErr            error
 	data                map[string]T
 	quit                chan struct{}
@@ -78,7 +79,15 @@ type Entry[T Cacheable] struct {
 }
 
 func New[T Cacheable](filePath string, savePeriod time.Duration) *Cache[T] {
+	return NewWithSaveHook[T](filePath, savePeriod, nil)
+}
+
+// NewWithSaveHook folds independently tracked metadata into the cache before
+// every snapshot, including periodic saves and shutdown. The hook receives
+// whether the caller already owns the cache lock.
+func NewWithSaveHook[T Cacheable](filePath string, savePeriod time.Duration, beforeSave func(*Cache[T], bool)) *Cache[T] {
 	c := &Cache[T]{
+		beforeSave: beforeSave,
 		data:       make(map[string]T),
 		filePath:   filePath,
 		savePeriod: savePeriod,
@@ -203,6 +212,9 @@ func (c *Cache[T]) ForceSave(haveLock bool) error {
 }
 
 func (c *Cache[T]) save(haveLock bool, force bool) error {
+	if c.beforeSave != nil {
+		c.beforeSave(c, haveLock)
+	}
 	var (
 		snapshot   map[string]T
 		generation uint64

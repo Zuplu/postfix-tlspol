@@ -828,15 +828,18 @@ func TestTidyCacheRemovesExpiredNoPolicyAndOldStalePolicy(t *testing.T) {
 
 	now := time.Now()
 	polCache.Set("expired-empty.example", &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Second)},
-		Policy:    "",
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(-time.Second)},
+		Policy:     "",
 	})
 	polCache.Set("old-stale.example", &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Duration(CACHE_MAX_AGE+1) * time.Second)},
-		Policy:    "dane",
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(-time.Duration(CACHE_MAX_AGE+1) * time.Second)},
+		Policy:     "dane",
 	})
 	polCache.Set("expired-no-policy-with-stats.example", &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Second)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(-time.Second)},
 		Dane: PolicyBranch{
 			TTL:       300,
 			ExpiresAt: now.Add(-time.Second),
@@ -848,12 +851,14 @@ func TestTidyCacheRemovesExpiredNoPolicyAndOldStalePolicy(t *testing.T) {
 		Counter: 7,
 	})
 	polCache.Set("recent-stale.example", &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Minute)},
-		Policy:    "dane",
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(-time.Minute)},
+		Policy:     "dane",
 	})
 	polCache.Set("fresh.example", &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Minute)},
-		Policy:    "dane",
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(time.Minute)},
+		Policy:     "dane",
 	})
 
 	entries := tidyCache()
@@ -2030,7 +2035,8 @@ func TestScheduleCachedPolicyPrefetchRetriesUnusableSplitEntry(t *testing.T) {
 	defer activePrefetchScheduler.Store(oldScheduler)
 
 	c := &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(5 * time.Minute)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(5 * time.Minute)},
 		Dane: PolicyBranch{
 			TTL:       300,
 			ExpiresAt: now.Add(5 * time.Minute),
@@ -2088,7 +2094,8 @@ func TestPrefetchDuePoliciesExtendsNearExpiryMtaSts(t *testing.T) {
 	now := time.Now()
 	key := "prefetch-mtasts.example"
 	polCache.Set(key, &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
 		Dane: PolicyBranch{
 			TTL:       policyBranchRecheckTTL(),
 			ExpiresAt: now.Add(time.Hour),
@@ -2152,7 +2159,8 @@ func TestPrefetchDuePoliciesBacksOffNearExpiryMtaStsFailure(t *testing.T) {
 	key := "prefetch-mtasts-fail.example"
 	cachedPolicy := "secure match=mx.cached.example servername=hostname"
 	polCache.Set(key, &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(20 * time.Second)},
 		Dane: PolicyBranch{
 			TTL:       policyBranchRecheckTTL(),
 			ExpiresAt: now.Add(time.Hour),
@@ -2241,7 +2249,8 @@ func TestScheduleFailedPolicyPrefetchDiscardsCacheAfterRetryWindow(t *testing.T)
 	now := time.Now()
 	key := "discard.example"
 	polCache.Set(key, &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Hour)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(time.Hour)},
 		Dane: PolicyBranch{
 			Policy:    "dane",
 			TTL:       3600,
@@ -2281,7 +2290,8 @@ func TestScheduleFailedPolicyPrefetchPreservesStatsOnDiscard(t *testing.T) {
 	now := time.Now()
 	key := "stats-discard.example"
 	polCache.Set(key, &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(time.Hour)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(time.Hour)},
 		Dane: PolicyBranch{
 			Policy:    "dane",
 			TTL:       3600,
@@ -2322,7 +2332,8 @@ func TestScheduleFailedPolicyPrefetchPreservesConcurrentReplacement(t *testing.T
 	now := time.Now()
 	key := "concurrent-prefetch.example"
 	stale := &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Hour)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(-time.Hour)},
 		Dane: PolicyBranch{
 			Policy:    "dane",
 			TTL:       300,
@@ -2330,7 +2341,8 @@ func TestScheduleFailedPolicyPrefetchPreservesConcurrentReplacement(t *testing.T
 		},
 	}
 	fresh := &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(10 * time.Minute)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(10 * time.Minute)},
 		Dane: PolicyBranch{
 			Policy:    "dane-only",
 			TTL:       600,
@@ -2369,7 +2381,8 @@ func TestScheduleFailedPolicyPrefetchKeepsFormerDaneDuringGrace(t *testing.T) {
 	now := time.Now()
 	key := "dane-grace.example"
 	polCache.Set(key, &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(-time.Hour)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(-time.Hour)},
 		Dane: PolicyBranch{
 			Policy:    "dane-only",
 			TTL:       300,
@@ -2416,7 +2429,8 @@ func TestScheduleFailedPolicyPrefetchClearsFormerDaneAfterGrace(t *testing.T) {
 	key := "dane-after-grace.example"
 	mtaStsPolicy := "secure match=mx.example servername=hostname"
 	polCache.Set(key, &CacheStruct{
-		Expirable: &cache.Expirable{ExpiresAt: now.Add(-25 * time.Hour)},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{ExpiresAt: now.Add(-25 * time.Hour)},
 		Dane: PolicyBranch{
 			Policy:    "dane-only",
 			TTL:       300,

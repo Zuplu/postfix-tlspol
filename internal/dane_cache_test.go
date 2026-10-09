@@ -108,7 +108,8 @@ func TestPartialDanePrefetchNeverInventsNegativePolicy(t *testing.T) {
 	now := time.Now()
 	key := "partial.example.test"
 	previous := &CacheStruct{
-		Expirable: &cache.Expirable{},
+		LastAccess: time.Now(),
+		Expirable:  &cache.Expirable{},
 		Dane: PolicyBranch{
 			Policy: "dane-only", TTL: 300, ExpiresAt: now.Add(-48 * time.Hour),
 		},
