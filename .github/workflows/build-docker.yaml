@@ -214,7 +214,7 @@ jobs:
             args+=("$REGISTRY_IMAGE@sha256:$digest")
           done
           docker buildx imagetools create --metadata-file "$RUNNER_TEMP/manifest.json" "${args[@]}"
-          digest="$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/manifest.json")"
+          digest="$(jq -er '."containerimage.descriptor".digest' "$RUNNER_TEMP/manifest.json")"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
