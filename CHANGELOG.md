@@ -1,3 +1,14 @@
+## What's Changed in v1.14.2 (2026-10-09)
+
+* chore(deps): bump the github-actions group with 2 updates (#204) by @dependabot[bot] in [#204](https://github.com/Zuplu/postfix-tlspol/pull/204)
+* build(go): require Go 1.27.2 and refresh dependencies by @DragonWork
+* feat(release): automate signed versioned Docker releases by @DragonWork
+* ci(docker): include RISC-V when the pinned Go image supports it by @DragonWork
+* fix(ci): install actionlint with the Go toolchain by @DragonWork
+* fix(docker): read the published manifest descriptor digest by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.14.1...v1.14.2
+
 ## What's Changed in v1.14.1 (2026-10-06)
 
 * build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in [#193](https://github.com/Zuplu/postfix-tlspol/pull/193)
