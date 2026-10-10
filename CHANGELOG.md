@@ -1,3 +1,12 @@
+## What's Changed in v1.14.3 (2026-10-10)
+
+* fix(prefetch): limit refreshes by policy lifetime and query activity by @DragonWork
+* build(deps): bump the golang-x group with 2 updates (#205) by @dependabot[bot] in [#205](https://github.com/Zuplu/postfix-tlspol/pull/205)
+* chore(deps): bump the github-actions group with 3 updates (#206) by @dependabot[bot] in [#206](https://github.com/Zuplu/postfix-tlspol/pull/206)
+* build(docker): update golang to latest complete base image by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.14.2...v1.14.3
+
 ## What's Changed in v1.14.2 (2026-10-09)
 
 * chore(deps): bump the github-actions group with 2 updates (#204) by @dependabot[bot] in [#204](https://github.com/Zuplu/postfix-tlspol/pull/204)
