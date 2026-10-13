@@ -1,3 +1,7 @@
+## Unreleased
+
+- Suppress background MTA-STS lookups and refresh scheduling while fresh `dane` or `dane-only` takes precedence; check DANE first and resume STS after its removal without extending cached policy lifetimes.
+
 ## What's Changed in v1.14.3 (2026-10-10)
 
 * fix(prefetch): limit refreshes by policy lifetime and query activity by @DragonWork

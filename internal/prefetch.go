@@ -39,12 +39,16 @@ func mtaStsPrefetchAllowed(c *CacheStruct) bool {
 	return c == nil || (c.MtaSts.Policy == "" && c.MtaSts.Report == "") || c.MtaSts.TTL >= MTA_STS_PREFETCH_MIN_AGE
 }
 
-func prefetchDaneIndependently(c *CacheStruct) bool {
-	return c != nil && !mtaStsPrefetchAllowed(c)
+func daneSuppressesMtaStsPrefetch(c *CacheStruct, now time.Time) bool {
+	return c != nil && (c.Dane.Policy == "dane" || c.Dane.Policy == "dane-only") && c.Dane.RemainingTTL(now) != 0
+}
+
+func prefetchDaneIndependently(c *CacheStruct, now time.Time) bool {
+	return c != nil && (!mtaStsPrefetchAllowed(c) || daneSuppressesMtaStsPrefetch(c, now))
 }
 
 func selectPrefetchPolicy(c *CacheStruct, now time.Time) (string, string, uint32, bool) {
-	if prefetchDaneIndependently(c) {
+	if prefetchDaneIndependently(c, now) {
 		ttl := c.Dane.RemainingTTL(now)
 		return c.Dane.Policy, c.Dane.Report, ttl, ttl != 0
 	}
@@ -464,10 +468,10 @@ func (s *prefetchScheduler) nextPrefetchTime(c *CacheStruct, now time.Time) (tim
 	if !usable {
 		return time.Time{}, false
 	}
-	if policy == "" && !prefetchDaneIndependently(c) && !hadPolicyWithin(c, now, POLICY_BRANCH_RECHECK) {
+	if policy == "" && !prefetchDaneIndependently(c, now) && !hadPolicyWithin(c, now, POLICY_BRANCH_RECHECK) {
 		return time.Time{}, false
 	}
-	if policy == "" && !prefetchDaneIndependently(c) {
+	if policy == "" && !prefetchDaneIndependently(c, now) {
 		return s.batchAtOrAfter(now.Add(time.Duration(remainingTTL) * time.Second)), true
 	}
 	return s.nextPolicyPrefetchTime(now, remainingTTL), true
@@ -524,7 +528,7 @@ func shouldRetryCachedPolicyPrefetch(c *CacheStruct, now time.Time) bool {
 	if c == nil || c.Age(now) >= CACHE_MAX_AGE {
 		return false
 	}
-	if prefetchDaneIndependently(c) {
+	if prefetchDaneIndependently(c, now) {
 		return c.Dane.HasData() || !c.DaneLastAttempt.IsZero()
 	}
 	if c.RemainingTTL(now) == 0 {
@@ -539,7 +543,7 @@ func (s *prefetchScheduler) nextPrefetchTimeAfterMiss(c *CacheStruct, now time.T
 	if !usable || remainingTTL == 0 {
 		return time.Time{}, false
 	}
-	if policy == "" && !prefetchDaneIndependently(c) && !hadPolicyWithin(c, now, POLICY_BRANCH_RECHECK) {
+	if policy == "" && !prefetchDaneIndependently(c, now) && !hadPolicyWithin(c, now, POLICY_BRANCH_RECHECK) {
 		return time.Time{}, false
 	}
 	return s.batchAtOrAfter(now.Add(time.Duration(remainingTTL) * time.Second)), true
@@ -676,7 +680,7 @@ func prefetchDuePoliciesContext(ctx context.Context, scheduler *prefetchSchedule
 				}
 				continue
 			}
-		} else if policy == "" && !prefetchDaneIndependently(entry.Value) {
+		} else if policy == "" && !prefetchDaneIndependently(entry.Value, now) {
 			itemsCount--
 			if remainingTTL == 0 {
 				current, discarded := discardCachedPolicyStateIfCurrent(entry.Key, entry.Value)

@@ -1630,6 +1630,29 @@ func queryDomainBranchesWithOptions(domain string, c *CacheStruct, now time.Time
 	}
 
 	switch {
+	case opts.prefetch:
+		// Resolve DANE first so a due STS branch does not renew an unused
+		// fallback. Foreground lookups retain their concurrent behavior.
+		if queryDane {
+			dane = checkDanePolicy(ctx, domain, true)
+		}
+		effective := c
+		if queryDane && dane.Policy != "TEMP" && !dane.Partial {
+			updated := CacheStruct{}
+			if c != nil {
+				updated = *c
+			}
+			updated.Dane = branchFromResult(dane.Policy, "", dane.TTL)
+			updated.Dane.ExpiresAt = now.Add(time.Duration(updated.Dane.TTL) * time.Second)
+			effective = &updated
+			queryMtaSts = mtaStsPrefetchAllowed(effective) && shouldQueryMtaSts(effective, PolicyBranch{}, mtaStsForQuery, now, opts.renewBefore)
+		}
+		if daneSuppressesMtaStsPrefetch(effective, now) {
+			queryMtaSts = false
+		}
+		if queryMtaSts {
+			mtaStsPol, mtaStsRpt, mtaStsTTL = checkMtaStsPolicy(ctx, domain, true)
+		}
 	case queryDane && queryMtaSts:
 		wg.Go(func() {
 			dane = checkDanePolicy(ctx, domain, true)

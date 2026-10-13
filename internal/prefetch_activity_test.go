@@ -213,3 +213,74 @@ func TestStartupPurgesEntriesWithoutLastAccess(t *testing.T) {
 		t.Fatal("legacy cache removal was not persisted")
 	}
 }
+
+func TestPrefetchSkipsStsUntilDaneIsRemoved(t *testing.T) {
+	oldDane, oldMta := checkDanePolicy, checkMtaStsPolicy
+	t.Cleanup(func() { checkDanePolicy, checkMtaStsPolicy = oldDane, oldMta })
+	for _, oldPolicy := range []string{"dane", "dane-only"} {
+		for _, livePolicy := range []string{"dane", "dane-only", "", "TEMP"} {
+			t.Run(oldPolicy+"/"+livePolicy, func(t *testing.T) {
+				now := time.Now()
+				entry := &CacheStruct{
+					Dane:            PolicyBranch{Policy: oldPolicy, TTL: 3600, ExpiresAt: now.Add(10 * time.Second)},
+					DaneLastAttempt: now.Add(-time.Hour), MtaStsLastAttempt: now.Add(-2 * time.Hour),
+					MtaSts: PolicyBranch{Policy: "secure match=old.example.test", TTL: 3600, ExpiresAt: now.Add(-time.Hour)},
+				}
+				daneDone := false
+				calls := 0
+				checkDanePolicy = func(context.Context, string, bool) daneResult {
+					daneDone = true
+					return daneResult{Policy: livePolicy, TTL: 3600}
+				}
+				checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+					if !daneDone {
+						t.Error("STS started before DANE completed")
+					}
+					calls++
+					return "secure match=mx.example.test", "", 3600
+				}
+				result := queryDomainBranchesWithOptions("example.test", entry, now, queryBranchOptions{prefetch: true, renewBefore: PREFETCH_INTERVAL})
+				wantSts := livePolicy == ""
+				if !result.DaneAttempted || result.MtaStsAttempted != wantSts || (calls != 0) != wantSts {
+					t.Fatalf("unexpected refresh: %+v, STS calls=%d", result, calls)
+				}
+				if wantSts && result.Policy != "secure match=mx.example.test" {
+					t.Fatalf("missing fallback: %+v", result)
+				}
+				if !wantSts && result.MtaSts.HasData() {
+					t.Fatal("skipped STS was rewritten")
+				}
+			})
+		}
+	}
+}
+
+func TestFreshDaneSuppressesStsPrefetchAndScheduling(t *testing.T) {
+	oldDane, oldMta := checkDanePolicy, checkMtaStsPolicy
+	t.Cleanup(func() { checkDanePolicy, checkMtaStsPolicy = oldDane, oldMta })
+	checkDanePolicy = func(context.Context, string, bool) daneResult { t.Fatal("fresh DANE queried"); return daneResult{} }
+	checkMtaStsPolicy = func(context.Context, string, bool) (string, string, uint32) {
+		t.Fatal("unused STS queried")
+		return "", "", 0
+	}
+	for _, policy := range []string{"dane", "dane-only"} {
+		now := time.Now()
+		entry := &CacheStruct{
+			Dane:              PolicyBranch{Policy: policy, TTL: 3600, ExpiresAt: now.Add(time.Hour)},
+			MtaSts:            PolicyBranch{Policy: "secure match=mx.example.test", TTL: 3600, ExpiresAt: now.Add(time.Second)},
+			MtaStsLastAttempt: now.Add(-48 * time.Hour),
+		}
+		result := queryDomainBranchesWithOptions("example.test", entry, now, queryBranchOptions{prefetch: true, renewBefore: PREFETCH_INTERVAL})
+		if result.Policy != policy || result.MtaStsAttempted {
+			t.Fatalf("unexpected result: %+v", result)
+		}
+		scheduler := newPrefetchSchedulerAt(now, 7)
+		due, ok := scheduler.nextPrefetchTime(entry, now)
+		if !ok || due.Before(now.Add(time.Duration(3600-PREFETCH_INTERVAL)*time.Second)) {
+			t.Fatalf("STS caused early wake: %s %v", due, ok)
+		}
+		if daneSuppressesMtaStsPrefetch(entry, now.Add(time.Hour)) {
+			t.Fatal("expired DANE suppresses STS")
+		}
+	}
+}
