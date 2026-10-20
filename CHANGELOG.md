@@ -1,3 +1,13 @@
+## What's Changed in v1.14.4 (2026-10-20)
+
+* fix(prefetch): skip unused STS refreshes while DANE is active by @DragonWork
+* chore(deps): bump taiki-e/install-action (#208) by @dependabot[bot] in [#208](https://github.com/Zuplu/postfix-tlspol/pull/208)
+* build(deps): bump the golang-x group across 1 directory with 2 updates (#207) by @dependabot[bot] in [#207](https://github.com/Zuplu/postfix-tlspol/pull/207)
+* build(docker): bump golang in /deployments (#209) by @dependabot[bot] in [#209](https://github.com/Zuplu/postfix-tlspol/pull/209)
+* build: update Go version from 1.27.2 to 1.27.3 (security) by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.14.3...v1.14.4
+
 ## What's Changed in v1.14.3 (2026-10-10)
 
 * fix(prefetch): limit refreshes by policy lifetime and query activity by @DragonWork
