@@ -20,7 +20,7 @@ updates:
       interval: daily
       time: "07:00"
     cooldown:
-      default-days: 1
+      default-days: 0
     commit-message:
       prefix: "build(docker)"
 
@@ -30,9 +30,9 @@ updates:
       interval: daily
       time: "07:00"
     cooldown:
-      default-days: 7
-      semver-minor-days: 3
-      semver-patch-days: 1
+      default-days: 3
+      semver-minor-days: 1
+      semver-patch-days: 0
     allow:
       - dependency-type: all
     commit-message:
