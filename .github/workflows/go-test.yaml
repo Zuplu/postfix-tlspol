@@ -53,7 +53,7 @@ jobs:
           go vet -mod=vendor -tags netgo ./...
           go test -mod=vendor -race -count=1 -tags netgo ./...
           CGO_ENABLED=0 go build -mod=vendor -tags netgo -o "$RUNNER_TEMP/postfix-tlspol" .
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: git-cliff@2.14.2
           fallback: none
