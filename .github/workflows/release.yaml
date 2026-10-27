@@ -52,7 +52,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: DragonWork/install-action@c02040044a4995c2c4a855c48a9c3278d7d713ba # setup v1.0.3
+      - uses: DragonWork/install-action@b1d95bfeb624e4e4473e7460f144479153ee1fe2 # setup v1.0.3
       - uses: DragonWork/install-action/tools/git-cliff@7b03d4b6428472552f85b3df46fa8c175b8337fa # git-cliff v2.14.2, checksum-pinned
       - name: Prepare version and prepend changelog
         id: prepare
