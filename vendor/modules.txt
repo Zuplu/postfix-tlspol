@@ -25,7 +25,7 @@ go.yaml.in/yaml/v4/plugin/limit
 ## explicit; go 1.26.0
 golang.org/x/crypto/cryptobyte
 golang.org/x/crypto/cryptobyte/asn1
-# golang.org/x/net v0.61.0
+# golang.org/x/net v0.62.0
 ## explicit; go 1.26.0
 golang.org/x/net/bpf
 golang.org/x/net/internal/iana
