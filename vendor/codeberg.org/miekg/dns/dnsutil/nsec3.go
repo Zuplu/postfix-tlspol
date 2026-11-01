@@ -13,7 +13,7 @@ import (
 // first.
 func NSEC3Name(s, salt string, iter uint16) string {
 	hashdata := make([]byte, hex.DecodedLen(len(salt))+255)
-	n, err := pack.Name(s, hashdata, 0, nil, false)
+	n, err := pack.Name(Canonical(s), hashdata, 0, nil, false)
 	if err != nil {
 		return ""
 	}
