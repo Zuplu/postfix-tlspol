@@ -1,3 +1,17 @@
+## What's Changed in v1.14.5 (2026-11-01)
+
+* ci: use DragonWork install action by @DragonWork
+* chore(deps): bump docker/login-action (#212) by @dependabot[bot] in [#212](https://github.com/Zuplu/postfix-tlspol/pull/212)
+* chore(deps): bump DragonWork/install-action (#215) by @dependabot[bot] in [#215](https://github.com/Zuplu/postfix-tlspol/pull/215)
+* build(docker): bump golang from `f2c872b` to `d530cf6` in /deployments (#210) by @dependabot[bot] in [#210](https://github.com/Zuplu/postfix-tlspol/pull/210)
+* ci: fix installer pins by @DragonWork
+* build(deps): bump codeberg.org/miekg/dns to v0.6.119 by @DragonWork
+* build(deps): bump golang.org/x/net (#218) by @dependabot[bot] in [#218](https://github.com/Zuplu/postfix-tlspol/pull/218)
+* build(docker): bump golang from `d530cf6` to `d200d2d` in /deployments (#216) by @dependabot[bot] in [#216](https://github.com/Zuplu/postfix-tlspol/pull/216)
+* fix(security): disable MPTCP to mitigate kernel vulnerabilities by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.14.4...v1.14.5
+
 ## What's Changed in v1.14.4 (2026-10-20)
 
 * fix(prefetch): skip unused STS refreshes while DANE is active by @DragonWork
