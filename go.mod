@@ -2,6 +2,8 @@ module github.com/Zuplu/postfix-tlspol
 
 go 1.27.3
 
+godebug multipathtcp=0
+
 require (
 	codeberg.org/miekg/dns v0.6.119
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
