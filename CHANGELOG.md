@@ -1,3 +1,11 @@
+## What's Changed in v1.15.0 (2026-11-05)
+
+* build(docker): bump golang from `d200d2d` to `fa48812` in /deployments (#226) by @dependabot[bot] in [#226](https://github.com/Zuplu/postfix-tlspol/pull/226)
+* build(deps): bump go.yaml.in/yaml/v4 to v4.0.0 by @DragonWork
+* feat(mta-sts): support HTTP proxies by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.14.5...v1.15.0
+
 ## What's Changed in v1.14.5 (2026-11-01)
 
 * ci: use DragonWork install action by @DragonWork
