@@ -7,6 +7,9 @@ package tlspol
 
 import (
 	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -20,6 +23,59 @@ func init() {
 		Dns: DnsConfig{
 			Address: &address,
 		},
+	}
+}
+
+func TestMtaStsProxyFromEnvironment(t *testing.T) {
+	// Go caches proxy environment settings, so isolate them from other tests.
+	if os.Getenv("TLSPOL_PROXY_TEST") != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestMtaStsProxyFromEnvironment$")
+		cmd.Env = append(os.Environ(),
+			"TLSPOL_PROXY_TEST=1",
+			"HTTP_PROXY=http://http-proxy.example:8080",
+			"HTTPS_PROXY=http://https-proxy.example:8443",
+			"NO_PROXY=mta-sts.direct.example",
+			"http_proxy=", "https_proxy=", "no_proxy=", "REQUEST_METHOD=",
+		)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("proxy environment test: %v\n%s", err, output)
+		}
+		return
+	}
+
+	transport := httpClient.Transport.(*http.Transport)
+	if transport.Proxy == nil {
+		t.Fatal("MTA-STS transport does not use proxy environment settings")
+	}
+	for _, tt := range []struct {
+		url  string
+		want string
+	}{
+		{"http://mta-sts.example/.well-known/mta-sts.txt", "http://http-proxy.example:8080"},
+		{"https://mta-sts.example/.well-known/mta-sts.txt", "http://https-proxy.example:8443"},
+		{"https://mta-sts.direct.example/.well-known/mta-sts.txt", ""},
+	} {
+		t.Run(tt.url, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, tt.url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proxy, err := transport.Proxy(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			if proxy != nil {
+				got = proxy.String()
+			}
+			if got != tt.want {
+				t.Fatalf("proxy = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

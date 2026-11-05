@@ -151,6 +151,7 @@ var httpClient = &http.Client{
 		return http.ErrUseLastResponse
 	},
 	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify:     false,            // Ensure SSL certificate validation
 			MinVersion:             tls.VersionTLS12, // set minimum to TLSv1.2
