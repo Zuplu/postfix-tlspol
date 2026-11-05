@@ -72,3 +72,16 @@ func IsRRset(rrset []dns.RR) bool {
 	}
 	return true
 }
+
+// IsTransfer return 0 if the message m is not a request for IXFR or AXFR. It the question section does
+// contain such type it returns [dns.TypeIXFR] or [dns.TypeAXFR].
+func IsTransfer(m *dns.Msg) uint16 {
+	switch m.Question[0].(type) {
+	case *dns.IXFR:
+		return dns.TypeIXFR
+	case *dns.AXFR:
+		return dns.TypeAXFR
+	default:
+		return 0
+	}
+}
