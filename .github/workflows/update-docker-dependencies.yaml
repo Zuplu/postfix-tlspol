@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: Update Docker dependencies
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-updates:
+    if: github.repository == 'Zuplu/postfix-tlspol' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    concurrency:
+      group: docker-dependency-updates-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Prepare verified dependency updates and signed pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/dependencies.py update all --pull-request
+          git diff -- deployments/dependencies > "$RUNNER_TEMP/dependency-update.patch"
+          if [ -s "$RUNNER_TEMP/dependency-update.patch" ]; then
+            printf 'Verified build(docker) update PRs prepared with signed commits and build checks.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Pinned dependencies are current.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: dependency-update
+          path: ${{ runner.temp }}/dependency-update.patch
+          retention-days: 14

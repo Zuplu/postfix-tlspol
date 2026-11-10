@@ -16,9 +16,6 @@ on:
       - scripts/**
       - deployments/**
   pull_request:
-  schedule:
-    - cron: '23 7 * * *'
-  workflow_dispatch:
   workflow_call:
     inputs:
       source_ref:
@@ -30,7 +27,6 @@ permissions:
 
 jobs:
   test:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
@@ -68,36 +64,3 @@ jobs:
           python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
           GOBIN="$RUNNER_TEMP/workflow-tools" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$RUNNER_TEMP/workflow-tools/actionlint"
-
-  dependency-updates:
-    if: github.repository == 'Zuplu/postfix-tlspol' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.workflow == 'Go and release checks'))
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    concurrency:
-      group: docker-dependency-updates-${{ github.repository }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      pull-requests: write
-      actions: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: main
-          persist-credentials: false
-      - name: Prepare verified dependency updates and signed pull requests
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 .github/scripts/dependencies.py update all --pull-request
-          git diff -- deployments/dependencies > "$RUNNER_TEMP/dependency-update.patch"
-          if [ -s "$RUNNER_TEMP/dependency-update.patch" ]; then
-            printf 'Verified build(docker) update PRs prepared with signed commits and build checks.\n' >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf 'Pinned dependencies are current.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: dependency-update
-          path: ${{ runner.temp }}/dependency-update.patch
-          retention-days: 14
