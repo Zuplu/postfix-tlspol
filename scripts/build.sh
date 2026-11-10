@@ -11,6 +11,8 @@
 #
 #  Set env NOTEST=1 to skip deterministic tests.
 #  Set TLSPOL_LIVE_TESTS=0 to skip public DNS and HTTPS integration tests.
+#  Native builds default to PIE; BUILD_MODE=exe opts out. Explicit container
+#  targets remain static so release binaries keep their portable interface.
 #
 #  Installation path controls:
 #    PREFIX         install root (default "/")
@@ -257,7 +259,11 @@ install_socket_listenstream_override_from_config() {
   log_warn "  ListenStream=$listen_stream"
 }
 
-if [ -z "${NOOPT:-}" ]; then
+if [ -n "${TARGETPLATFORM:-}" ]; then
+  # Container builds describe the target, which may differ from the build host.
+  # shellcheck source=/dev/null
+  . "$(dirname -- "$0")/platform.sh"
+elif [ -z "${NOOPT:-}" ]; then
   if [ "$(uname -m)" = "x86_64" ]; then
     detect_goamd64() {
       cpu_flags=""
@@ -304,24 +310,6 @@ if [ -z "${NOOPT:-}" ]; then
         max="$level"
       done
 
-      if [ -n "${TARGETPLATFORM:-}" ]; then
-        if [ "$TARGETPLATFORM" = "linux/amd64" ]; then
-          target_platform_norm="linux/amd64/v1"
-        else
-          target_platform_norm="$TARGETPLATFORM"
-        fi
-
-        case "$target_platform_norm" in
-          linux/amd64/v[1234])
-            req="${target_platform_norm##*/}"
-            if [ "${req#v}" -le "${max#v}" ]; then
-              echo "$req"
-              return 0
-            fi
-            ;;
-        esac
-      fi
-
       echo "$max"
     }
 
@@ -338,8 +326,8 @@ VERSION="${VERSION:-0.0.0-dev}"
 VERSION="${VERSION#v}"
 export VERSION
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 build_go() {
@@ -350,8 +338,25 @@ build_go() {
     exit 1
   fi
 
-  export GOTOOLCHAIN=auto
-  export CGO_ENABLED=0
+  export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
+  if [ -n "${TARGETPLATFORM:-}" ]; then
+    export CGO_ENABLED=0
+    build_mode=exe
+    link_flags="-d -extldflags='-static' -s -X main.Version=$VERSION"
+  else
+    export CGO_ENABLED="${CGO_ENABLED:-1}"
+    build_mode="${BUILD_MODE:-pie}"
+    case "$build_mode" in
+      pie|exe) ;;
+      *) log_error "BUILD_MODE must be pie or exe"; exit 1 ;;
+    esac
+    # -d removes the dynamic relocation metadata required by PIE.
+    link_flags="-s -w -X main.Version=$VERSION"
+    if [ "$build_mode" = pie ] && [ "$CGO_ENABLED" != 0 ]; then
+      # The native linker selects the host's libc loader (glibc or musl).
+      link_flags="-linkmode=external $link_flags"
+    fi
+  fi
 
   log_meta "Version: $VERSION"
   log_info "Install prefix: $PREFIX"
@@ -365,7 +370,7 @@ build_go() {
     log_warn "Test skipped."
   else
     # We are only doing a short test here, run scripts/test.sh for a detailed test
-    if go test -tags netgo -failfast -short ./...; then
+    if go test -tags netgo,osusergo -failfast -short ./...; then
       log_info "Test succeeded."
     else
       log_error "Test failed."
@@ -379,10 +384,12 @@ build_go() {
   fi
 
   if go build \
-    -buildmode=exe \
+    -mod=vendor \
+    -buildvcs=false \
+    -buildmode="$build_mode" \
     -trimpath \
-    -tags netgo \
-    -ldflags="-d -extldflags='-static' -s -X main.Version=$VERSION" \
+    -tags netgo,osusergo \
+    -ldflags="$link_flags" \
     -o build/postfix-tlspol .; then
     chmod 0755 build/postfix-tlspol
     log_info "Build succeeded!"

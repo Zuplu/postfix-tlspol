@@ -1,235 +1,94 @@
-FROM golang:1.27.3-alpine@sha256:fa4881266890ef051f0ce63afdfaccb69bbe8186084387f4fafd60d7ecbabc71 AS workspace
+ARG ALPINE_IMAGE=alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
+# Verification runs on the builder, independently of the target architecture.
+FROM --platform=$BUILDPLATFORM ${ALPINE_IMAGE} AS source-tools
+RUN apk add --no-cache python3 gnupg
+COPY .github/scripts/dependencies.py /inputs/.github/scripts/dependencies.py
+
+# A: official precompiled Go, without a dependency on the golang Docker image.
+FROM source-tools AS go-toolchain
+COPY deployments/dependencies/go.json deployments/dependencies/google.asc /inputs/deployments/dependencies/
+ARG BUILDARCH
+RUN python3 /inputs/.github/scripts/dependencies.py fetch go --arch "$BUILDARCH" --output /tmp/go.tar.gz \
+  && tar -xzf /tmp/go.tar.gz -C /usr/local && rm /tmp/go.tar.gz
+ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local CGO_ENABLED=0 GOMAXPROCS=3 GOFLAGS=-p=3
+
+FROM go-toolchain AS go-build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY vendor/ vendor/
+COPY scripts/build.sh scripts/platform.sh scripts/
+COPY configs/config.default.yaml configs/config.default.yaml
+COPY main.go LICENSE ./
+COPY internal/ internal/
 ARG TARGETPLATFORM
-ARG GITHUB_ACTIONS
 ARG VERSION=0.0.0-dev
+RUN PREFIX=/out NOTEST=1 scripts/build.sh build-only \
+  && mkdir -p /out/usr/bin /out/usr/share/postfix-tlspol \
+  && mv /out/bin/postfix-tlspol /out/usr/bin/ \
+  && cp /inputs/deployments/dependencies/go.json /out/usr/share/postfix-tlspol/ \
+  && rm -rf /out/bin /out/etc /out/var /root/.cache/go-build /src/build
 
-# Create a non-root user
-RUN addgroup -g 1000 default \
-  && adduser -G default -u 1000 default -D
+FROM scratch AS go-artifact
+COPY --from=go-build /out/usr/bin/postfix-tlspol /postfix-tlspol
 
-# Install unbound
-RUN apk add --no-cache unbound
+# B: native sources do not depend on application files or Go inputs.
+FROM source-tools AS native-sources
+COPY deployments/dependencies/unbound.json deployments/dependencies/openssl.json deployments/dependencies/nlnetlabs.asc /inputs/deployments/dependencies/
+RUN python3 /inputs/.github/scripts/dependencies.py fetch unbound --output /sources/unbound.tar.gz \
+  && python3 /inputs/.github/scripts/dependencies.py fetch openssl --output /sources/openssl.tar.gz
 
-# Copy postfix-tlspol
-COPY . /build
+# QEMU compiles non-native targets. Compiler programs use the base CPU level;
+# optimized AMD64 outputs are linked but never executed in this stage.
+FROM ${ALPINE_IMAGE} AS unbound-build
+RUN apk add --no-cache gcc binutils make \
+  musl-dev fortify-headers perl \
+  expat-dev linux-headers
+COPY --from=native-sources /sources/openssl.tar.gz /sources/openssl.tar.gz
+COPY scripts/build-unbound.sh scripts/platform.sh /inputs/scripts/
+ARG TARGETPLATFORM
+RUN sh /inputs/scripts/build-unbound.sh openssl
+COPY --from=native-sources /sources/unbound.tar.gz /sources/unbound.tar.gz
+COPY --from=native-sources /inputs/deployments/dependencies/ /inputs/deployments/dependencies/
+RUN sh /inputs/scripts/build-unbound.sh unbound
 
-# Build postfix-tlspol
-RUN /build/scripts/build.sh build-only
+# Supplement the image scanner with explicit static-library/toolchain provenance.
+FROM source-tools AS dependency-sbom
+COPY deployments/dependencies/*.json /inputs/deployments/dependencies/
+RUN python3 /inputs/.github/scripts/dependencies.py sbom all --output /dependencies.cdx.json
 
-# Remove residual toolchain
-RUN go clean -cache -modcache \
-  && rm -rf /build \
-  && rm -rf /usr/local/go \
-  && rm -rf /go \
-  && rm -rf /home \
-  && apk --purge del apk-tools
+# C: an explicit runtime closure from the pinned base, not its entire rootfs.
+FROM ${ALPINE_IMAGE} AS runtime-files
+RUN mkdir -p /rootfs/bin /rootfs/lib /rootfs/etc/ssl/certs \
+    /rootfs/etc/postfix-tlspol /rootfs/etc/unbound /rootfs/data /rootfs/var/lib/unbound /rootfs/tmp \
+  && cp /bin/busybox /rootfs/bin/ \
+  && for app in sh nslookup wget mkdir chmod cp mv seq sleep; do ln -s busybox "/rootfs/bin/$app"; done \
+  && cp -L /lib/ld-musl-*.so.1 /rootfs/lib/ \
+  && for lib in /rootfs/lib/ld-musl-*.so.1; do name="${lib##*/ld-musl-}"; ln -s "${lib##*/}" "/rootfs/lib/libc.musl-$name"; done \
+  && cp /etc/ssl/cert.pem /rootfs/etc/ssl/certs/ca-certificates.crt \
+  && printf 'default:x:1000:1000:default:/data:/bin/sh\n' > /rootfs/etc/passwd \
+  && printf 'default:x:1000:\n' > /rootfs/etc/group \
+  && chmod 1777 /rootfs/tmp \
+  && chown 1000:1000 /rootfs/data /rootfs/var/lib/unbound \
+  && chmod 0700 /rootfs/var/lib/unbound
+COPY configs/config.default.yaml /rootfs/etc/postfix-tlspol/config.yaml
+COPY deployments/unbound.conf deployments/trusted-key.initial /rootfs/etc/unbound/
+COPY --chmod=0755 deployments/entrypoint.sh /rootfs/entrypoint.sh
+RUN sed -i -e 's/127\.0\.0\.1:8642/0.0.0.0:8642/' \
+  -e 's/#address:/address:/' -e 's/127\.0\.0\.53:53/127.0.0.1:8053/' \
+  -e 's!: /var/lib/postfix-tlspol/!: !' /rootfs/etc/postfix-tlspol/config.yaml \
+  && chmod 0444 /rootfs/etc/unbound/trusted-key.initial \
+  && chmod 0644 /rootfs/etc/postfix-tlspol/config.yaml
 
-# Create data dir
-RUN mkdir -p /data \
-  && chown -R default:default /data
-
-# Setup postfix-tlspol
-RUN sed -i -e "s/127\.0\.0\.1:8642/0\.0\.0\.0:8642/" \
-  -e "s/#address:/address:/" \
-  -e "s/127\.0\.0\.53:53/127\.0\.0\.1:8053/" \
-  -e "s!: /var/lib/postfix-tlspol/!: !" \
-  /etc/postfix-tlspol/config.yaml \
-  && chown -R root:root /etc/postfix-tlspol \
-  && chmod 0644 /etc/postfix-tlspol/config.yaml
-
-# Setup unbound
-RUN <<EOR
-  cp /usr/share/dnssec-root/trusted-key.key /etc/unbound/trusted-key.initial
-  mkdir -p /var/lib/unbound
-  cp /usr/share/dnssec-root/trusted-key.key /var/lib/unbound/trusted-key.key
-  cat <<EOF > /etc/unbound/unbound.conf
-server:
-  username: ""
-  chroot: ""
-  do-daemonize: no
-  use-syslog: no
-  verbosity: 1
-  logfile: ""
-  log-servfail: yes
-  ede: yes
-  interface: 127.0.0.1
-  port: 8053
-  do-not-query-localhost: yes
-  do-ip4: yes
-  prefer-ip4: yes
-  do-ip6: yes
-  prefer-ip6: no
-  do-udp: yes
-  do-tcp: yes
-  udp-connect: yes
-  max-udp-size: 1232
-  edns-buffer-size: 1232
-  auto-trust-anchor-file: /var/lib/unbound/trusted-key.key
-  msg-cache-size: 16m
-  rrset-cache-size: 32m
-  cache-min-ttl: 10
-  cache-max-ttl: 240
-  cache-max-negative-ttl: 240
-  # Preserve authoritative reply TTLs while the resolver cache still expires at cache-max-ttl.
-  serve-original-ttl: yes
-  serve-expired: no
-  prefetch-key: yes
-  prefetch: yes
-  hide-identity: yes
-  hide-version: yes
-  hide-trustanchor: yes
-  target-fetch-policy: "3 2 1 0 0"
-  harden-glue: yes
-  harden-dnssec-stripped: yes
-  harden-algo-downgrade: no
-  harden-below-nxdomain: yes
-  harden-referral-path: no
-  harden-large-queries: no
-  harden-short-bufsize: yes
-  harden-unverified-glue: no
-  harden-unknown-additional: no
-  aggressive-nsec: yes
-  val-clean-additional: yes
-  val-permissive-mode: no
-  unknown-server-time-limit: 376
-  jostle-timeout: 200
-  discard-timeout: 1900
-  so-reuseport: yes
-  num-threads: 2
-  qname-minimisation: yes
-  minimal-responses: yes
-  infra-cache-min-rtt: 50
-  infra-keep-probing: yes
-  module-config: "validator iterator"
-remote-control:
-  control-enable: no
-EOF
-  chown -R root:root /etc/unbound
-  chmod 0444 /etc/unbound/trusted-key.initial
-  chown -R default:default /var/lib/unbound
-  chmod 0700 /var/lib/unbound
-  chmod 0600 /var/lib/unbound/trusted-key.key
-  /usr/sbin/unbound-checkconf /etc/unbound/unbound.conf
-EOR
-
-# Setup entrypoint
-RUN <<EOR
-  cat <<EOF > /entrypoint.sh
-#!/bin/sh
-set -eu
-unbound_pid=""
-tlspol_pid=""
-
-stop_children() {
-	for pid in "\$tlspol_pid" "\$unbound_pid"; do
-		if [ -n "\$pid" ]; then
-			kill -TERM "\$pid" 2>/dev/null || true
-		fi
-	done
-	for pid in "\$tlspol_pid" "\$unbound_pid"; do
-		if [ -n "\$pid" ]; then
-			wait "\$pid" 2>/dev/null || true
-		fi
-	done
-}
-
-# shellcheck disable=SC2329 # Invoked by the signal trap below.
-shutdown() {
-	trap - TERM INT QUIT
-	stop_children
-	exit 0
-}
-
-# shellcheck disable=SC2329 # Invoked by the signal trap below.
-reload() {
-	if [ -n "\$tlspol_pid" ]; then
-		kill -HUP "\$tlspol_pid" 2>/dev/null || true
-	fi
-}
-
-trap shutdown TERM INT QUIT
-trap reload HUP
-
-# Upgrade from old container with persistent config.yaml
-if [ -e /data/config.yaml ]; then
-	mv /data/config.yaml /data/config.yaml.bak
-	echo "WARNING: /data/config.yaml is deprecated and removed. See /etc/postfix-tlspol/config.yaml (which will be overridden on each update as it is maintained by the container)"
-fi
-
-mkdir -p /var/lib/unbound
-chmod 0700 /var/lib/unbound
-if [ ! -s /var/lib/unbound/trusted-key.key ]; then
-	cp /etc/unbound/trusted-key.initial /var/lib/unbound/trusted-key.key
-fi
-chmod 0600 /var/lib/unbound/trusted-key.key
-
-/usr/sbin/unbound -d -c /etc/unbound/unbound.conf &
-unbound_pid="\$!"
-ready=0
-for _ in \$(seq 1 30); do
-  if nslookup -type=SOA . 127.0.0.1:8053 >/dev/null 2>&1; then
-    ready=1
-    break
-	fi
-	if ! kill -0 "\$unbound_pid" 2>/dev/null; then
-		status=1
-		if wait "\$unbound_pid"; then
-			status=1
-		else
-			status="\$?"
-		fi
-		echo "ERROR: Unbound exited before becoming ready (status \$status)." >&2
-		exit "\$status"
-	fi
-  sleep 1
-done
-if [ "\$ready" -ne 1 ]; then
-  echo "ERROR: Unbound started but recursive DNS did not become ready. Check container outbound DNS access." >&2
-  kill "\$unbound_pid" 2>/dev/null || true
-  wait "\$unbound_pid" 2>/dev/null || true
-  exit 1
-fi
-cd /data
-/usr/bin/postfix-tlspol -config /etc/postfix-tlspol/config.yaml &
-tlspol_pid="\$!"
-
-while kill -0 "\$unbound_pid" 2>/dev/null && kill -0 "\$tlspol_pid" 2>/dev/null; do
-	sleep 1 &
-	wait "\$!" || true
-done
-
-if ! kill -0 "\$unbound_pid" 2>/dev/null; then
-	failed_name="Unbound"
-	failed_pid="\$unbound_pid"
-else
-	failed_name="postfix-tlspol"
-	failed_pid="\$tlspol_pid"
-fi
-status=1
-if wait "\$failed_pid"; then
-	status=1
-else
-	status="\$?"
-fi
-echo "ERROR: \$failed_name exited unexpectedly (status \$status)." >&2
-stop_children
-exit "\$status"
-EOF
-  chmod +x /entrypoint.sh
-EOR
-
-# Squash layers
 FROM scratch
-COPY --from=workspace / /
-
+COPY --from=runtime-files /rootfs/ /
+COPY --from=go-build /out/ /
+COPY --from=unbound-build /out/ /
+COPY --from=dependency-sbom /dependencies.cdx.json /usr/share/postfix-tlspol/dependencies.cdx.json
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 USER default
-
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD nslookup -type=SOA . 127.0.0.1:8053 >/dev/null 2>&1 \
-  && wget -q -T 3 -O /dev/null http://127.0.0.1:8642/metrics \
-  || exit 1
-
+  && wget -q -T 3 -O /dev/null http://127.0.0.1:8642/metrics || exit 1
 ENTRYPOINT ["/entrypoint.sh"]
-
 EXPOSE 8642

@@ -1,8 +1,15 @@
-.github
+.github/*
+!.github/scripts
+.github/scripts/*
+!.github/scripts/dependencies.py
 .git
-deployments
+.agents
+.aws
+.codex
 init
 configs/config.yaml
 build
 /target
+.worktrees
+.postfix-tlspol-build.lock
 *.md
