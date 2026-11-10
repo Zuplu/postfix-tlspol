@@ -112,6 +112,7 @@ jobs:
     uses: ./.github/workflows/go-test.yaml
     with:
       source_ref: ${{ needs.metadata.outputs.commit }}
+      prepared: ${{ inputs.prepared || false }}
 
   build:
     needs: [metadata, test]

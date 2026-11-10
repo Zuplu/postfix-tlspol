@@ -21,6 +21,9 @@ on:
       source_ref:
         type: string
         default: ''
+      prepared:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,6 +40,14 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: inputs.prepared
+        with:
+          name: release-source
+          path: ${{ runner.temp }}/release/
+      - name: Apply the prepared release version
+        if: inputs.prepared
+        run: python3 .github/scripts/release.py apply "$RUNNER_TEMP/release/prepared-release.json"
       - name: Install the checksum-verified pinned Go toolchain
         run: |
           python3 .github/scripts/dependencies.py check all

@@ -17,6 +17,15 @@ import (
 )
 
 func init() {
+	version, err := os.ReadFile("../VERSION")
+	if err != nil {
+		panic(fmt.Errorf("read project version for tests: %w", err))
+	}
+	Version = strings.TrimPrefix(strings.TrimSpace(string(version)), "v")
+	if Version == "" {
+		panic("project version for tests is empty")
+	}
+
 	address := "8.8.8.8:53"
 	config = Config{
 		Server: ServerConfig{},

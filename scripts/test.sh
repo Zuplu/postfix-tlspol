@@ -24,7 +24,7 @@ fi
 export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
 
 set +e
-go test -v -count=1 -tags netgo ./...
+go test -v -count=1 -tags netgo,osusergo ./...
 rc=$?
 set -e
 
