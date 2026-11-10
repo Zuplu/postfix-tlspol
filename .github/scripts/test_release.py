@@ -241,7 +241,7 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "VERSION"):
             release.docker_metadata(self.root, "1.15.0")
 
-    def test_platform_matrix_includes_riscv_only_when_available(self):
+    def test_platform_matrix_requires_every_architecture(self):
         manifest = {"manifests": [
             {"platform": {"os": "linux", "architecture": arch, "variant": variant}}
             for arch, variant in (
@@ -249,7 +249,8 @@ class ReleaseTests(unittest.TestCase):
                 ("386", None), ("ppc64le", None), ("s390x", None),
             )
         ]}
-        self.assertEqual(len(release.docker_platforms(manifest)["include"]), 9)
+        with self.assertRaisesRegex(ValueError, "linux/riscv64"):
+            release.docker_platforms(manifest)
         manifest["manifests"].append({"platform": {"os": "linux", "architecture": "riscv64"}})
         selected = release.docker_platforms(manifest)["include"]
         self.assertEqual(len(selected), 10)
@@ -257,6 +258,19 @@ class ReleaseTests(unittest.TestCase):
         manifest["manifests"].pop(0)
         with self.assertRaisesRegex(ValueError, "required platform"):
             release.docker_platforms(manifest)
+
+    def test_release_manifest_requires_unique_cpu_variants(self):
+        descriptors = []
+        for target in release.PLATFORMS:
+            parts = target.split("/")
+            platform = {"os": parts[0], "architecture": parts[1]}
+            if len(parts) == 3:
+                platform["variant"] = parts[2]
+            descriptors.append({"platform": platform})
+        release.validate_manifest({"manifests": descriptors})
+        descriptors[2]["platform"].pop("variant")
+        with self.assertRaisesRegex(ValueError, "every required platform"):
+            release.validate_manifest({"manifests": descriptors})
 
 
 if __name__ == "__main__":

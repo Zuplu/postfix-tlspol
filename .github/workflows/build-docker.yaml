@@ -4,6 +4,7 @@ name: Build Docker images
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -11,6 +12,10 @@ on:
         description: Existing release tag to rebuild, such as v1.15.0
         type: string
         required: true
+      source_ref:
+        description: Optional source revision for a non-publishing validation build
+        type: string
+        default: ''
       publish:
         description: Push images and the multi-platform manifest to Docker Hub
         type: boolean
@@ -43,16 +48,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: docker-${{ github.repository }}
+  group: docker-${{ github.repository }}-${{ inputs.source_ref || inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
   REGISTRY_IMAGE: zuplu/postfix-tlspol
+  DOCKER_BUILD_SUMMARY: 'false'
+  DOCKER_BUILD_RECORD_UPLOAD: 'false'
 
 jobs:
   metadata:
     if: github.server_url == 'https://github.com' && github.repository == 'Zuplu/postfix-tlspol'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       commit: ${{ steps.metadata.outputs.commit }}
@@ -73,7 +80,9 @@ jobs:
         if: inputs.prepared
         run: python3 .github/scripts/release.py apply "$RUNNER_TEMP/release/prepared-release.json"
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
-      - name: Select platforms present in the pinned Go image
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      - name: Require every release platform in the pinned runtime base
         id: platforms
         run: |
           matrix="$(python3 .github/scripts/release.py docker-platforms)"
@@ -83,10 +92,13 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version || inputs.tag || github.ref_name }}
           PREPARED: ${{ inputs.prepared }}
-          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+          PUBLISH: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || inputs.publish }}
         run: |
+          if [ "$GITHUB_REF" = refs/heads/main ] && [ "$PREPARED" != true ] && [ "$PUBLISH" != true ]; then
+            RELEASE_VERSION="$(cat VERSION)"
+          fi
           python3 .github/scripts/release.py docker-metadata "$RELEASE_VERSION" > "$RUNNER_TEMP/docker-metadata.json"
-          if [ "$PREPARED" != true ]; then
+          if [ "$PREPARED" != true ] && [ "$PUBLISH" = true ]; then
             tag="v${RELEASE_VERSION#v}"
             test "$(git rev-parse "refs/tags/$tag^{commit}")" = "$(git rev-parse HEAD)"
           fi
@@ -103,10 +115,16 @@ jobs:
 
   build:
     needs: [metadata, test]
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    timeout-minutes: 120
     strategy:
       fail-fast: false
+      max-parallel: 5
       matrix: ${{ fromJSON(needs.metadata.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -126,13 +144,59 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: printf 'PLATFORM_ID=%s\n' "${PLATFORM//\//-}" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+        if: ${{ !startsWith(matrix.platform, 'linux/amd64') && matrix.platform != 'linux/386' && matrix.platform != 'linux/arm64' }}
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm,arm64,ppc64le,riscv64,s390x
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         if: needs.metadata.outputs.publish == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build the selected platform
+      - name: Cache the Go artifact independently
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: deployments/Dockerfile
+          target: go-artifact
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ needs.metadata.outputs.version }}
+          outputs: type=local,dest=${{ runner.temp }}/go-artifact
+          cache-from: type=gha,scope=go-${{ env.PLATFORM_ID }}-${{ hashFiles('deployments/dependencies/go.json', 'go.mod', 'go.sum') }}
+          cache-to: type=gha,mode=max,scope=go-${{ env.PLATFORM_ID }}-${{ hashFiles('deployments/dependencies/go.json', 'go.mod', 'go.sum') }}
+      - name: Package the standalone application
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/binaries"
+          cp LICENSE "$RUNNER_TEMP/go-artifact/"
+          name="postfix-tlspol-v$RELEASE_VERSION-$PLATFORM_ID.tar.gz"
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+            -C "$RUNNER_TEMP/go-artifact" -czf "$RUNNER_TEMP/binaries/$name" postfix-tlspol LICENSE
+          cd "$RUNNER_TEMP/binaries"
+          sha256sum "$name" > "$name.sha256"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: binary-${{ env.PLATFORM_ID }}
+          path: ${{ runner.temp }}/binaries/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: true
+      - name: Cache the Unbound artifact independently
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: deployments/Dockerfile
+          target: unbound-build
+          platforms: ${{ matrix.platform }}
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=unbound-${{ env.PLATFORM_ID }}-${{ hashFiles('deployments/dependencies/unbound.json', 'deployments/dependencies/openssl.json') }}
+          cache-to: type=gha,mode=max,scope=unbound-${{ env.PLATFORM_ID }}-${{ hashFiles('deployments/dependencies/unbound.json', 'deployments/dependencies/openssl.json') }}
+      - name: Assemble the selected platform
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         env:
@@ -141,13 +205,15 @@ jobs:
         with:
           platforms: ${{ matrix.platform }}
           build-args: |
-            GITHUB_ACTIONS=1
             VERSION=${{ needs.metadata.outputs.version }}
           context: .
           file: deployments/Dockerfile
           push: ${{ needs.metadata.outputs.publish == 'true' }}
-          sbom: true
-          provenance: true
+          sbom: generator=docker/buildkit-syft-scanner@sha256:873a7458c3c8ac8e32c7b796c10e1600b07b963d2aa000a72a2d97aaaa2d6315
+          provenance: mode=max
+          cache-from: |
+            type=gha,scope=go-${{ env.PLATFORM_ID }}-${{ hashFiles('deployments/dependencies/go.json', 'go.mod', 'go.sum') }}
+            type=gha,scope=unbound-${{ env.PLATFORM_ID }}-${{ hashFiles('deployments/dependencies/unbound.json', 'deployments/dependencies/openssl.json') }}
           labels: |
             org.opencontainers.image.title=postfix-tlspol
             org.opencontainers.image.source=https://github.com/Zuplu/postfix-tlspol
@@ -155,14 +221,35 @@ jobs:
             org.opencontainers.image.revision=${{ needs.metadata.outputs.commit }}
             org.opencontainers.image.licenses=Apache-2.0
           outputs: ${{ needs.metadata.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY_IMAGE) || 'type=cacheonly' }}
+      - name: Load the baseline image for offline runtime checks
+        if: matrix.platform == 'linux/amd64'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: deployments/Dockerfile
+          platforms: linux/amd64
+          build-args: VERSION=${{ needs.metadata.outputs.version }}
+          load: true
+          tags: postfix-tlspol:check
+      - name: Check startup, DNS, application queries and shutdown offline
+        if: matrix.platform == 'linux/amd64'
+        run: python3 .github/scripts/test-container.py postfix-tlspol:check
       - name: Export digest
         if: needs.metadata.outputs.publish == 'true'
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           mkdir -p "$RUNNER_TEMP/digests"
-          touch "$RUNNER_TEMP/digests/${IMAGE_DIGEST#sha256:}"
+          jq -n --arg platform "$PLATFORM" --arg digest "$IMAGE_DIGEST" \
+            '{platform: $platform, digest: $digest}' > "$RUNNER_TEMP/digests/$PLATFORM_ID.json"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        if: needs.metadata.outputs.publish == 'true'
+        with:
+          subject-name: docker.io/${{ env.REGISTRY_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: needs.metadata.outputs.publish == 'true'
         with:
@@ -171,11 +258,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+          overwrite: true
 
   bundle:
     if: needs.metadata.outputs.publish == 'true'
     needs: [metadata, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    concurrency:
+      group: docker-publication-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -195,6 +286,8 @@ jobs:
           pattern: digest-*
           merge-multiple: true
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
+        with:
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -208,14 +301,18 @@ jobs:
           mapfile -t tags < <(jq -r '.tags[]' "$RUNNER_TEMP/docker-metadata.json")
           args=()
           for tag in "${tags[@]}"; do args+=(-t "$tag"); done
-          for file in "$RUNNER_TEMP"/digests/*; do
-            digest="${file##*/}"
-            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-            args+=("$REGISTRY_IMAGE@sha256:$digest")
-          done
-          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/manifest.json" "${args[@]}"
+          python3 .github/scripts/release.py docker-descriptors "$RUNNER_TEMP/digests" "$RUNNER_TEMP/descriptors"
+          for file in "$RUNNER_TEMP"/descriptors/*.json; do args+=(-f "$file"); done
+          python3 .github/scripts/release.py registry-retry docker buildx imagetools create \
+            --dry-run "${args[@]}" > "$RUNNER_TEMP/candidate-manifest.json"
+          python3 .github/scripts/release.py docker-validate "$RUNNER_TEMP/candidate-manifest.json"
+          python3 .github/scripts/release.py registry-retry docker buildx imagetools create \
+            --metadata-file "$RUNNER_TEMP/manifest.json" "${args[@]}"
           digest="$(jq -er '."containerimage.descriptor".digest' "$RUNNER_TEMP/manifest.json")"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          python3 .github/scripts/release.py registry-retry docker buildx imagetools inspect \
+            --raw "$REGISTRY_IMAGE@$digest" > "$RUNNER_TEMP/published-manifest.json"
+          python3 .github/scripts/release.py docker-validate "$RUNNER_TEMP/published-manifest.json"
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:

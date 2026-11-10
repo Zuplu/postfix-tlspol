@@ -9,8 +9,10 @@ import json
 import os
 from pathlib import Path
 import re
+import random
 import subprocess
 import sys
+import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -25,6 +27,108 @@ SEMVER = re.compile(
     r"(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?"
 )
 SHA = re.compile(r"[0-9a-f]{40}")
+PLATFORMS = (
+    "linux/amd64", "linux/amd64/v2", "linux/amd64/v3", "linux/386",
+    "linux/arm/v6", "linux/arm/v7", "linux/arm64", "linux/ppc64le",
+    "linux/riscv64", "linux/s390x",
+)
+
+
+def registry_retry(command):
+    """Retry only transient registry operations, never a compiler or test command."""
+    require(command[:3] == ["docker", "buildx", "imagetools"], "Only registry imagetools operations can be retried")
+    for attempt in range(4):
+        try:
+            result = subprocess.run(command, text=True, capture_output=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            result = subprocess.CompletedProcess(command, 1, "", "i/o timeout after 180 seconds")
+        if result.returncode == 0:
+            return result.stdout
+        failure = result.stderr + result.stdout
+        transient = re.search(r"429|\b50[0234]\b|connection (?:reset|refused)|i/o timeout|TLS handshake timeout|temporary failure|no such host|unexpected EOF", failure, re.I)
+        permanent = re.search(r"unauthorized|forbidden|denied|\b40[13]\b|digest mismatch|invalid signature", failure, re.I)
+        if attempt == 3 or not transient or permanent:
+            raise RuntimeError(f"Registry operation failed: {' '.join(command)}\n{failure}")
+        delay = 2 ** attempt + random.uniform(0, 1)
+        print(f"Transient registry error; retry {attempt + 1}/3 in {delay:.1f}s: {failure}", file=sys.stderr)
+        time.sleep(delay)
+
+
+def platform_name(platform):
+    architecture = platform.get("architecture")
+    variant = platform.get("variant")
+    if (architecture == "amd64" and variant == "v1") or architecture == "arm64":
+        variant = None
+    return "/".join(filter(None, (platform.get("os"), architecture, variant)))
+
+
+def validate_manifest(manifest):
+    platforms = [platform_name(item.get("platform", {})) for item in manifest["manifests"]
+                 if item.get("platform", {}).get("os") != "unknown"]
+    require(len(platforms) == len(PLATFORMS) and set(platforms) == set(PLATFORMS), "Manifest must contain every required platform exactly once, including AMD64 variants")
+
+
+def docker_descriptors(directory, output_directory):
+    records = [json.loads(path.read_text()) for path in directory.glob("*.json")]
+    require(len(records) == len(PLATFORMS) and {r["platform"] for r in records} == set(PLATFORMS), "Missing or duplicate platform digest artifacts; refusing a partial release")
+    by_platform = {record["platform"]: record["digest"] for record in records}
+    descriptors = []
+    for target in PLATFORMS:  # v1 first for clients which ignore AMD64 variants.
+        digest_value = by_platform[target]
+        require(re.fullmatch(r"sha256:[0-9a-f]{64}", digest_value), "Invalid platform image digest")
+        index = json.loads(registry_retry(["docker", "buildx", "imagetools", "inspect", "--raw", IMAGE + "@" + digest_value]))
+        children = index.get("manifests", [])
+        images = [item for item in children if item.get("platform", {}).get("os") == "linux"]
+        require(len(images) == 1, f"{target}: expected one image plus its attestations")
+        image = images[0]
+        parts = target.split("/")
+        require(image["platform"]["architecture"] == parts[1], f"{target}: image architecture mismatch")
+        actual = platform_name(image["platform"])
+        require(actual == target or (parts[1] == "amd64" and actual == "linux/amd64"), f"{target}: unexpected image variant {actual}")
+        image["platform"] = {"os": "linux", "architecture": parts[1]}
+        if len(parts) == 3:
+            image["platform"]["variant"] = parts[2]
+        descriptors.append(image)
+        for child in children:
+            if child is image:
+                continue
+            annotations = child.get("annotations", {})
+            require(annotations.get("vnd.docker.reference.type") == "attestation-manifest" and annotations.get("vnd.docker.reference.digest") == image["digest"], f"{target}: unrecognized attestation descriptor")
+            descriptors.append(child)
+    validate_manifest({"manifests": descriptors})
+    output_directory.mkdir(exist_ok=False)
+    for number, descriptor in enumerate(descriptors):
+        (output_directory / f"{number:03d}.json").write_text(json.dumps(descriptor) + "\n")
+
+
+def release_assets(plan, api, directory):
+    """Attach the already-built Go binaries before making the draft public."""
+    names = [f"postfix-tlspol-v{plan['version']}-{platform.replace('/', '-')}.tar.gz" for platform in PLATFORMS]
+    expected = set(names + [name + ".sha256" for name in names])
+    files = {path.name: path for path in directory.iterdir()}
+    require(set(files) == expected and all(path.is_file() and not path.is_symlink() for path in files.values()), "Missing or unexpected standalone binary assets")
+    for name in names:
+        actual = hashlib.sha256(files[name].read_bytes()).hexdigest()
+        require(files[name + ".sha256"].read_text() == f"{actual}  {name}\n", f"Binary checksum mismatch: {name}")
+    release = find_release(api, plan["tag"])
+    require(release is not None, "Release draft is missing")
+    require(tag_commit(api, plan["tag"]) == plan["commit"] and release["target_commitish"] == plan["commit"], "Release assets belong to another commit")
+    for name in sorted(files):
+        # Each attempt re-reads the remote assets: a lost success response must not
+        # cause replacement of a previously uploaded immutable binary.
+        for attempt in range(4):
+            assets = api("GET", f"releases/{release['id']}/assets?per_page=100")
+            existing = [asset for asset in assets if asset["name"] == name]
+            digest_value = "sha256:" + hashlib.sha256(files[name].read_bytes()).hexdigest()
+            if existing:
+                require(len(existing) == 1 and existing[0].get("digest") == digest_value, f"Existing release asset differs: {name}; refusing to overwrite")
+                break
+            result = subprocess.run(["gh", "release", "upload", plan["tag"], str(files[name]), "--repo", REPOSITORY], text=True, capture_output=True)
+            if result.returncode == 0:
+                break
+            transient = re.search(r"429|\b50[0234]\b|timeout|connection reset|unexpected EOF", result.stderr, re.I)
+            require(attempt < 3 and transient, f"Release asset upload failed: {name}: {result.stderr}")
+            time.sleep(2 ** attempt + random.uniform(0, 1))
 
 
 def require(condition, message):
@@ -142,6 +246,8 @@ class GitHub:
         )
         try:
             with urlopen(request, timeout=30) as response:
+                if response.status == 204:
+                    return None
                 return json.load(response)
         except HTTPError as error:
             if missing and error.code == 404:
@@ -167,22 +273,26 @@ def record(plan, api, branch):
             require(content["encoding"] == "base64", "Unexpected release file encoding")
             require(base64.b64decode(content["content"]).decode() == plan["files"][name], "Existing preparation has different contents")
         return head
+    return signed_commit(api, branch, head, plan["files"], f"chore(release): prepare {plan['tag']}")
+
+
+def signed_commit(api, branch, head, files, message):
     response = api("POST", "graphql", {
         "query": "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid signature { isValid } } } }",
         "variables": {"input": {
             "branch": {"repositoryNameWithOwner": REPOSITORY, "branchName": branch},
-            "expectedHeadOid": plan["source_commit"],
-            "message": {"headline": f"chore(release): prepare {plan['tag']}"},
+            "expectedHeadOid": head,
+            "message": {"headline": message},
             "fileChanges": {"additions": [
-                {"path": name, "contents": base64.b64encode(plan["files"][name].encode()).decode()}
-                for name in FILES
+                {"path": name, "contents": base64.b64encode(content.encode()).decode()}
+                for name, content in files.items()
             ]},
         }},
     })
-    require(not response.get("errors"), "Could not record release preparation; main may have advanced")
+    require(not response.get("errors"), "Could not record signed commit; branch may have advanced")
     commit = response.get("data", {}).get("createCommitOnBranch", {}).get("commit", {})
-    require(commit.get("signature", {}).get("isValid"), "Release preparation must have a valid GitHub signature")
-    require(SHA.fullmatch(commit.get("oid", "")), "Invalid preparation commit")
+    require(commit.get("signature", {}).get("isValid"), "Commit must have a valid GitHub signature")
+    require(SHA.fullmatch(commit.get("oid", "")), "Invalid signed commit revision")
     return commit["oid"]
 
 
@@ -266,18 +376,10 @@ def docker_platforms(manifest):
         architecture = platform.get("architecture")
         variant = platform.get("variant") if architecture == "arm" else None
         available.add("/".join(filter(None, ("linux", architecture, variant))))
-    targets = [
-        "linux/amd64", "linux/amd64/v2", "linux/amd64/v3",
-        "linux/arm/v6", "linux/arm/v7", "linux/arm64", "linux/386",
-        "linux/ppc64le", "linux/riscv64", "linux/s390x",
-    ]
     selected = []
-    for target in targets:
+    for target in PLATFORMS:
         base = "linux/amd64" if target.startswith("linux/amd64/") else target
-        if target == "linux/riscv64" and base not in available:
-            print("Pinned Go image has no linux/riscv64 build; omitting RISC-V", file=sys.stderr)
-            continue
-        require(base in available, "Pinned Go image is missing required platform " + target)
+        require(base in available, "Pinned Alpine base is missing required platform " + target + "; update the base digest; a partial release is forbidden")
         selected.append({"platform": target})
     return {"include": selected}
 
@@ -301,9 +403,17 @@ def main():
         subparser.add_argument("plan", type=Path)
         if command == "publish":
             subparser.add_argument("--digest", required=True)
+            subparser.add_argument("--assets", type=Path)
     metadata = commands.add_parser("docker-metadata")
     metadata.add_argument("version")
     commands.add_parser("docker-platforms")
+    descriptors = commands.add_parser("docker-descriptors")
+    descriptors.add_argument("directory", type=Path)
+    descriptors.add_argument("output_directory", type=Path)
+    validation = commands.add_parser("docker-validate")
+    validation.add_argument("manifest", type=Path)
+    retry = commands.add_parser("registry-retry")
+    retry.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command == "prepare":
         plan = prepare(ROOT, args.version, os.environ.get("GIT_CLIFF", "git-cliff"))
@@ -320,10 +430,16 @@ def main():
     elif args.command == "docker-metadata":
         print(json.dumps(docker_metadata(ROOT, args.version)))
     elif args.command == "docker-platforms":
-        image = (ROOT / "deployments/Dockerfile").read_text().splitlines()[0].split()[1]
-        require(re.fullmatch(r"golang:[0-9A-Za-z.-]+@sha256:[0-9a-f]{64}", image), "Expected a pinned official Go base image")
-        manifest = json.loads(subprocess.check_output(["docker", "buildx", "imagetools", "inspect", "--raw", image], text=True))
+        image = (ROOT / "deployments/Dockerfile").read_text().splitlines()[0].removeprefix("ARG ALPINE_IMAGE=")
+        require(re.fullmatch(r"alpine:[0-9.]+@sha256:[0-9a-f]{64}", image), "Expected a digest-pinned Alpine base image")
+        manifest = json.loads(registry_retry(["docker", "buildx", "imagetools", "inspect", "--raw", image]))
         print(json.dumps(docker_platforms(manifest)))
+    elif args.command == "docker-descriptors":
+        docker_descriptors(args.directory, args.output_directory)
+    elif args.command == "docker-validate":
+        validate_manifest(json.loads(args.manifest.read_text()))
+    elif args.command == "registry-retry":
+        print(registry_retry(args.args), end="")
     else:
         plan = json.loads(args.plan.read_text())
         validate(plan)
@@ -332,7 +448,10 @@ def main():
         elif args.command == "draft":
             print(draft(plan, GitHub())["html_url"])
         else:
-            print(publish(plan, GitHub(), args.digest)["html_url"])
+            api = GitHub()
+            if args.assets:
+                release_assets(plan, api, args.assets)
+            print(publish(plan, api, args.digest)["html_url"])
 
 
 if __name__ == "__main__":

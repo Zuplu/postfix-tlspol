@@ -29,18 +29,18 @@ jobs:
 
   platforms:
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
-      - name: Validate available release platforms before changing main or creating a tag
+      - name: Require all release platforms before changing main or creating a tag
         run: python3 .github/scripts/release.py docker-platforms
 
   prepare:
     needs: [check, platforms]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     outputs:
@@ -108,9 +108,12 @@ jobs:
   publish:
     if: inputs.publish
     needs: [prepare, docker]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -120,10 +123,18 @@ jobs:
         with:
           name: release-source
           path: ${{ runner.temp }}/release/
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: binary-*
+          path: ${{ runner.temp }}/binaries/
+          merge-multiple: true
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ${{ runner.temp }}/binaries/*.tar.gz
       - name: Publish the release after Docker succeeds
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           python3 .github/scripts/release.py publish \
-            "$RUNNER_TEMP/release/prepared-release.json" --digest "$IMAGE_DIGEST"
+            "$RUNNER_TEMP/release/prepared-release.json" --digest "$IMAGE_DIGEST" --assets "$RUNNER_TEMP/binaries"

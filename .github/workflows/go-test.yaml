@@ -16,6 +16,9 @@ on:
       - scripts/**
       - deployments/**
   pull_request:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
   workflow_call:
     inputs:
       source_ref:
@@ -27,7 +30,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       TLSPOL_LIVE_TESTS: '0'
@@ -37,10 +41,13 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-          cache: false
+      - name: Install the checksum-verified pinned Go toolchain
+        run: |
+          python3 .github/scripts/dependencies.py check all
+          python3 .github/scripts/dependencies.py fetch go --output "$RUNNER_TEMP/go.tar.gz"
+          tar -xzf "$RUNNER_TEMP/go.tar.gz" -C "$RUNNER_TEMP"
+          printf '%s/go/bin\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          printf 'GOTOOLCHAIN=local\n' >> "$GITHUB_ENV"
       - name: Check formatting and vendored dependencies
         run: |
           test -z "$(gofmt -l main.go internal)"
@@ -50,9 +57,10 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard -- vendor)"
       - name: Check Go packages and race safety
         run: |
-          go vet -mod=vendor -tags netgo ./...
-          go test -mod=vendor -race -count=1 -tags netgo ./...
-          CGO_ENABLED=0 go build -mod=vendor -tags netgo -o "$RUNNER_TEMP/postfix-tlspol" .
+          go vet -mod=vendor -tags netgo,osusergo ./...
+          go test -mod=vendor -race -count=1 -tags netgo,osusergo ./...
+          PREFIX="$RUNNER_TEMP/native" VERSION="$(cat VERSION)" NOOPT=1 NOTEST=1 scripts/build.sh build-only
+          "$RUNNER_TEMP/native/bin/postfix-tlspol" -version
       - uses: DragonWork/install-action@016fbb7b16bf02f327f8e0a9ed25398118eee43d # v1.2.2
       - uses: DragonWork/install-action/tools/git-cliff@7b03d4b6428472552f85b3df46fa8c175b8337fa # git-cliff/v2.14.2
       - name: Check release preparation and workflows
@@ -60,3 +68,36 @@ jobs:
           python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
           GOBIN="$RUNNER_TEMP/workflow-tools" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$RUNNER_TEMP/workflow-tools/actionlint"
+
+  dependency-updates:
+    if: github.repository == 'Zuplu/postfix-tlspol' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.workflow == 'Go and release checks'))
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    concurrency:
+      group: docker-dependency-updates-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Prepare verified dependency updates and signed pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/dependencies.py update all --pull-request
+          git diff -- deployments/dependencies > "$RUNNER_TEMP/dependency-update.patch"
+          if [ -s "$RUNNER_TEMP/dependency-update.patch" ]; then
+            printf 'Verified build(docker) update PRs prepared with signed commits and build checks.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Pinned dependencies are current.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: dependency-update
+          path: ${{ runner.temp }}/dependency-update.patch
+          retention-days: 14
