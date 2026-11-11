@@ -68,7 +68,7 @@ docker run -d \
 
 Jump to *Postfix configuration* to integrate the socketmap server.
 
-To update the image, stop and remove the container, and run the `docker run ...` command again.
+To update, run `docker pull zuplu/postfix-tlspol:latest`, then stop and remove the container and repeat the `docker run ...` command. Reuse the same named volumes to preserve the cache, instance identifier and DNSSEC trust anchors.
 
 To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
 
@@ -177,7 +177,7 @@ scripts/build.sh
 
 # Configuration
 
-_*Warning:* Configuring is only available for the standalone/systemd installation. The Docker version is autoconfigured._
+The YAML configuration below is for standalone/systemd installations. The Docker image supplies its own configuration; use the documented environment variables for container options.
 
 Configuration example for `/etc/postfix-tlspol/config.yaml`:
 ```yaml
