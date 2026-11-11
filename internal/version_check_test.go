@@ -8,7 +8,6 @@ package tlspol
 import (
 	"bytes"
 	"context"
-	"encoding/base32"
 	"io"
 	"net/http"
 	"os"
@@ -55,6 +54,14 @@ func TestInstanceIDPersistence(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("identity permissions: %v, %v", info, err)
 	}
+	// Existing UUIDv7 labels must survive changes to the generator unchanged.
+	const existingID = "af7sfytzwb6mhgge3qgaybzzr4"
+	if err := os.WriteFile(path, []byte(existingID+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := loadInstanceID(path); err != nil || id != existingID {
+		t.Fatalf("existing identity changed: %q, %v", id, err)
+	}
 	link := path + ".link"
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
@@ -65,21 +72,9 @@ func TestInstanceIDPersistence(t *testing.T) {
 }
 
 func TestInstanceIDIsUUIDv7(t *testing.T) {
-	now := time.UnixMilli(1794440000123)
-	id, err := newInstanceID(now)
-	if err != nil || !validInstanceID(id) {
-		t.Fatalf("invalid UUIDv7 encoding: %v", err)
-	}
-	data, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(id))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var milliseconds int64
-	for _, b := range data[:6] {
-		milliseconds = milliseconds<<8 | int64(b)
-	}
-	if milliseconds != now.UnixMilli() {
-		t.Fatal("UUIDv7 timestamp differs")
+	id := newInstanceID()
+	if !validInstanceID(id) {
+		t.Fatalf("invalid UUIDv7 encoding: %q", id)
 	}
 	if validInstanceID(strings.ToUpper(id)) || validInstanceID(id+"=") {
 		t.Fatal("accepted non-canonical encoding")
@@ -87,10 +82,7 @@ func TestInstanceIDIsUUIDv7(t *testing.T) {
 }
 
 func TestVersionCheckRequestPrivacy(t *testing.T) {
-	id, err := newInstanceID(time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
+	id := newInstanceID()
 	client := &http.Client{Transport: versionCheckTransport(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodPost || request.URL.RawQuery != "" || request.Header.Get("Content-Type") != "application/dns-message" {
 			t.Fatal("version check did not use a DNS wire-format POST")
@@ -129,7 +121,7 @@ func TestVersionCheckRequestPrivacy(t *testing.T) {
 }
 
 func TestVersionCheckRetryBoundAndCancellation(t *testing.T) {
-	id, _ := newInstanceID(time.Now())
+	id := newInstanceID()
 	attempts := 0
 	client := &http.Client{Transport: versionCheckTransport(func(request *http.Request) (*http.Response, error) {
 		attempts++

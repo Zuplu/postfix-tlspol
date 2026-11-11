@@ -8,7 +8,6 @@ package tlspol
 import (
 	"bytes"
 	"context"
-	cryptorand "crypto/rand"
 	"encoding/base32"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"uuid"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sys/unix"
@@ -41,21 +41,10 @@ var versionCheckResolvers = [...]string{
 	"https://dns.quad9.net/dns-query",
 }
 
-// UUIDv7, RFC 9562: a millisecond timestamp followed by 74 random bits.
-// It contains no hardware address, hostname, mail domain, or IP address.
-func newInstanceID(now time.Time) (string, error) {
-	var id [16]byte
-	if _, err := cryptorand.Read(id[:]); err != nil {
-		return "", err
-	}
-	milliseconds := uint64(now.UnixMilli())
-	for i := 5; i >= 0; i-- {
-		id[i] = byte(milliseconds)
-		milliseconds >>= 8
-	}
-	id[6] = id[6]&0x0f | 0x70
-	id[8] = id[8]&0x3f | 0x80
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(id[:])), nil
+// Encode UUIDv7 as a lowercase, unpadded DNS label.
+func newInstanceID() string {
+	id := uuid.NewV7()
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(id[:]))
 }
 
 func validInstanceID(value string) bool {
@@ -96,10 +85,7 @@ func loadInstanceID(path string) (string, error) {
 	if id, err := readInstanceID(path); !errors.Is(err, os.ErrNotExist) {
 		return id, err
 	}
-	id, err := newInstanceID(time.Now())
-	if err != nil {
-		return "", err
-	}
+	id := newInstanceID()
 	file, err := os.CreateTemp(filepath.Dir(path), ".postfix-tlspol-instance-*")
 	if err != nil {
 		return "", err
