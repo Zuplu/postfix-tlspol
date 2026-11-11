@@ -74,6 +74,23 @@ To disable prefetching, pass `-e TLSPOL_PREFETCH=0` to the above command.
 
 The image health check verifies both the local validating resolver and the policy server. The entrypoint supervises both processes and exits if either one fails, allowing the restart policy to recover the complete service.
 
+# Version checks and active installations count
+
+By default, postfix-tlspol checks the latest published stable version at startup and once a day. Each attempt randomly selects Cloudflare, Google or Quad9 and sends a DNS-over-HTTPS TXT query to `tlspol.zuplu.net`. Failed checks get up to three retries, 30 minutes apart. They never interrupt mail policy service, and updates are not installed automatically.
+
+The query contains a randomly generated UUIDv7, stored locally in Base32 form beside the cache as `<cache-file>.instance-id`. This pseudonym identifies an installation without including its hostname, mail domains or IP address. Queries reach Zuplu through the public recursive resolver, so Zuplu receives the resolver's address — not the IP or hostname of your server. EDNS client-subnet forwarding is explicitly disabled. The DoH provider can still see your connection IP; Zuplu receives a pseudonymous identifier that does not encode your server's IP address or hostname.
+
+These statistics help estimate how many postfix-tlspol instances are in active use, understand the project's reach and importance, and support research and continued development.
+
+To disable version checking and participation in the active installations count, set this in your YAML configuration:
+
+```yaml
+server:
+  version-check: false
+```
+
+Alternatively, set `TLSPOL_VERSION_CHECK=0` (for Docker, add `-e TLSPOL_VERSION_CHECK=0`). When disabled, no check is sent and no instance identifier is created.
+
 # Install from source
 
 ## Build a Docker container from source
@@ -92,7 +109,8 @@ Press _d_ for Docker when prompted or select it if a terminal UI appears.
 These requirements only apply if you use the non-Docker variant for installation, i. e. as a systemd service unit.
 
 - Postfix
-- Go 1.27.2 or newer
+- Go 1.27.4 or newer
+- Optional: a C compiler and linker, such as GCC, for PIE builds. Without one, the build warns and falls back to a static executable.
 - DNSSEC-validating DNS server (preferably on localhost)
 
 ### Build and install
@@ -191,8 +209,8 @@ dns:
 
 # Prefetching
 
-Background MTA-STS discovery and refresh are skipped while a fresh `dane` or `dane-only` policy takes precedence. When DANE also needs refreshing, background work checks it first and resumes eligible MTA-STS lookups if DANE is removed. Existing MTA-STS state keeps its original expiry; it is neither deleted nor extended by a skipped refresh. Foreground lookups and explicit diagnostics retain their existing behavior. This avoids maintaining an unused fallback, at the cost of potentially fetching a new STS policy after legitimate DANE removal. DNSSEC alone does not disable MTA-STS prefetching.
+Prefetching is enabled by default and refreshes cached policies shortly before they expire. Fresh DANE policies take priority, so MTA-STS is refreshed only when needed. Temporary refresh failures preserve valid cached policies.
 
-Prefetching is enabled by default, and postfix-tlspol tries to keep its cache fresh. Refresh failures use bounded retries and preserve still-valid branch state. The in-memory cache is capped at 50,000 entries and pruned to 45,000 entries in one batch, favoring useful and frequently accessed policies.
+MTA-STS policies with a `max_age` below five minutes are fetched on demand. Background refresh stops after 14 days without a query for that domain and resumes when it is used again.
 
-MTA-STS policies with an advertised `max_age` below 300 seconds are fetched on demand and are not prefetched. Exactly 300 seconds remains eligible; the cutoff uses the original lifetime, not the time remaining before expiry. DANE refreshes remain independent. All prefetching stops after 14 days without a domain query and resumes when that domain is queried again, including a cache hit. Query access times are persisted; background refreshes and cache inspection do not update them. Existing cache entries without a last-access time are removed at startup, so upgrading starts with a fresh cache.
+To disable prefetching, set `prefetch: false` under `server` in the YAML configuration, or set `TLSPOL_PREFETCH=0`.

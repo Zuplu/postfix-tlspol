@@ -37,6 +37,7 @@ type ServerConfig struct {
 	SocketPermissions os.FileMode `yaml:"socket-permissions"`
 	TlsRpt            bool        `yaml:"tlsrpt"`
 	Prefetch          bool        `yaml:"prefetch"`
+	VersionCheck      bool        `yaml:"version-check"`
 	addressConfigured bool
 }
 
@@ -49,6 +50,7 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	c.LogFormat = defaultConfig.Server.LogFormat
 	c.TlsRpt = false
 	c.Prefetch = defaultConfig.Server.Prefetch
+	c.VersionCheck = defaultConfig.Server.VersionCheck
 	c.CacheFile = defaultConfig.Server.CacheFile
 	type alias ServerConfig
 	if err := unmarshal((*alias)(c)); err != nil {
@@ -58,7 +60,7 @@ func (c *ServerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	if err := unmarshal(&fields); err != nil {
 		return err
 	}
-	warnUnknownConfigKeys(fields, "server", "address", "metrics-address", "cache-file", "log-level", "log-format", "socket-permissions", "tlsrpt", "prefetch")
+	warnUnknownConfigKeys(fields, "server", "address", "metrics-address", "cache-file", "log-level", "log-format", "socket-permissions", "tlsrpt", "prefetch", "version-check")
 	_, c.addressConfigured = fields["address"]
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(strings.ToLower(c.NamedLogLevel))); err != nil {

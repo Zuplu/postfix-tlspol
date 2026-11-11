@@ -34,6 +34,7 @@ remote-control:''')
         path.write_text(text)
         path.chmod(0o644)
         container = docker("run", "-d", "--network=none", "--read-only", "--cap-drop=ALL",
+                           "-e", "TLSPOL_VERSION_CHECK=0",
                            "--security-opt=no-new-privileges", "--pids-limit=256",
                            "--tmpfs", "/data:uid=1000,gid=1000,mode=0700",
                            "--tmpfs", "/var/lib/unbound:uid=1000,gid=1000,mode=0700",

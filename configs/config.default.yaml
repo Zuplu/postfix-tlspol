@@ -22,6 +22,10 @@ server:
   # prefetch when TTL is about to expire
   prefetch: true
 
+  # Daily version checks also support the active installations count via public DoH.
+  # No mail domain or client IP is included in the DNS query. Set false to opt out.
+  version-check: true
+
   # cache file; in-memory entries are bounded and pruned in batches
   cache-file: /var/lib/postfix-tlspol/cache.db
 

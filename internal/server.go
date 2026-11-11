@@ -351,6 +351,7 @@ func StartDaemon(v string, licenseText string) error {
 	if err := readEnv(); err != nil {
 		return err
 	}
+	slog.Info("Star postfix-tlspol on GitHub to support development and wider adoption. Email security improves when we all take part.", "url", "https://github.com/Zuplu/postfix-tlspol")
 	polCache = cache.NewWithSaveHook[*CacheStruct](config.Server.CacheFile, 600*time.Second, flushQueryAccesses)
 	_ = tidyCache()
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
@@ -358,15 +359,20 @@ func StartDaemon(v string, licenseText string) error {
 	defer cancelDaemon()
 	listenForSignals(daemonCtx, cancelDaemon)
 
-	var prefetchWg sync.WaitGroup
-	prefetchWg.Go(func() {
+	var backgroundWg sync.WaitGroup
+	backgroundWg.Go(func() {
 		startPrefetching(daemonCtx)
 	})
+	if config.Server.VersionCheck {
+		backgroundWg.Go(func() {
+			runVersionChecks(daemonCtx, config.Server.CacheFile, Version)
+		})
+	}
 	serverErr := startServer()
 	cancelDaemon()
 	closeActiveConnections()
 	connectionWg.Wait()
-	prefetchWg.Wait()
+	backgroundWg.Wait()
 	_ = tidyCache()
 	cacheErr := polCache.CloseWithError()
 	return errors.Join(serverErr, cacheErr)
@@ -402,6 +408,12 @@ func listenForSignals(ctx context.Context, cancel context.CancelFunc) {
 }
 
 func readEnv() error {
+	if value, exists := os.LookupEnv("TLSPOL_VERSION_CHECK"); exists {
+		if value != "0" && value != "1" {
+			return fmt.Errorf("TLSPOL_VERSION_CHECK must be 0 or 1")
+		}
+		config.Server.VersionCheck = value == "1"
+	}
 	envPrefetch, envExists := os.LookupEnv("TLSPOL_PREFETCH")
 	if envExists {
 		if envPrefetch != "0" && envPrefetch != "1" {
