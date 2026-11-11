@@ -1,3 +1,19 @@
+## What's Changed in v1.16.0 (2026-11-11)
+
+* test(dns): cover shared client regressions by @DragonWork
+* chore(deps): bump docker/login-action from 4.7.0 to 4.8.0 in the github-actions group (#229) by @dependabot[bot] in [#229](https://github.com/Zuplu/postfix-tlspol/pull/229)
+* chore(deps): bump DragonWork/install-action from 1.2.1 to 1.2.2 in the github-actions group (#230) by @dependabot[bot] in [#230](https://github.com/Zuplu/postfix-tlspol/pull/230)
+* build(deps): bump the golang-x group with 2 updates (#231) by @dependabot[bot] in [#231](https://github.com/Zuplu/postfix-tlspol/pull/231)
+* build(deps): update Go to 1.27.4 by @DragonWork
+* build: verify toolchains and harden native artifacts by @DragonWork
+* ci: cache and attest complete multiarch releases by @DragonWork
+* ci: isolate dependency updater permissions by @DragonWork
+* test: use the prepared release version in checks by @DragonWork
+* build: fall back to static when PIE tools are unavailable by @DragonWork
+* feat: add version checks and active installations count by @DragonWork
+
+**Full Changelog**: https://github.com/Zuplu/postfix-tlspol/compare/v1.15.0...v1.16.0
+
 ## What's Changed in v1.15.0 (2026-11-05)
 
 * build(docker): bump golang from `d200d2d` to `fa48812` in /deployments (#226) by @dependabot[bot] in [#226](https://github.com/Zuplu/postfix-tlspol/pull/226)
