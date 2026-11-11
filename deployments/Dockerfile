@@ -34,7 +34,7 @@ COPY --from=go-build /out/usr/bin/postfix-tlspol /postfix-tlspol
 
 # B: native sources do not depend on application files or Go inputs.
 FROM source-tools AS native-sources
-COPY deployments/dependencies/unbound.json deployments/dependencies/openssl.json deployments/dependencies/nlnetlabs.asc /inputs/deployments/dependencies/
+COPY deployments/dependencies/unbound.json deployments/dependencies/openssl.json deployments/dependencies/nlnetlabs.asc deployments/dependencies/openssl.asc /inputs/deployments/dependencies/
 RUN python3 /inputs/.github/scripts/dependencies.py fetch unbound --output /sources/unbound.tar.gz \
   && python3 /inputs/.github/scripts/dependencies.py fetch openssl --output /sources/openssl.tar.gz
 

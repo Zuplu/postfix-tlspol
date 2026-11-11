@@ -87,7 +87,8 @@ def signature(archive, detached, key, fingerprint):
             previous = fields[0]
         require(primary == [fingerprint], "Unrecognized signing key; review the vendored key and fingerprint")
         subprocess.run([*command, "--import", str(key)], check=True, capture_output=True)
-        result = subprocess.run([*command, "--status-fd=1", "--verify", str(detached), str(archive)], text=True, capture_output=True)
+        # Binary signature notations can contain non-UTF-8 status data.
+        result = subprocess.run([*command, "--status-fd=1", "--verify", str(detached), str(archive)], encoding="utf-8", errors="replace", capture_output=True)
         # VALIDSIG includes the primary fingerprint for a bound signing subkey.
         valid = [line.split()[-1] if len(line.split()) > 11 else line.split()[2]
                  for line in result.stdout.splitlines() if line.startswith("[GNUPG:] VALIDSIG ")]
@@ -112,8 +113,7 @@ def validate(component, lock):
     for name, artifact in artifacts.items():
         require(artifact["url"] == urls[name], f"{component}: unexpected source URL")
         require(re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"]), f"{component}: invalid checksum")
-    if component in ("go", "unbound"):
-        require(re.fullmatch(r"[0-9A-F]{40}", lock["signer"]), f"Invalid {component} signing fingerprint")
+    require(re.fullmatch(r"[0-9A-F]{40}", lock["signer"]), f"Invalid {component} signing fingerprint")
 
 
 def fetch(component, lock, output, arch="amd64"):
@@ -130,11 +130,10 @@ def fetch(component, lock, output, arch="amd64"):
         archive = Path(directory) / "archive"
         download(artifact["url"], archive)
         checksum(archive, artifact["sha256"])
-        if component in ("go", "unbound"):
-            detached = Path(directory) / "signature.asc"
-            download(artifact["url"] + ".asc", detached)
-            key = "google.asc" if component == "go" else "nlnetlabs.asc"
-            signature(archive, detached, LOCKS / key, lock["signer"])
+        detached = Path(directory) / "signature.asc"
+        download(artifact["url"] + ".asc", detached)
+        key = {"go": "google.asc", "unbound": "nlnetlabs.asc", "openssl": "openssl.asc"}[component]
+        signature(archive, detached, LOCKS / key, lock["signer"])
         archive.replace(output)
 
 
@@ -180,8 +179,7 @@ def discover(component, old):
         version = max(versions, key=lambda value: tuple(map(int, value.split("."))))
         url = f"https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz"
     result = {"version": version, "url": url, "sha256": upstream_checksum(url + ".sha256", url.rsplit("/", 1)[1])}
-    if component == "unbound":
-        result["signer"] = old["signer"]  # Key rotation always needs human review.
+    result["signer"] = old["signer"]  # Key rotation always needs human review.
     return result
 
 
