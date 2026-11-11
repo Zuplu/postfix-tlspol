@@ -352,9 +352,29 @@ build_go() {
     esac
     # -d removes the dynamic relocation metadata required by PIE.
     link_flags="-s -w -X main.Version=$VERSION"
-    if [ "$build_mode" = pie ] && [ "$CGO_ENABLED" != 0 ]; then
-      # The native linker selects the host's libc loader (glibc or musl).
-      link_flags="-linkmode=external $link_flags"
+    if [ "$build_mode" = pie ]; then
+      pie_available=0
+      if [ "$CGO_ENABLED" != 0 ]; then
+        probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/postfix-tlspol-pie.XXXXXXXX")"
+        printf 'package main\nfunc main() {}\n' > "$probe_dir/probe.go"
+        # Let Go resolve CC and its flags, and check the linker without running
+        # target code. Application compilation errors never trigger fallback.
+        if go build -buildvcs=false -buildmode=pie -ldflags=-linkmode=external \
+          -o "$probe_dir/probe" "$probe_dir/probe.go" > "$probe_dir/probe.log" 2>&1; then
+          pie_available=1
+        fi
+        rm -f "$probe_dir/probe.go" "$probe_dir/probe" "$probe_dir/probe.log"
+        rmdir "$probe_dir"
+      fi
+      if [ "$pie_available" -eq 1 ]; then
+        # The native linker selects the host's libc loader (glibc or musl).
+        link_flags="-linkmode=external $link_flags"
+      else
+        log_warn "PIE compiler/linker unavailable; falling back to a static executable."
+        export CGO_ENABLED=0
+        build_mode=exe
+        link_flags="-d -extldflags='-static' -s -X main.Version=$VERSION"
+      fi
     fi
   fi
 
