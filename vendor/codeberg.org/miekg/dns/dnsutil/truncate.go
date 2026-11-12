@@ -10,6 +10,7 @@ import "codeberg.org/miekg/dns"
 // was sufficient, i.e. m.Len() < m.UDPSize.
 func Truncate(m *dns.Msg) {
 	m.Truncated = true
+	m.AuthenticatedData = false
 	m.Answer = m.Answer[:0]
 	m.Ns = m.Ns[:0]
 	m.Extra = m.Extra[:0]
