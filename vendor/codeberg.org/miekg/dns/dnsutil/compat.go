@@ -44,7 +44,7 @@ func SetReply(m, r *dns.Msg) *dns.Msg {
 		m.CheckingDisabled = r.CheckingDisabled
 		m.Security = r.Security
 	}
-	m.Z = 0 // RFC 6891, section 6.1.4: a sender zeroes these.
+	m.Flags = 0 // RFC 6891, section 6.1.4: a sender zeroes these.
 	m.Rcode = dns.RcodeSuccess
 	m.Question = r.Question
 	m.Reset()
