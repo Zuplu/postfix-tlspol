@@ -63,11 +63,11 @@ func TestPolicyDNSQueriesUseHardenedEDNS0Size(t *testing.T) {
 			msg.Answer = append(msg.Answer, dnsAAAA(q.Name, 300, "2001:db8::10"))
 		case dns.TypeTLSA:
 			msg.AuthenticatedData = true
-			setDNSRcode(msg, r, dns.RcodeNameError)
+			msg.Rcode = dns.RcodeNameError
 		case dns.TypeTXT:
 			msg.Answer = append(msg.Answer, dnsTXT(q.Name, 300, "v=STSv1; id=edns1;"))
 		default:
-			setDNSRcode(msg, r, dns.RcodeNameError)
+			msg.Rcode = dns.RcodeNameError
 		}
 		_ = writeDNSMsg(w, msg)
 	})

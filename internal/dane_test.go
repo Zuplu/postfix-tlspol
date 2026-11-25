@@ -108,7 +108,8 @@ func TestCheckDaneOnceReturnsErrorWhenMxAddressLookupTimesOut(t *testing.T) {
 			return
 		default:
 			msg := new(dns.Msg)
-			setDNSRcode(msg, r, dns.RcodeNameError)
+			setDNSReply(msg, r)
+			msg.Rcode = dns.RcodeNameError
 			msg.AuthenticatedData = true
 			_ = writeDNSMsg(w, msg)
 		}
