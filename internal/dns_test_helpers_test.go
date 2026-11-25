@@ -76,12 +76,9 @@ func dnsEDNS0(m *dns.Msg) *dnsTestEDNS {
 }
 
 func setDNSReply(m, request *dns.Msg) {
-	dnsutil.SetReply(m, request)
-}
-
-func setDNSRcode(m, request *dns.Msg, rcode uint16) {
-	dnsutil.SetReply(m, request)
-	m.Rcode = rcode
+	m.MsgHeader = request.MsgHeader
+	m.Question = request.Question
+	dnsutil.SetReply(m)
 }
 
 func writeDNSMsg(w dns.ResponseWriter, m *dns.Msg) error {

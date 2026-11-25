@@ -1,4 +1,4 @@
-# codeberg.org/miekg/dns v0.6.133
+# codeberg.org/miekg/dns v0.6.140
 ## explicit; go 1.27.0
 codeberg.org/miekg/dns
 codeberg.org/miekg/dns/deleg
@@ -11,6 +11,7 @@ codeberg.org/miekg/dns/internal/dnsstring
 codeberg.org/miekg/dns/internal/jump
 codeberg.org/miekg/dns/internal/pack
 codeberg.org/miekg/dns/internal/reverse
+codeberg.org/miekg/dns/internal/udpoob
 codeberg.org/miekg/dns/internal/unpack
 codeberg.org/miekg/dns/pkg/dnsnet
 codeberg.org/miekg/dns/pkg/pool
