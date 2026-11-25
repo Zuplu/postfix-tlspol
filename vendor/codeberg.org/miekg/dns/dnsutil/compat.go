@@ -32,25 +32,6 @@ func Question(m *dns.Msg) (z string, t uint16) {
 	return z, t
 }
 
-// SetReply creates a reply message from r. It copies the ID, opcode, rcode and question, r's Data buffer is not copied.
-// In the header the RecursionDesired, CheckingDisabled and Security bit are copied, the Z bits are cleared.
-// All other sections are resliced to length zero. Also see [SetQuestion].
-func SetReply(m, r *dns.Msg) *dns.Msg {
-	m.ID = r.ID
-	m.Response = true
-	m.Opcode = r.Opcode
-	if m.Opcode == dns.OpcodeQuery {
-		m.RecursionDesired = r.RecursionDesired
-		m.CheckingDisabled = r.CheckingDisabled
-		m.Security = r.Security
-	}
-	m.Flags = 0 // RFC 6891, section 6.1.4: a sender zeroes these.
-	m.Rcode = dns.RcodeSuccess
-	m.Question = r.Question
-	m.Reset()
-	return m
-}
-
 // IsRRset reports whether a set of RRs is a valid RRset as defined by RFC 2181.
 // This means the RRs need to have the same type, name, and class. Duplicate RRs are not detected.
 // See [codeberg.org/miekg/dns.RRset] if you need to sort an RRset.
