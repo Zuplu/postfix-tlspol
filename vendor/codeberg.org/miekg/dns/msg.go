@@ -8,6 +8,7 @@ import (
 	"iter"
 	"net"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strconv"
 
@@ -100,11 +101,27 @@ func packQuestion(rr RR, msg []byte, off int, compression map[string]uint16) (of
 	return off, nil
 }
 
+// isZeroData reports whether rr, that has class ANY or NONE, has no rdata and must be packed without it. This is
+// for dynamic updates, RFC 2136, where such an RR can have an RDLENGTH of zero.
+func isZeroData(rr RR) bool {
+	data := rr.Data()
+	if data == nil { // For meta RRs this is so, return false for these, and pack them normally.
+		return false
+	}
+	// this test is only done in specific case when the class is indicating a dynamic update removal
+	return reflect.ValueOf(data).IsZero()
+}
+
 func packRR(rr RR, msg []byte, off int, compression map[string]uint16) (headerEnd int, off1 int, err error) {
 	rrtype := RRToType(rr)
-	headerEnd, err = rr.Header().packHeader(msg, off, rrtype, compression)
+	hdr := rr.Header()
+	headerEnd, err = hdr.packHeader(msg, off, rrtype, compression)
 	if err != nil {
 		return headerEnd, len(msg), err
+	}
+	if (hdr.Class == ClassANY || hdr.Class == ClassNONE) && isZeroData(rr) { // isZeroData is slow because reflection, but not used in the normal hot path
+		binary.BigEndian.PutUint16(msg[headerEnd-2:], 0) // Set RDLENGTH to 0.
+		return headerEnd, headerEnd, nil
 	}
 	off1, err = zpack(rr, msg, headerEnd, compression)
 	if err != nil {
@@ -113,8 +130,7 @@ func packRR(rr RR, msg []byte, off int, compression map[string]uint16) (headerEn
 
 	rdlength := off1 - headerEnd
 	if rdlength <= MaxMsgSize { // overflow
-		// The RDLENGTH field is the last field in the header and we set it here.
-		binary.BigEndian.PutUint16(msg[headerEnd-2:], uint16(rdlength))
+		binary.BigEndian.PutUint16(msg[headerEnd-2:], uint16(rdlength)) // The RDLENGTH field is the last field in the header and we set it here.
 		return headerEnd, off1, nil
 	}
 
