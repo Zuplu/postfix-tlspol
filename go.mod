@@ -5,7 +5,7 @@ go 1.27.4
 godebug multipathtcp=0
 
 require (
-	codeberg.org/miekg/dns v0.6.140
+	codeberg.org/miekg/dns v0.6.142
 	go.yaml.in/yaml/v4 v4.0.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0

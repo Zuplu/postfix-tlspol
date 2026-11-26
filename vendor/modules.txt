@@ -1,4 +1,4 @@
-# codeberg.org/miekg/dns v0.6.140
+# codeberg.org/miekg/dns v0.6.142
 ## explicit; go 1.27.0
 codeberg.org/miekg/dns
 codeberg.org/miekg/dns/deleg
